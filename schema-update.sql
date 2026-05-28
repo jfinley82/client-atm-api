@@ -1,6 +1,9 @@
 -- Add video_watched to users
 alter table users add column if not exists video_watched boolean not null default false;
 
+-- Add password_hash to users (for password-based auth)
+alter table users add column if not exists password_hash text;
+
 -- Forum tables
 create table if not exists forum_categories (
   id uuid primary key default gen_random_uuid(),

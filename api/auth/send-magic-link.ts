@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
-import { sendMagicLinkEmail, sendWelcomeEmail } from '../../lib/email'
+import { sendMagicLinkEmail } from '../../lib/email'
 import { setCors } from '../../lib/cors'
 import crypto from 'crypto'
 
@@ -9,29 +9,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
-  const { email, name } = req.body || {}
+  const { email } = req.body || {}
 
   if (!email || typeof email !== 'string') {
     return res.status(400).json({ error: 'Email is required' })
   }
 
   const normalizedEmail = email.toLowerCase().trim()
-  const displayName = (name || '').trim() || null
 
   try {
-    // Upsert user
-    const { data: user, error: upsertError } = await supabase
+    // Lookup only — do not create new users from this endpoint
+    const { data: user } = await supabase
       .from('users')
-      .upsert({ email: normalizedEmail, name: displayName }, { onConflict: 'email' })
-      .select()
-      .single()
+      .select('id, name, has_paid')
+      .eq('email', normalizedEmail)
+      .maybeSingle()
 
-    if (upsertError) throw upsertError
+    // Silently no-op for unknown emails or unpaid users.
+    // Same response in all cases so callers can't probe membership/paid status.
+    if (!user || !user.has_paid) {
+      return res.status(200).json({ ok: true })
+    }
 
-    const isNewUser = !user.created_at || 
-      (Date.now() - new Date(user.created_at).getTime()) < 5000
-
-    // Generate magic link token
     const token = crypto.randomBytes(32).toString('hex')
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString() // 15 min
 
@@ -41,13 +40,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (tokenError) throw tokenError
 
-    // Send email
-    await sendMagicLinkEmail(normalizedEmail, displayName || '', token)
-    if (isNewUser) {
-      sendWelcomeEmail(normalizedEmail, displayName || '').catch(console.error)
-    }
+    await sendMagicLinkEmail(normalizedEmail, user.name || '', token)
 
-    return res.status(200).json({ ok: true, message: 'Magic link sent' })
+    return res.status(200).json({ ok: true })
 
   } catch (err) {
     console.error('[send-magic-link]', err)

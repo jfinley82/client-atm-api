@@ -1,0 +1,57 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node'
+import bcrypt from 'bcryptjs'
+import { supabase } from '../../lib/supabase'
+import { createSessionToken, setSessionCookie } from '../../lib/auth'
+import { setCors } from '../../lib/cors'
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (setCors(req, res)) return
+  if (req.method !== 'POST') return res.status(405).end()
+
+  const { email, password } = req.body || {}
+
+  if (!email || typeof email !== 'string' || !password || typeof password !== 'string') {
+    return res.status(400).json({ error: 'Email and password required' })
+  }
+
+  const normalizedEmail = email.toLowerCase().trim()
+
+  try {
+    const { data: user } = await supabase
+      .from('users')
+      .select('id, email, name, has_paid, quiz_completed, quiz_score, video_watched, password_hash, created_at')
+      .eq('email', normalizedEmail)
+      .maybeSingle()
+
+    // Never reveal whether email exists
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid email or password' })
+    }
+
+    if (!user.has_paid) {
+      return res.status(403).json({ error: 'Access restricted. Please complete your purchase.' })
+    }
+
+    if (!user.password_hash) {
+      return res.status(401).json({
+        error: 'no_password',
+        message: 'No password set. Use the login link option to access your account.'
+      })
+    }
+
+    const match = await bcrypt.compare(password, user.password_hash)
+    if (!match) {
+      return res.status(401).json({ error: 'Invalid email or password' })
+    }
+
+    const sessionToken = await createSessionToken(user.id)
+    setSessionCookie(res as any, sessionToken)
+
+    const { password_hash, ...safeUser } = user
+    return res.status(200).json({ ok: true, user: safeUser })
+
+  } catch (err) {
+    console.error('[auth/login]', err)
+    return res.status(500).json({ error: 'Login failed' })
+  }
+}
