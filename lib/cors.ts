@@ -1,0 +1,28 @@
+const ALLOWED_ORIGINS = [
+  'https://app.clientatmbuilder.com',
+  'https://clientatmbuilder.com',
+]
+
+export function setCors(req: any, res: any): boolean {
+  const origin = req.headers.origin || ''
+
+  const isAllowed = ALLOWED_ORIGINS.includes(origin)
+    || origin.endsWith('.vibepreview.com')
+    || origin.endsWith('.vercel.app')
+    || origin.endsWith('.ghl.systems')
+    || origin.endsWith('.highlevel.com')
+
+  const allowOrigin = isAllowed ? origin : ALLOWED_ORIGINS[0]
+
+  res.setHeader('Access-Control-Allow-Origin', allowOrigin)
+  res.setHeader('Access-Control-Allow-Credentials', 'true')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept')
+  res.setHeader('Vary', 'Origin')
+
+  if (req.method === 'OPTIONS') {
+    res.status(200).end()
+    return true
+  }
+  return false
+}

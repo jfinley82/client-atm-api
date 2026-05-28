@@ -1,19 +1,12 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { sendMagicLinkEmail, sendWelcomeEmail } from '../../lib/email'
+import { setCors } from '../../lib/cors'
 import crypto from 'crypto'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const origin = req.headers.origin as string || '*'
-  res.setHeader('Access-Control-Allow-Origin', origin)
-  res.setHeader('Access-Control-Allow-Credentials', 'true')
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept')
-  res.setHeader('Vary', 'Origin')
+  if (setCors(req, res)) return
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end()
-  }
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
   const { email, name } = req.body || {}
