@@ -3,7 +3,7 @@ import Stripe from 'stripe'
 import { supabase } from '../../lib/supabase'
 import { getSessionFromRequest, verifySessionToken } from '../../lib/auth'
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2025-04-30.basil' })
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*')

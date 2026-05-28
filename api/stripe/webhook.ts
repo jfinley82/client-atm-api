@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import Stripe from 'stripe'
 import { supabase } from '../../lib/supabase'
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2025-04-30.basil' })
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)
 
 export const config = {
   api: { bodyParser: false } // Required: Stripe needs raw body for signature verification

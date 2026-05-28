@@ -9,6 +9,7 @@
     "@anthropic-ai/sdk": "^0.52.0",
     "@supabase/supabase-js": "^2.49.0",
     "@types/node": "^22.0.0",
+    "@vercel/node": "^5.0.0",
     "resend": "^4.0.0",
     "stripe": "^17.0.0",
     "jose": "^4.15.9",
