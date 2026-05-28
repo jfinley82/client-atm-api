@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import Stripe from 'stripe'
-import { supabase } from '../../lib/supabase.js'
-import { getSessionFromRequest, verifySessionToken } from '../../lib/auth.js'
+import { supabase } from '../../lib/supabase'
+import { getSessionFromRequest, verifySessionToken } from '../../lib/auth'
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2025-04-30.basil' })
 

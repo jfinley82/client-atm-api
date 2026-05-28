@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { supabase } from '../../lib/supabase.js'
-import { getSessionFromRequest, verifySessionToken } from '../../lib/auth.js'
+import { supabase } from '../../lib/supabase'
+import { getSessionFromRequest, verifySessionToken } from '../../lib/auth'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*')

@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { supabase } from '../../lib/supabase.js'
-import { sendMagicLinkEmail, sendWelcomeEmail } from '../../lib/email.js'
+import { supabase } from '../../lib/supabase'
+import { sendMagicLinkEmail, sendWelcomeEmail } from '../../lib/email'
 import crypto from 'crypto'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {

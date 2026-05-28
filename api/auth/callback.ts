@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { supabase } from '../../lib/supabase.js'
-import { createSessionToken, setSessionCookie } from '../../lib/auth.js'
+import { supabase } from '../../lib/supabase'
+import { createSessionToken, setSessionCookie } from '../../lib/auth'
 
 const APP_URL = process.env.APP_URL || 'https://app.clientatmbuilder.com'
 
