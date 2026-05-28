@@ -5,6 +5,17 @@ import { createSessionToken, setSessionCookie } from '../../lib/auth'
 const APP_URL = process.env.APP_URL || 'https://app.clientatmbuilder.com'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const origin = req.headers.origin as string || '*'
+  res.setHeader('Access-Control-Allow-Origin', origin)
+  res.setHeader('Access-Control-Allow-Credentials', 'true')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept')
+  res.setHeader('Vary', 'Origin')
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end()
+  }
+
   if (req.method !== 'GET') return res.status(405).end()
 
   const { token } = req.query
