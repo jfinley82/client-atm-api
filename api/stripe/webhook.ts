@@ -37,7 +37,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const pi = event.data.object as Stripe.PaymentIntent
     const userId = pi.metadata?.user_id
 
+    // Fetch customer email from Stripe as a fallback identifier
+    const customer = pi.customer
+      ? await stripe.customers.retrieve(pi.customer as string)
+      : null
+    const customerEmail = customer && !customer.deleted
+      ? (customer as Stripe.Customer).email
+      : null
+
     if (userId) {
+      // User row already exists — just update
       const { error } = await supabase
         .from('users')
         .update({
@@ -47,11 +56,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq('id', userId)
 
       if (error) {
-        console.error('[stripe/webhook] DB update failed', error)
-        return res.status(500).json({ error: 'DB update failed' })
+        console.error('[stripe/webhook] update failed', error)
+      } else {
+        console.log(`[stripe/webhook] User ${userId} marked as paid`)
       }
+    } else if (customerEmail) {
+      // No userId in metadata — upsert by email so the buyer can log in
+      const { error } = await supabase
+        .from('users')
+        .upsert(
+          {
+            email: customerEmail.toLowerCase().trim(),
+            has_paid: true,
+            stripe_customer_id: pi.customer as string || undefined
+          },
+          { onConflict: 'email' }
+        )
 
-      console.log(`[stripe/webhook] User ${userId} marked as paid`)
+      if (error) {
+        console.error('[stripe/webhook] upsert failed', error)
+      } else {
+        console.log(`[stripe/webhook] User ${customerEmail} upserted as paid`)
+      }
+    } else {
+      console.error('[stripe/webhook] no userId or email — cannot process', pi.id)
     }
   }
 
