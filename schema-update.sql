@@ -53,3 +53,24 @@ on conflict (slug) do nothing;
 create index if not exists idx_forum_posts_user_id on forum_posts(user_id);
 create index if not exists idx_forum_posts_category_id on forum_posts(category_id);
 create index if not exists idx_forum_comments_post_id on forum_comments(post_id);
+
+-- Add role to users (for admin gating)
+alter table users add column if not exists role text not null default 'user';
+
+-- Unlock schedule (date-based content gating)
+create table if not exists unlock_schedule (
+  id uuid primary key default gen_random_uuid(),
+  item_key text unique not null,
+  label text not null,
+  unlock_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+
+insert into unlock_schedule (item_key, label, unlock_at) values
+  ('training',       'Watch Training',         null),
+  ('quiz',           'A.T.M. Quiz',            null),
+  ('audience',       'Audience Analyzer',      null),
+  ('transformation', 'Transformation Builder', null),
+  ('monetization',   'Monetization Creator',   null),
+  ('blueprint',      'My Blueprint',           null)
+on conflict (item_key) do nothing;
