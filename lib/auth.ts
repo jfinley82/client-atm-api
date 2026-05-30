@@ -21,10 +21,18 @@ export async function verifySessionToken(token: string): Promise<{ userId: strin
   }
 }
 
-export function getSessionFromRequest(req: IncomingMessage): string | null {
+export function getSessionFromRequest(req: any): string | null {
+  // Check Authorization header first (for cross-domain apps)
+  const authHeader = req.headers['authorization'] || ''
+  if (authHeader.startsWith('Bearer ')) {
+    return authHeader.slice(7)
+  }
+  // Fall back to cookie
   const cookieHeader = req.headers['cookie'] || ''
   const cookies = Object.fromEntries(
-    cookieHeader.split(';').map(c => c.trim().split('=').map(decodeURIComponent))
+    cookieHeader.split(';')
+      .map((c: string) => c.trim().split('=').map(decodeURIComponent))
+      .filter((parts: string[]) => parts.length === 2)
   )
   return cookies[COOKIE_NAME] ?? null
 }

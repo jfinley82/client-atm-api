@@ -40,13 +40,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const sessionToken = await createSessionToken(magicToken.user_id)
     setSessionCookie(res as any, sessionToken)
 
-    // Redirect to dashboard
-    const user = magicToken.users as any
-    const destination = user?.has_paid
-      ? `${APP_URL}/dashboard`
-      : `${APP_URL}/dashboard`
-
-    return res.redirect(302, destination)
+    // Redirect with token so cross-domain apps can store it client-side
+    return res.redirect(302,
+      `${APP_URL}/auth-callback?token=${encodeURIComponent(sessionToken)}`
+    )
 
   } catch (err) {
     console.error('[auth/callback]', err)

@@ -47,8 +47,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const sessionToken = await createSessionToken(user.id)
     setSessionCookie(res as any, sessionToken)
 
-    const { password_hash, ...safeUser } = user
-    return res.status(200).json({ ok: true, user: safeUser })
+    return res.status(200).json({
+      ok: true,
+      token: sessionToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        has_paid: user.has_paid,
+        quiz_completed: user.quiz_completed,
+        video_watched: user.video_watched
+      }
+    })
 
   } catch (err) {
     console.error('[auth/login]', err)
