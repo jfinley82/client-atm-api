@@ -17,6 +17,37 @@ export async function callClaude(systemPrompt: string, userMessage: string): Pro
   return JSON.parse(cleaned)
 }
 
+// ─── COACHING CHAT ───────────────────────────────────────────────────────────
+
+export interface ChatTurn {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export const CHAT_SYSTEM_PROMPT = `You are the Client ATM coach — a warm, sharp business advisor for coaches and consultants building their client-acquisition machine (Attract, Transform, Monetize).
+
+Guidelines:
+- Be concise and practical. Give specific, actionable advice, not generic platitudes.
+- When the user shares context about their audience, transformation, or offers, build on it.
+- Encourage momentum: end with a clear next step when it helps.
+- Stay on topic: client acquisition, offers, pricing, messaging, and growth. Politely redirect off-topic asks.
+
+Reply in plain conversational text. Do not return JSON.`
+
+export async function chatWithClaude(
+  systemPrompt: string,
+  history: ChatTurn[]
+): Promise<string> {
+  const message = await client.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 1500,
+    system: systemPrompt,
+    messages: history.map(t => ({ role: t.role, content: t.content }))
+  })
+
+  return message.content[0].type === 'text' ? message.content[0].text : ''
+}
+
 // ─── AUDIENCE ANALYZER ───────────────────────────────────────────────────────
 
 export const AUDIENCE_PROMPT = `You are an expert marketing strategist helping coaches and consultants define their ideal client avatar with precision.
