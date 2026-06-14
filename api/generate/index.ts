@@ -47,10 +47,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const byType: Record<string, unknown> = {}
       for (const row of outputs || []) byType[row.tool_type] = row.content
 
-      const asText = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v ?? {}))
-
-      const userMessage = `AUDIENCE INTELLIGENCE: ${asText(byType['audience'])}
-TRANSFORMATION DATA: ${asText(byType['transformation'])}
+      const userMessage = `AUDIENCE INTELLIGENCE: ${JSON.stringify(byType['audience'] ?? {})}
+TRANSFORMATION DATA: ${JSON.stringify(byType['transformation'] ?? {})}
 PROBLEM/SOLUTION CARD: ${JSON.stringify(card)}
 Generate the complete micro-training system now.`
 

@@ -223,7 +223,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           {
             user_id: payload.userId,
             tool_type,
-            content: JSON.stringify(structuredData),
+            content: structuredData,
             updated_at: new Date().toISOString(),
           },
           { onConflict: 'user_id,tool_type' }
