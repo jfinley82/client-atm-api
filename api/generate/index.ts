@@ -115,6 +115,28 @@ Generate the complete micro-training system now.`
       }
     }
 
+    // GET with card_id — return the most recent generation for that card (user-owned)
+    const rawCardId = req.query && req.query.card_id
+    const cardId = Array.isArray(rawCardId) ? rawCardId[0] : rawCardId
+    if (cardId && typeof cardId === 'string') {
+      try {
+        const { data, error } = await supabase
+          .from('mtm_generations')
+          .select('*')
+          .eq('card_id', cardId)
+          .eq('user_id', payload.userId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        if (error) throw error
+        return res.status(200).json(data ?? null)
+      } catch (err) {
+        console.error('[generate] GET by card_id', err)
+        return res.status(500).json({ error: 'Failed to load generation' })
+      }
+    }
+
     // GET — list all generations for the user, with the card name joined in
     try {
       const { data, error } = await supabase
