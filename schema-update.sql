@@ -74,3 +74,22 @@ insert into unlock_schedule (item_key, label, unlock_at) values
   ('monetization',   'Monetization Creator',   null),
   ('blueprint',      'My Blueprint',           null)
 on conflict (item_key) do nothing;
+
+-- Profile fields on users (for api/auth/update-profile.ts and api/admin/members.ts)
+alter table users add column if not exists profession text;
+alter table users add column if not exists location text;
+alter table users add column if not exists bio text;
+
+-- App settings key/value store (for api/settings/index.ts)
+create table if not exists app_settings (
+  key text primary key,
+  value text,
+  updated_at timestamptz default now()
+);
+
+insert into app_settings (key, value) values
+  ('training_video_url',   ''),
+  ('replay_video_url',     ''),
+  ('login_headline',       ''),
+  ('workshop_event_date',  '')
+on conflict (key) do nothing;
