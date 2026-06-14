@@ -1,6 +1,8 @@
 const ALLOWED_ORIGINS = [
   'https://app.clientatmbuilder.com',
   'https://clientatmbuilder.com',
+  'https://preview-1779993469816843416.vibepreview.com',
+  'https://app.microtrainingmethod.com',
 ]
 
 export function setCors(req: any, res: any): boolean {
