@@ -7,10 +7,9 @@ import { setCors } from '../../lib/cors'
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)
 
 // Amount in cents per product tier.
-// NOTE: low_ticket is a $17 placeholder — confirm final price before launch.
 const PRODUCT_AMOUNTS: Record<string, number> = {
   full: 2700,
-  low_ticket: 1700,
+  low_ticket: 1200,
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
