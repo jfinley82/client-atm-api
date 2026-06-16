@@ -18,7 +18,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const [{ data: user, error }, { data: scheduleRows }] = await Promise.all([
       supabase
         .from('users')
-        .select('id, email, name, has_paid, quiz_completed, quiz_score, video_watched, membership_tier, created_at')
+        .select('id, email, name, has_paid, quiz_completed, quiz_score, video_watched, membership_tier, status, created_at')
         .eq('id', payload.userId)
         .single(),
       supabase
@@ -27,6 +27,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ])
 
     if (error || !user) return res.status(401).json({ user: null })
+
+    if (user.status === 'suspended') {
+      return res.status(403).json({ error: 'account_suspended' })
+    }
 
     const schedule: Record<string, string | null> = {}
     for (const row of scheduleRows || []) {

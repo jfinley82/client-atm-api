@@ -44,6 +44,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq('id', payload.userId)
     }
 
+    // product_type is recorded in the intent metadata so downstream automation
+    // can branch on it (e.g. GHL watches Stripe and routes by product_type or
+    // by the charge amount: $27 full vs $12 low_ticket).
     const productType = product_type || 'full'
     const amount = PRODUCT_AMOUNTS[productType] ?? PRODUCT_AMOUNTS.full
 

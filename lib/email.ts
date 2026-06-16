@@ -29,6 +29,27 @@ export async function sendMagicLinkEmail(email: string, name: string, token: str
   })
 }
 
+export async function sendBetaWelcomeEmail(email: string, name: string, loginUrl: string) {
+  await resend.emails.send({
+    from: FROM,
+    to: email,
+    subject: "You're in — welcome to the beta 🎯",
+    html: `
+      <!DOCTYPE html>
+      <html>
+      <body style="font-family: 'Inter', sans-serif; background: #0a0e1a; color: #f1f5f9; padding: 40px 20px; margin: 0;">
+        <div style="max-width: 560px; margin: 0 auto; background: #0f172a; border: 1px solid rgba(148,163,184,0.15); border-radius: 16px; padding: 40px;">
+          <h2 style="color: #a855f7; font-size: 24px; margin: 0 0 8px;">Welcome to the beta, ${name || 'Coach'}! 🎯</h2>
+          <p style="color: rgba(241,245,249,0.7); margin: 0 0 32px;">You've been given full access. Click below to log in and get started — no password needed.</p>
+          <a href="${loginUrl}" style="display: inline-block; background: linear-gradient(to right, #9333ea, #7c3aed); color: white; text-decoration: none; padding: 14px 32px; border-radius: 10px; font-weight: 700; font-size: 16px;">Log In to Your Dashboard →</a>
+          <p style="color: rgba(241,245,249,0.3); font-size: 12px; margin: 32px 0 0;">If the button doesn't work, copy and paste this link:<br>${loginUrl}</p>
+        </div>
+      </body>
+      </html>
+    `
+  })
+}
+
 export async function sendWelcomeEmail(email: string, name: string) {
   await resend.emails.send({
     from: FROM,

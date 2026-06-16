@@ -169,12 +169,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const payload = await verifySessionToken(sessionToken)
   if (!payload) return res.status(401).json({ error: 'Unauthorized' })
 
-  // Tier gate — AI generation requires a paid membership tier
+  // Auth gate — block suspended accounts, then require a paid membership tier
   const { data: gateUser } = await supabase
     .from('users')
-    .select('membership_tier')
+    .select('membership_tier, status')
     .eq('id', payload.userId)
     .single()
+  if (gateUser?.status === 'suspended') {
+    return res.status(403).json({ error: 'account_suspended' })
+  }
   if (!gateUser || !['low_ticket', 'full'].includes(gateUser.membership_tier)) {
     return res.status(403).json({ error: 'upgrade_required' })
   }
