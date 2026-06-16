@@ -25,6 +25,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'card_id required' })
     }
 
+    // Tier gate — generation requires a paid membership tier
+    const { data: gateUser } = await supabase
+      .from('users')
+      .select('membership_tier')
+      .eq('id', payload.userId)
+      .single()
+    if (!gateUser || !['low_ticket', 'full'].includes(gateUser.membership_tier)) {
+      return res.status(403).json({ error: 'upgrade_required' })
+    }
+
     try {
       // Fetch the card and verify ownership
       const { data: card } = await supabase

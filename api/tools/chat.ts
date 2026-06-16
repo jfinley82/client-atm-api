@@ -169,6 +169,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const payload = await verifySessionToken(sessionToken)
   if (!payload) return res.status(401).json({ error: 'Unauthorized' })
 
+  // Tier gate — AI generation requires a paid membership tier
+  const { data: gateUser } = await supabase
+    .from('users')
+    .select('membership_tier')
+    .eq('id', payload.userId)
+    .single()
+  if (!gateUser || !['low_ticket', 'full'].includes(gateUser.membership_tier)) {
+    return res.status(403).json({ error: 'upgrade_required' })
+  }
+
   const { tool_type, messages, current_step } = req.body || {}
 
   if (tool_type !== 'audience' && tool_type !== 'transformation' && tool_type !== 'matcher') {

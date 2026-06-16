@@ -18,7 +18,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const [{ data: user, error }, { data: scheduleRows }] = await Promise.all([
       supabase
         .from('users')
-        .select('id, email, name, has_paid, quiz_completed, quiz_score, video_watched, created_at')
+        .select('id, email, name, has_paid, quiz_completed, quiz_score, video_watched, membership_tier, created_at')
         .eq('id', payload.userId)
         .single(),
       supabase

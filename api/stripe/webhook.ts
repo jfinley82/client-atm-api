@@ -36,6 +36,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (event.type === 'payment_intent.succeeded') {
     const pi = event.data.object as Stripe.PaymentIntent
     const userId = pi.metadata?.user_id
+    const productType = pi.metadata?.product_type || 'full'
+    const membershipTier = productType === 'low_ticket' ? 'low_ticket' : 'full'
 
     // Fetch customer email from Stripe as a fallback identifier
     const customer = pi.customer
@@ -45,12 +47,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? (customer as Stripe.Customer).email
       : null
 
+    let resolvedUserId: string | null = null
+
     if (userId) {
       // User row already exists — just update
       const { error } = await supabase
         .from('users')
         .update({
           has_paid: true,
+          membership_tier: membershipTier,
           stripe_customer_id: pi.customer as string || undefined
         })
         .eq('id', userId)
@@ -58,28 +63,53 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (error) {
         console.error('[stripe/webhook] update failed', error)
       } else {
-        console.log(`[stripe/webhook] User ${userId} marked as paid`)
+        resolvedUserId = userId
+        console.log(`[stripe/webhook] User ${userId} marked as paid (${membershipTier})`)
       }
     } else if (customerEmail) {
       // No userId in metadata — upsert by email so the buyer can log in
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('users')
         .upsert(
           {
             email: customerEmail.toLowerCase().trim(),
             has_paid: true,
+            membership_tier: membershipTier,
             stripe_customer_id: pi.customer as string || undefined
           },
           { onConflict: 'email' }
         )
+        .select('id')
+        .single()
 
       if (error) {
         console.error('[stripe/webhook] upsert failed', error)
       } else {
-        console.log(`[stripe/webhook] User ${customerEmail} upserted as paid`)
+        resolvedUserId = data?.id ?? null
+        console.log(`[stripe/webhook] User ${customerEmail} upserted as paid (${membershipTier})`)
       }
     } else {
       console.error('[stripe/webhook] no userId or email — cannot process', pi.id)
+    }
+
+    // Record the purchase (idempotent on the Stripe payment intent id)
+    if (resolvedUserId) {
+      const { error: purchaseError } = await supabase
+        .from('purchases')
+        .upsert(
+          {
+            user_id: resolvedUserId,
+            product: productType,
+            stripe_payment_intent: pi.id,
+            amount_cents: pi.amount_received ?? pi.amount ?? null,
+            status: 'active'
+          },
+          { onConflict: 'stripe_payment_intent' }
+        )
+
+      if (purchaseError) {
+        console.error('[stripe/webhook] purchase insert failed', purchaseError)
+      }
     }
   }
 

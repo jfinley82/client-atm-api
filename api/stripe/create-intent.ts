@@ -16,7 +16,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const payload = await verifySessionToken(sessionToken)
   if (!payload) return res.status(401).json({ error: 'Unauthorized' })
 
-  const { email, name } = req.body || {}
+  const { email, name, product_type } = req.body || {}
   if (!email) return res.status(400).json({ error: 'Email required' })
 
   try {
@@ -39,10 +39,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: 2700, // $27.00 in cents
+      amount: 2700, // $27.00 in cents — NOTE: not yet varied by product_type
       currency: 'usd',
       customer: customerId,
-      metadata: { user_id: payload.userId },
+      metadata: { user_id: payload.userId, product_type: product_type || 'full' },
       automatic_payment_methods: { enabled: true }
     })
 
