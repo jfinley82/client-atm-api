@@ -6,6 +6,13 @@ import { setCors } from '../../lib/cors'
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)
 
+// Amount in cents per product tier.
+// NOTE: low_ticket is a $17 placeholder — confirm final price before launch.
+const PRODUCT_AMOUNTS: Record<string, number> = {
+  full: 2700,
+  low_ticket: 1700,
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
 
@@ -38,11 +45,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq('id', payload.userId)
     }
 
+    const productType = product_type || 'full'
+    const amount = PRODUCT_AMOUNTS[productType] ?? PRODUCT_AMOUNTS.full
+
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: 2700, // $27.00 in cents — NOTE: not yet varied by product_type
+      amount,
       currency: 'usd',
       customer: customerId,
-      metadata: { user_id: payload.userId, product_type: product_type || 'full' },
+      metadata: { user_id: payload.userId, product_type: productType },
       automatic_payment_methods: { enabled: true }
     })
 
