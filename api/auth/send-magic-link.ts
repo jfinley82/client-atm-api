@@ -21,9 +21,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Lookup only — do not create new users from this endpoint
     const { data: user } = await supabase
       .from('users')
-      .select('id, name, has_paid')
+      .select('id, name, has_paid, status')
       .eq('email', normalizedEmail)
       .maybeSingle()
+
+    // Block suspended accounts — never issue a login token for them
+    if (user && user.status === 'suspended') {
+      return res.status(403).json({ error: 'account_suspended' })
+    }
 
     // Silently no-op for unknown emails or unpaid users.
     // Same response in all cases so callers can't probe membership/paid status.

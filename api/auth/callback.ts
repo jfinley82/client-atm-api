@@ -30,6 +30,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.redirect(`${APP_URL}/?error=invalid_token`)
     }
 
+    // Block suspended accounts before issuing a session token
+    if (magicToken.users?.status === 'suspended') {
+      return res.redirect(`${APP_URL}/?error=account_suspended`)
+    }
+
     // Mark token as used
     await supabase
       .from('magic_link_tokens')

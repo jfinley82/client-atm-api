@@ -19,13 +19,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { data: user } = await supabase
       .from('users')
-      .select('id, email, name, has_paid, quiz_completed, quiz_score, video_watched, password_hash, created_at')
+      .select('id, email, name, has_paid, quiz_completed, quiz_score, video_watched, password_hash, status, created_at')
       .eq('email', normalizedEmail)
       .maybeSingle()
 
     // Never reveal whether email exists
     if (!user) {
       return res.status(401).json({ error: 'Invalid email or password' })
+    }
+
+    if (user.status === 'suspended') {
+      return res.status(403).json({ error: 'account_suspended' })
     }
 
     if (!user.has_paid) {
