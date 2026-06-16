@@ -18,6 +18,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { error } = await supabase
       .from('users')
+      // Insert-only: never overwrite an existing member's tier/status.
+      // ON CONFLICT DO NOTHING leaves any existing row completely untouched.
       .upsert(
         {
           email: email.toLowerCase().trim(),
@@ -25,7 +27,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           membership_tier: 'free',
           status: 'active',
         },
-        { onConflict: 'email' }
+        { onConflict: 'email', ignoreDuplicates: true }
       )
 
     if (error) throw error

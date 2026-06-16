@@ -1,15 +1,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
-import { getSessionFromRequest, verifySessionToken } from '../../lib/auth'
+import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
 
-  const sessionToken = getSessionFromRequest(req as any)
-  if (!sessionToken) return res.status(401).json({ error: 'Unauthorized' })
-  const payload = await verifySessionToken(sessionToken)
-  if (!payload) return res.status(401).json({ error: 'Unauthorized' })
+  const userId = await requireActiveUser(req, res)
+  if (!userId) return
 
   // POST — save a completed matcher output as a new problem/solution card
   if (req.method === 'POST') {
@@ -35,7 +33,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data, error } = await supabase
         .from('problem_solution_cards')
         .insert({
-          user_id: payload.userId,
+          user_id: userId,
           card_name,
           surface_problem: surface_problem ?? null,
           real_problem: real_problem ?? null,
@@ -65,7 +63,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data, error } = await supabase
         .from('problem_solution_cards')
         .select('*')
-        .eq('user_id', payload.userId)
+        .eq('user_id', userId)
         .order('created_at', { ascending: false })
 
       if (error) throw error
@@ -91,7 +89,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq('id', id)
         .single()
 
-      if (!card || card.user_id !== payload.userId) {
+      if (!card || card.user_id !== userId) {
         return res.status(404).json({ error: 'Card not found' })
       }
 

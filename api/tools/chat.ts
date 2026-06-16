@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import Anthropic from '@anthropic-ai/sdk'
 import { supabase } from '../../lib/supabase'
-import { getSessionFromRequest, verifySessionToken } from '../../lib/auth'
+import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
@@ -164,20 +164,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
   if (req.method !== 'POST') return res.status(405).end()
 
-  const sessionToken = getSessionFromRequest(req as any)
-  if (!sessionToken) return res.status(401).json({ error: 'Unauthorized' })
-  const payload = await verifySessionToken(sessionToken)
-  if (!payload) return res.status(401).json({ error: 'Unauthorized' })
+  const userId = await requireActiveUser(req, res)
+  if (!userId) return
 
-  // Auth gate — block suspended accounts, then require a paid membership tier
+  // Tier gate — AI generation requires a paid membership tier
   const { data: gateUser } = await supabase
     .from('users')
-    .select('membership_tier, status')
-    .eq('id', payload.userId)
+    .select('membership_tier')
+    .eq('id', userId)
     .single()
-  if (gateUser?.status === 'suspended') {
-    return res.status(403).json({ error: 'account_suspended' })
-  }
   if (!gateUser || !['low_ticket', 'full'].includes(gateUser.membership_tier)) {
     return res.status(403).json({ error: 'upgrade_required' })
   }
@@ -234,7 +229,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .from('saved_outputs')
         .upsert(
           {
-            user_id: payload.userId,
+            user_id: userId,
             tool_type,
             content: structuredData,
             updated_at: new Date().toISOString(),

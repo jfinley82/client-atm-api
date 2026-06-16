@@ -1,16 +1,14 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
-import { getSessionFromRequest, verifySessionToken } from '../../lib/auth'
+import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
   if (req.method !== 'GET') return res.status(405).end()
 
-  const sessionToken = getSessionFromRequest(req as any)
-  if (!sessionToken) return res.status(401).json({ error: 'Unauthorized' })
-  const payload = await verifySessionToken(sessionToken)
-  if (!payload) return res.status(401).json({ error: 'Unauthorized' })
+  const userId = await requireActiveUser(req, res)
+  if (!userId) return
 
   const rawType = req.query && req.query.tool_type
   const toolType = Array.isArray(rawType) ? rawType[0] : rawType
@@ -21,7 +19,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data, error } = await supabase
         .from('saved_outputs')
         .select('tool_type, content, created_at')
-        .eq('user_id', payload.userId)
+        .eq('user_id', userId)
         .eq('tool_type', toolType)
         .maybeSingle()
 
@@ -38,7 +36,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { data, error } = await supabase
       .from('saved_outputs')
       .select('tool_type, content, created_at')
-      .eq('user_id', payload.userId)
+      .eq('user_id', userId)
       .order('created_at', { ascending: false })
 
     if (error) throw error

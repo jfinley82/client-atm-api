@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
-import { getSessionFromRequest, verifySessionToken } from '../../lib/auth'
+import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -28,10 +28,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   if (req.method === 'POST') {
-    const sessionToken = getSessionFromRequest(req as any)
-    if (!sessionToken) return res.status(401).json({ error: 'Unauthorized' })
-    const payload = await verifySessionToken(sessionToken)
-    if (!payload) return res.status(401).json({ error: 'Unauthorized' })
+    const userId = await requireActiveUser(req, res)
+    if (!userId) return
 
     const { title, body, category_id } = req.body || {}
     if (!title || typeof title !== 'string' || !title.trim()) {
@@ -45,7 +43,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data, error } = await supabase
         .from('forum_posts')
         .insert({
-          user_id: payload.userId,
+          user_id: userId,
           category_id: category_id || null,
           title: title.trim(),
           body: body.trim()

@@ -1,5 +1,6 @@
 import { SignJWT, jwtVerify } from 'jose'
 import type { IncomingMessage, ServerResponse } from 'http'
+import { supabase } from './supabase'
 
 const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET!)
 const COOKIE_NAME = 'catm_session'
@@ -81,4 +82,36 @@ export async function parseBody<T = Record<string, unknown>>(req: IncomingMessag
 export function json(res: ServerResponse, status: number, data: unknown) {
   res.writeHead(status, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify(data))
+}
+
+/**
+ * Auth gate for protected endpoints. Verifies the session token and ensures
+ * the account is active. On failure it writes the error response (401
+ * Unauthorized or 403 account_suspended) and returns null; the caller should
+ * `return` immediately. On success it returns the userId.
+ */
+export async function requireActiveUser(req: any, res: any): Promise<string | null> {
+  const token = getSessionFromRequest(req)
+  if (!token) {
+    res.status(401).json({ error: 'Unauthorized' })
+    return null
+  }
+  const payload = await verifySessionToken(token)
+  if (!payload) {
+    res.status(401).json({ error: 'Unauthorized' })
+    return null
+  }
+
+  const { data } = await supabase
+    .from('users')
+    .select('status')
+    .eq('id', payload.userId)
+    .single()
+
+  if (data?.status === 'suspended') {
+    res.status(403).json({ error: 'account_suspended' })
+    return null
+  }
+
+  return payload.userId
 }

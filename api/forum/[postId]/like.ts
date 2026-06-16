@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
-import { getSessionFromRequest, verifySessionToken } from '../../../lib/auth'
+import { requireActiveUser } from '../../../lib/auth'
 import { setCors } from '../../../lib/cors'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -10,17 +10,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const postId = req.query.postId as string
   if (!postId) return res.status(400).json({ error: 'postId required' })
 
-  const sessionToken = getSessionFromRequest(req as any)
-  if (!sessionToken) return res.status(401).json({ error: 'Unauthorized' })
-  const payload = await verifySessionToken(sessionToken)
-  if (!payload) return res.status(401).json({ error: 'Unauthorized' })
+  const userId = await requireActiveUser(req, res)
+  if (!userId) return
 
   try {
     const { data: existing } = await supabase
       .from('forum_likes')
       .select('id')
       .eq('post_id', postId)
-      .eq('user_id', payload.userId)
+      .eq('user_id', userId)
       .maybeSingle()
 
     let liked: boolean
@@ -28,7 +26,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await supabase.from('forum_likes').delete().eq('id', existing.id)
       liked = false
     } else {
-      await supabase.from('forum_likes').insert({ post_id: postId, user_id: payload.userId })
+      await supabase.from('forum_likes').insert({ post_id: postId, user_id: userId })
       liked = true
     }
 

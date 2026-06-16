@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import Anthropic from '@anthropic-ai/sdk'
 import { supabase } from '../../lib/supabase'
-import { getSessionFromRequest, verifySessionToken } from '../../lib/auth'
+import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
@@ -13,10 +13,8 @@ Generate ALL of the following in one response. Output ONLY valid JSON — no pre
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
 
-  const sessionToken = getSessionFromRequest(req as any)
-  if (!sessionToken) return res.status(401).json({ error: 'Unauthorized' })
-  const payload = await verifySessionToken(sessionToken)
-  if (!payload) return res.status(401).json({ error: 'Unauthorized' })
+  const userId = await requireActiveUser(req, res)
+  if (!userId) return
 
   // POST — one-click generation of a complete micro-training system
   if (req.method === 'POST') {
@@ -25,15 +23,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'card_id required' })
     }
 
-    // Auth gate — block suspended accounts, then require a paid membership tier
+    // Tier gate — generation requires a paid membership tier
     const { data: gateUser } = await supabase
       .from('users')
-      .select('membership_tier, status')
-      .eq('id', payload.userId)
+      .select('membership_tier')
+      .eq('id', userId)
       .single()
-    if (gateUser?.status === 'suspended') {
-      return res.status(403).json({ error: 'account_suspended' })
-    }
     if (!gateUser || !['low_ticket', 'full'].includes(gateUser.membership_tier)) {
       return res.status(403).json({ error: 'upgrade_required' })
     }
@@ -46,7 +41,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq('id', card_id)
         .single()
 
-      if (!card || card.user_id !== payload.userId) {
+      if (!card || card.user_id !== userId) {
         return res.status(404).json({ error: 'Card not found' })
       }
 
@@ -54,7 +49,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data: outputs } = await supabase
         .from('saved_outputs')
         .select('tool_type, content')
-        .eq('user_id', payload.userId)
+        .eq('user_id', userId)
         .in('tool_type', ['audience', 'transformation'])
 
       const byType: Record<string, unknown> = {}
@@ -86,7 +81,7 @@ Generate the complete micro-training system now.`
       const { data: generation, error } = await supabase
         .from('mtm_generations')
         .insert({
-          user_id: payload.userId,
+          user_id: userId,
           card_id,
           topics: parsed.topics ?? [],
           chosen_topic: null,
@@ -116,7 +111,7 @@ Generate the complete micro-training system now.`
           .from('mtm_generations')
           .select('*')
           .eq('id', id)
-          .eq('user_id', payload.userId)
+          .eq('user_id', userId)
           .maybeSingle()
 
         if (error) throw error
@@ -137,7 +132,7 @@ Generate the complete micro-training system now.`
           .from('mtm_generations')
           .select('*')
           .eq('card_id', cardId)
-          .eq('user_id', payload.userId)
+          .eq('user_id', userId)
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle()
@@ -155,7 +150,7 @@ Generate the complete micro-training system now.`
       const { data, error } = await supabase
         .from('mtm_generations')
         .select('*, problem_solution_cards(card_name)')
-        .eq('user_id', payload.userId)
+        .eq('user_id', userId)
         .order('created_at', { ascending: false })
 
       if (error) throw error

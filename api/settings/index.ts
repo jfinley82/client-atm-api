@@ -13,7 +13,7 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
-import { getSessionFromRequest, verifySessionToken } from '../../lib/auth'
+import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -42,15 +42,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // POST — admin only: upsert a single setting
   if (req.method === 'POST') {
-    const sessionToken = getSessionFromRequest(req as any)
-    if (!sessionToken) return res.status(401).json({ error: 'Unauthorized' })
-    const payload = await verifySessionToken(sessionToken)
-    if (!payload) return res.status(401).json({ error: 'Unauthorized' })
+    const userId = await requireActiveUser(req, res)
+    if (!userId) return
 
     const { data: actingUser } = await supabase
       .from('users')
       .select('role')
-      .eq('id', payload.userId)
+      .eq('id', userId)
       .single()
 
     if (!actingUser || actingUser.role !== 'admin') {

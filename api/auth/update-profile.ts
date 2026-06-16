@@ -1,16 +1,14 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
-import { getSessionFromRequest, verifySessionToken } from '../../lib/auth'
+import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
   if (req.method !== 'PATCH') return res.status(405).end()
 
-  const sessionToken = getSessionFromRequest(req as any)
-  if (!sessionToken) return res.status(401).json({ error: 'Unauthorized' })
-  const payload = await verifySessionToken(sessionToken)
-  if (!payload) return res.status(401).json({ error: 'Unauthorized' })
+  const userId = await requireActiveUser(req, res)
+  if (!userId) return
 
   const { name, profession, location, bio } = req.body || {}
 
@@ -29,7 +27,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { data, error } = await supabase
       .from('users')
       .update(updates)
-      .eq('id', payload.userId)
+      .eq('id', userId)
       .select('id, email, name, profession, location, bio, has_paid, quiz_completed, video_watched')
       .single()
 
