@@ -51,7 +51,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         status: 'active',
       })
 
-    if (purchaseError) throw purchaseError
+    if (purchaseError) {
+      console.error('[members/create-paid] purchases insert failed:', {
+        message: purchaseError.message,
+        code: purchaseError.code,
+        details: purchaseError.details,
+        hint: purchaseError.hint,
+      })
+      throw purchaseError
+    }
 
     return res.status(200).json({ success: true })
   } catch (err) {
