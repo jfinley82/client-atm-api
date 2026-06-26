@@ -8,7 +8,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'Unauthorized' })
   }
 
-  const { email, first_name, last_name, product_type } = req.body || {}
+  console.log('[members/create-paid] incoming request body:', JSON.stringify(req.body))
+
+  const { email, first_name, last_name } = req.body || {}
+  const product_type = req.body?.product_type ?? req.query?.product_type
   if (!email || typeof email !== 'string') {
     return res.status(400).json({ error: 'email required' })
   }
