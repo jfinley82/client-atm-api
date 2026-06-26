@@ -22,6 +22,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: "product_type must be 'low_ticket' or 'full'" })
   }
 
+  const normalizedEmail = email.toLowerCase().trim()
   const name = [first_name, last_name].filter(Boolean).join(' ').trim() || null
   const membershipTier = product_type === 'low_ticket' ? 'low_ticket' : 'full'
 
@@ -30,7 +31,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .from('users')
       .upsert(
         {
-          email: email.toLowerCase().trim(),
+          email: normalizedEmail,
           name,
           has_paid: true,
           membership_tier: membershipTier,
@@ -61,7 +62,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       throw purchaseError
     }
 
-    return res.status(200).json({ success: true })
+    const { data: member, error: fetchError } = await supabase
+      .from('users')
+      .select('id, email, membership_tier, status')
+      .eq('email', normalizedEmail)
+      .single()
+
+    if (fetchError) throw fetchError
+
+    return res.status(200).json({
+      success: true,
+      user_id: member.id,
+      email: member.email,
+      membership_tier: member.membership_tier,
+      status: member.status,
+    })
   } catch (err) {
     console.error('[members/create-paid]', err)
     return res.status(500).json({ error: 'Failed to create paid member' })
