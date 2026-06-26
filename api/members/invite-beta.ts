@@ -36,7 +36,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         },
         { onConflict: 'email' }
       )
-      .select('id, name')
+      .select('id, name, email, membership_tier, status')
       .single()
 
     if (error) throw error
@@ -55,7 +55,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     await sendBetaWelcomeEmail(normalizedEmail, user.name || '', login_url)
 
-    return res.status(200).json({ success: true, login_url })
+    return res.status(200).json({
+      success: true,
+      user_id: user.id,
+      email: user.email,
+      membership_tier: user.membership_tier,
+      status: user.status,
+      login_url,
+    })
   } catch (err) {
     console.error('[members/invite-beta]', err)
     return res.status(500).json({ error: 'Failed to invite beta member' })
