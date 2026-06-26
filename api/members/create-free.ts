@@ -8,7 +8,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'Unauthorized' })
   }
 
-  const { email, first_name, last_name } = req.body || {}
+  const body = req.body || {}
+  const email = body.customData?.email || body.email
+  const first_name = body.customData?.first_name || body.first_name
+  const last_name = body.customData?.last_name || body.last_name
   if (!email || typeof email !== 'string') {
     return res.status(400).json({ error: 'email required' })
   }
