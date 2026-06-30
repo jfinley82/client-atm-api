@@ -11,11 +11,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data, error } = await supabase
         .from('forum_posts')
         .select(`
-          id, title, body, like_count, comment_count, is_pinned, created_at, updated_at,
+          id, title, body, like_count, comment_count, is_pinned, pinned_at, created_at, updated_at,
           user:users(id, name),
           category:forum_categories(id, name, slug)
         `)
         .order('is_pinned', { ascending: false })
+        .order('pinned_at', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false })
         .limit(50)
 
@@ -49,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           body: body.trim()
         })
         .select(`
-          id, title, body, like_count, comment_count, is_pinned, created_at, updated_at,
+          id, title, body, like_count, comment_count, is_pinned, pinned_at, created_at, updated_at,
           user:users(id, name),
           category:forum_categories(id, name, slug)
         `)
