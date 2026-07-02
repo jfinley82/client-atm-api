@@ -19,7 +19,7 @@ export function setCors(req: any, res: any): boolean {
   res.setHeader('Access-Control-Allow-Origin', allowOrigin)
   res.setHeader('Access-Control-Allow-Credentials', 'true')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS, DELETE')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept')
   res.setHeader('Vary', 'Origin')
 
   if (req.method === 'OPTIONS') {
