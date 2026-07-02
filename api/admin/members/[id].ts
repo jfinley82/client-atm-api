@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
 import { requireActiveUser } from '../../../lib/auth'
 import { setCors } from '../../../lib/cors'
+import { getMtmSessionProgress } from '../../../lib/progress'
 
 const VALID_TIERS = ['free', 'low_ticket', 'full']
 const VALID_STATUSES = ['active', 'suspended']
@@ -40,14 +41,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (error) throw error
       if (!member) return res.status(404).json({ error: 'Member not found' })
 
-      // There is no single "progress" table; the closest is per-lesson course
-      // progress. Join it in so the admin sees where the member is in the course.
-      const { data: courseProgress } = await supabase
-        .from('lesson_progress')
-        .select('lesson_id, completed_at, course_lessons(lesson_number, title)')
-        .eq('user_id', id)
+      // MTM blueprint session progress, matching what the member sees on their
+      // own dashboard (Audience, Transformation, Matcher, Blueprint generation).
+      const session_progress = await getMtmSessionProgress(id)
 
-      return res.status(200).json({ member, course_progress: courseProgress || [] })
+      return res.status(200).json({ member, session_progress })
     } catch (err) {
       console.error('[admin/members/[id]] GET', err)
       return res.status(500).json({ error: 'Failed to load member' })
