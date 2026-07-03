@@ -44,6 +44,18 @@ const MAX_STEPS: Record<ToolType, number> = {
   matcher: 6,
 }
 
+const OPTIONS_INSTRUCTIONS = `
+OPTIONAL ANSWER CHOICES:
+Most of these questions are open-ended by design and must stay free-text — never add choices to a question that asks for a story, their own words, a specific example, or a personal explanation. Only when a question genuinely has a small, natural, enumerable set of answers (a frequency, a scale, a yes/no/something-else) should you offer clickable choices instead. Default to omitting this — most questions in this flow do not qualify.
+When you do judge a question this way, end your response with this exact block on its own line, after your question text:
+<options>["First choice", "Second choice", "Third choice"]</options>
+Rules for this block:
+- Only include it when multiple choice genuinely fits.
+- List only the real choices. Never include "Other," "None of the above," or similar catch-alls — the interface adds that on its own.
+- Keep each choice short (a few words), phrased the way the user would say it, not full sentences.
+- Output valid JSON in the block — double-quoted strings only, no trailing commas.
+- Do not mention this block or its format to the user.`
+
 function buildSystemPrompt(
   toolType: ToolType,
   currentStep: number,
@@ -76,6 +88,7 @@ CRITICAL RULES:
 - Your goal is that no one finishes this conversation without clear specific answers — even if you helped surface them.
 - Do not introduce yourself or explain what you are doing. Start with step 1 immediately.
 - Keep responses short. One question, maybe one sentence of context if absolutely needed.
+${OPTIONS_INSTRUCTIONS}
 
 From step 6 onwards, if you have enough specific information, include a JSON object at the end of your response wrapped in <data> tags. Output valid JSON with double quotes only. Do not mention the data tags to the user.
 
@@ -119,6 +132,7 @@ CRITICAL RULES:
 - Your goal is that no one finishes this conversation without a clear vivid picture of the transformation they create.
 - Do not introduce yourself or explain what you are doing. Start with step 1 immediately.
 - Keep responses short. One question, maybe one sentence if absolutely needed.
+${OPTIONS_INSTRUCTIONS}
 
 From step 4 onwards, if you have enough specific information, include a JSON object at the end of your response wrapped in <data> tags. Output valid JSON with double quotes only. Do not mention the data tags to the user.
 
@@ -169,6 +183,7 @@ CRITICAL RULES:
   3. Ask them to describe the last problem a client came to them with and work forward from there.
 - Do not introduce yourself or explain what you are doing. Start with step 1 immediately.
 - Keep responses short. One question, maybe one brief observation if it adds value.
+${OPTIONS_INSTRUCTIONS}
 
 From step 4 onwards, if you have enough information, include a JSON object at the end of your response wrapped in <data> tags. Output valid JSON with double quotes only. Do not mention the data tags to the user.
 
@@ -270,7 +285,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } catch {
         structuredData = null
       }
-      cleanedMessage = responseText.replace(/<data>[\s\S]*?<\/data>/, '').trim()
+      cleanedMessage = cleanedMessage.replace(/<data>[\s\S]*?<\/data>/, '').trim()
+    }
+
+    // Extract <options>[...]</options> JSON array if present (multiple-choice turns only),
+    // then strip the tags from the message. Malformed or empty blocks are treated as no options.
+    let options: string[] | null = null
+    const optionsMatch = responseText.match(/<options>([\s\S]*?)<\/options>/)
+    if (optionsMatch) {
+      try {
+        const parsed = JSON.parse(optionsMatch[1].trim())
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((o) => typeof o === 'string')) {
+          options = parsed
+        }
+      } catch {
+        options = null
+      }
+      cleanedMessage = cleanedMessage.replace(/<options>[\s\S]*?<\/options>/, '').trim()
     }
 
     const maxSteps = MAX_STEPS[tool_type as ToolType]
@@ -294,6 +325,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({
       message: cleanedMessage,
+      options,
       structured_data: structuredData,
       step_complete: stepComplete,
     })
