@@ -180,9 +180,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const { tool_type, messages, current_step } = req.body || {}
 
   if (tool_type !== 'audience' && tool_type !== 'transformation' && tool_type !== 'matcher') {
+    console.warn('[tools/chat] 400 invalid tool_type', {
+      path: req.url,
+      tool_type,
+      body_keys: req.body && typeof req.body === 'object' ? Object.keys(req.body) : typeof req.body,
+    })
     return res.status(400).json({ error: 'Invalid tool_type' })
   }
   if (!Array.isArray(messages) || messages.length === 0) {
+    console.warn('[tools/chat] 400 messages required', {
+      path: req.url,
+      messages_type: Array.isArray(messages) ? `array(${messages.length})` : typeof messages,
+      body_keys: req.body && typeof req.body === 'object' ? Object.keys(req.body) : typeof req.body,
+    })
     return res.status(400).json({ error: 'messages array required' })
   }
   const currentStep = typeof current_step === 'number' ? current_step : 1
