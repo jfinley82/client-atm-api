@@ -7,6 +7,36 @@ import { setCors } from '../../lib/cors'
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
 type ToolType = 'audience' | 'transformation' | 'matcher'
+type ChatMessage = { role: string; content: string }
+
+// The frontend's actual request shape (confirmed via prod logs) is
+// { tool_type, message, session_history } — a single new message plus prior
+// turns — not the { messages: [...] } array this handler originally expected.
+// Prefer `messages` as-is when present (nothing in prod logs has ever sent it,
+// but don't break it if some future/other caller does), otherwise reconstruct
+// it from session_history + message.
+function normalizeMessages(body: Record<string, unknown>): ChatMessage[] | null {
+  if (Array.isArray(body.messages) && body.messages.length > 0) {
+    return body.messages as ChatMessage[]
+  }
+
+  if (typeof body.message === 'string' && body.message.trim().length > 0) {
+    const history = Array.isArray(body.session_history) ? body.session_history : []
+    const priorTurns: ChatMessage[] = history
+      .map((turn: unknown): ChatMessage | null => {
+        if (turn && typeof turn === 'object' && typeof (turn as any).content === 'string') {
+          const role = (turn as any).role === 'assistant' ? 'assistant' : 'user'
+          return { role, content: (turn as any).content }
+        }
+        if (typeof turn === 'string') return { role: 'user', content: turn }
+        return null
+      })
+      .filter((t): t is ChatMessage => t !== null)
+    return [...priorTurns, { role: 'user', content: body.message }]
+  }
+
+  return null
+}
 
 const MAX_STEPS: Record<ToolType, number> = {
   audience: 8,
@@ -177,30 +207,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(403).json({ error: 'upgrade_required' })
   }
 
-  const { tool_type, messages, current_step } = req.body || {}
+  const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
+  const { tool_type, current_step } = body
 
   if (tool_type !== 'audience' && tool_type !== 'transformation' && tool_type !== 'matcher') {
     console.warn('[tools/chat] 400 invalid tool_type', {
       path: req.url,
       tool_type,
-      body_keys: req.body && typeof req.body === 'object' ? Object.keys(req.body) : typeof req.body,
+      body_keys: Object.keys(body),
     })
     return res.status(400).json({ error: 'Invalid tool_type' })
   }
-  if (!Array.isArray(messages) || messages.length === 0) {
+
+  const messages = normalizeMessages(body)
+  if (!messages || messages.length === 0) {
     console.warn('[tools/chat] 400 messages required', {
       path: req.url,
-      messages_type: Array.isArray(messages) ? `array(${messages.length})` : typeof messages,
-      body_keys: req.body && typeof req.body === 'object' ? Object.keys(req.body) : typeof req.body,
+      messages_type: Array.isArray(body.messages) ? `array(${(body.messages as unknown[]).length})` : typeof body.messages,
+      message_type: typeof body.message,
+      session_history_type: Array.isArray(body.session_history) ? `array(${(body.session_history as unknown[]).length})` : typeof body.session_history,
+      body_keys: Object.keys(body),
     })
     return res.status(400).json({ error: 'messages array required' })
+  }
+  if (body.message !== undefined) {
+    console.info('[tools/chat] normalized message+session_history', {
+      tool_type,
+      reconstructed_count: messages.length,
+      session_history_type: Array.isArray(body.session_history) ? `array(${(body.session_history as unknown[]).length})` : typeof body.session_history,
+    })
   }
   const currentStep = typeof current_step === 'number' ? current_step : 1
 
   try {
     const context = tool_type === 'matcher' ? {
-      audienceData: JSON.stringify(req.body.audience_data || {}),
-      transformationData: JSON.stringify(req.body.transformation_data || {})
+      audienceData: JSON.stringify(body.audience_data || {}),
+      transformationData: JSON.stringify(body.transformation_data || {})
     } : undefined
 
     const system = buildSystemPrompt(tool_type, currentStep, context)
