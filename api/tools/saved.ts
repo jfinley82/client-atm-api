@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
+import { getSavedOutput } from '../../lib/savedOutputs'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
@@ -16,14 +17,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // With tool_type — return the single saved output for that user + tool_type
   if (toolType && typeof toolType === 'string') {
     try {
-      const { data, error } = await supabase
-        .from('saved_outputs')
-        .select('tool_type, content, created_at')
-        .eq('user_id', userId)
-        .eq('tool_type', toolType)
-        .maybeSingle()
-
-      if (error) throw error
+      const data = await getSavedOutput(userId, toolType)
       return res.status(200).json(data ?? null)
     } catch (err) {
       console.error('[tools/saved] GET one', err)

@@ -248,8 +248,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const system = buildSystemPrompt(tool_type, currentStep, context)
 
     const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-5',
       max_tokens: 1000,
+      thinking: { type: 'disabled' },
       system,
       messages: messages.map((m: { role: string; content: string }) => ({
         role: m.role === 'assistant' ? 'assistant' : 'user',
