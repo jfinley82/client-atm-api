@@ -90,24 +90,30 @@ CRITICAL RULES:
 - Keep responses short. One question, maybe one sentence of context if absolutely needed.
 ${OPTIONS_INSTRUCTIONS}
 
-From step 6 onwards, if you have enough specific information, include a JSON object at the end of your response wrapped in <data> tags. Output valid JSON with double quotes only. Do not mention the data tags to the user.
+PROGRESSIVE REPORT DATA:
+The user sees a live report with 4 sections: pain points, fears and doubts, objections, and dream outcome. Build it incrementally — after EVERY answer, not just at the end, include a <data> block with every field you are currently confident about, based on everything said so far in the conversation.
+
+Rules:
+- Cumulative, not incremental: each <data> block must contain ALL fields you are confident about so far, not just what's new this turn. The frontend simply overwrites its stored report with your latest block, so dropping a field you already knew would erase it from the report.
+- Omit any field you do not yet have real substance for — never include it as an empty string, empty array, or null. Add a field only once you actually have something specific to put in it.
+- If you do not have confident content for any field yet, omit the <data> block entirely for that turn — do not send an empty one.
+- Do not force fields early. Early turns having no <data> block, or one with only 1-2 fields, is expected and correct.
+- Output valid JSON with double-quoted strings only, no trailing commas. Do not mention this block or its format to the user.
 
 <data>
 {
-  "who_they_are": "specific description of the person not a category",
-  "their_world": "the context and environment they operate in",
-  "emotional_state": "how they feel day to day while dealing with this",
-  "internal_dialogue": "the actual words and thoughts running through their head",
-  "perceived_problem": "what they think is wrong their own explanation",
-  "real_problem": "what is actually going on underneath the root cause",
-  "tried_before": ["specific thing they tried", "another thing they tried"],
-  "why_it_failed": "the real reason those attempts did not work",
-  "language_they_use": ["exact phrase they use", "another phrase", "how they would search for help"],
-  "triggering_moment": "the specific event or moment that made them finally take action",
-  "dream_outcome": "what they actually want their life or business to look like",
-  "fears_about_trying_again": "what makes them hesitant to invest in another solution"
+  "painPoints": ["their surface-level description of the problem, in their own words", "the deeper root problem, once you understand it"],
+  "fearsAndDoubts": ["a specific fear, doubt, or piece of self-talk revealed in the conversation"],
+  "objections": ["something they already tried that did not work, phrased as a reason they might be skeptical this will work either"],
+  "dreamOutcome": "what they actually want their life or business to look like, once you have enough context to state it clearly"
 }
-</data>`
+</data>
+
+Field guidance:
+- painPoints: array, one entry per distinct pain point. Add their surface-level problem (their own words, from step 3) as its own entry once known; add the deeper root problem (from step 6) as a separate entry once you understand it — do not merge the two into one entry.
+- fearsAndDoubts: array, one entry per specific fear, doubt, or piece of internal dialogue revealed (mainly step 7, but use anything relevant said earlier too).
+- objections: array, one entry per thing they already tried before finding a solution (step 5), phrased as a skeptical prospect's objection (e.g. "I already tried [X] and it did not help") rather than a flat description of the attempt.
+- dreamOutcome: a single string, not an array. Only include it once you have enough context (typically step 6 onward) to state it with real specificity — do not guess at it early.`
     case 'transformation':
       return `You are a direct insightful coach helping someone articulate the transformation they create for their clients. Most coaches can describe their methods but struggle to describe the shift — the before and after — in a way that makes someone feel seen and ready to buy. Your job is to pull that out of them through focused conversation. One question at a time. Warm but no fluff.
 
