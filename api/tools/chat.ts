@@ -70,11 +70,24 @@ function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<strin
   )
   const dreamOutcome = asString(raw.dream_outcome)
 
+  // Straight renames — the model already produces these as arrays; no
+  // combining logic needed, just pass through under the report panel's names.
+  const pastAttempts = asStringArray(raw.tried_before)
+  const buyingDecisions = asStringArray(raw.buying_triggers)
+  const motivatingStatements = asStringArray(raw.motivating_phrases)
+  const turnAwayStatements = asStringArray(raw.repelling_phrases)
+  const whereToFind = asStringArray(raw.where_to_find_them)
+
   const derived: Record<string, unknown> = {}
   if (painPoints.length > 0) derived.painPoints = painPoints
   if (fearsAndDoubts.length > 0) derived.fearsAndDoubts = fearsAndDoubts
   if (objections.length > 0) derived.objections = objections
   if (dreamOutcome !== null) derived.dreamOutcome = dreamOutcome
+  if (pastAttempts.length > 0) derived.pastAttempts = pastAttempts
+  if (buyingDecisions.length > 0) derived.buyingDecisions = buyingDecisions
+  if (motivatingStatements.length > 0) derived.motivatingStatements = motivatingStatements
+  if (turnAwayStatements.length > 0) derived.turnAwayStatements = turnAwayStatements
+  if (whereToFind.length > 0) derived.whereToFind = whereToFind
   return derived
 }
 
@@ -142,9 +155,20 @@ Rules:
   "why_it_failed": "the real reason those attempts did not work",
   "language_they_use": ["exact phrase they use", "another phrase", "how they would search for help"],
   "triggering_moment": "the specific event or moment that made them finally take action",
-  "dream_outcome": "what they actually want their life or business to look like"
+  "dream_outcome": "what they actually want their life or business to look like",
+  "buying_triggers": ["a specific moment or realization likely to push this audience toward buying", "a second distinct trigger", "a third distinct trigger"],
+  "motivating_phrases": ["a specific phrase or angle likely to motivate this audience to act"],
+  "repelling_phrases": ["a specific phrase or positioning likely to lose this audience's trust"],
+  "where_to_find_them": ["a specific platform, community, or content type this audience likely spends time in"]
 }
-</data>`
+</data>
+
+ANALYSIS FIELDS (buying_triggers, motivating_phrases, repelling_phrases, where_to_find_them):
+These four are NOT questions to ask the user — never ask about them directly, the same way dream_outcome is never asked directly. They are your own analysis, synthesized from everything already discussed. Only include each once you have enough context to say something specific and non-generic — typically step 6 onward, same timing as dream_outcome.
+- buying_triggers: reason about SEVERAL distinct likely buying decision points for this audience — do not just wrap triggering_moment in a single-item array. Draw on real_problem, emotional_state, and triggering_moment to identify multiple genuine moments or realizations that would push this audience toward buying, not just the one moment they already described.
+- motivating_phrases: specific phrases or angles that would motivate this audience to act, drawn from language_they_use, emotional_state, internal_dialogue, and dream_outcome — language they would actually respond to, not generic encouragement.
+- repelling_phrases: the inverse of motivating_phrases — specific phrases or positioning that would repel this audience or lose their trust, inferred the same way.
+- where_to_find_them: specific platforms, communities, or content types this audience likely spends time in, inferred from who_they_are, their_world, and language_they_use.`
     case 'transformation':
       return `You are a direct insightful coach helping someone articulate the transformation they create for their clients. Most coaches can describe their methods but struggle to describe the shift — the before and after — in a way that makes someone feel seen and ready to buy. Your job is to pull that out of them through focused conversation. One question at a time. Warm but no fluff.
 
