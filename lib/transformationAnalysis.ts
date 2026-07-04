@@ -80,15 +80,14 @@ Generate the transformation analysis now.`
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-5',
     max_tokens: 6000,
-    thinking: { type: 'adaptive' },
+    thinking: { type: 'disabled' },
     system: TRANSFORMATION_ANALYSIS_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
   })
 
-  // Adaptive thinking means a `thinking` block precedes the `text` block in
-  // `content`, so content[0] is not reliably the text block here (unlike the
-  // other tool calls in this app, which run with thinking disabled) — find
-  // the text block explicitly.
+  // find(), not content[0] — matches the defensive pattern used elsewhere in
+  // this app even though thinking is disabled here, so a future thinking
+  // mode change doesn't silently break this again.
   const textBlock = message.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined
   const text = textBlock?.text ?? ''
   const parsed = extractJson(text)
