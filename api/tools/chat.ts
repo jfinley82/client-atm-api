@@ -319,7 +319,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-5',
-      max_tokens: 1000,
+      // The audience schema has grown to ~18 fields, several requiring
+      // multi-entry arrays of full sentences (sales_objections alone is 5
+      // sentence-pairs) — 1000 was tight enough that late-conversation turns
+      // could get cut off mid-<data>-block, leaving the closing tag unwritten
+      // and the raw JSON fragment leaking straight into the visible message.
+      max_tokens: 3000,
       thinking: { type: 'disabled' },
       system,
       messages: messages.map((m: { role: string; content: string }) => ({
@@ -345,6 +350,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         structuredData = null
       }
       cleanedMessage = cleanedMessage.replace(/<data>[\s\S]*?<\/data>/, '').trim()
+    } else {
+      // Defense in depth: a <data> tag opened but never found a matching
+      // close (most likely the completion got cut off mid-JSON) means this
+      // turn's structured data is unrecoverable — but we can still stop the
+      // raw, unclosed JSON fragment from leaking into the visible message.
+      // Losing this turn's <data> silently is far better than showing the
+      // user a JSON dump.
+      const danglingIndex = cleanedMessage.indexOf('<data>')
+      if (danglingIndex !== -1) {
+        console.warn('[tools/chat] dangling unclosed <data> tag stripped', {
+          tool_type,
+          current_step: currentStep,
+          stop_reason: message.stop_reason,
+          response_text_length: responseText.length,
+        })
+        cleanedMessage = cleanedMessage.slice(0, danglingIndex).trim()
+      }
     }
 
     // Extract <options>[...]</options> JSON array if present (multiple-choice turns only),
@@ -381,13 +403,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // TEMPORARY DEBUG LOGGING — added to catch a suspected leak of raw <data>
-    // field names into the visible `message` text. Logs the full response
-    // body so a repro can be pulled straight from Vercel runtime logs instead
-    // of losing it. Revert once a few real test sessions confirm the
-    // no-narration prompt fix above holds.
+    // field names/markup into the visible `message` text. Logs the full
+    // response body plus stop_reason/response length so a repro can be
+    // conclusively diagnosed (token-cutoff vs. narration) straight from
+    // Vercel runtime logs instead of losing it. Revert once a few real test
+    // sessions confirm the max_tokens increase + no-narration prompt fix hold.
     console.log('[tools/chat] TEMP full response body', {
       tool_type,
       current_step: currentStep,
+      stop_reason: message.stop_reason,
+      response_text_length: responseText.length,
       message: cleanedMessage,
       options,
       structured_data: structuredData,
