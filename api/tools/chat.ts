@@ -103,6 +103,12 @@ Rules for this block:
 - Output valid JSON in the block — double-quoted strings only, no trailing commas.
 - Do not mention this block or its format to the user.`
 
+function noNarrationInstructions(exampleFields: string): string {
+  return `
+STRUCTURED DATA STAYS OUT OF THE VISIBLE MESSAGE:
+The <data> block is a private machine-readable channel the frontend parses and strips before showing anything to the user — but your visible response text must independently stay completely clean of it too, since a leak in the visible text reaches the user regardless of what the frontend does with the block afterward. Never write out a field name from the schema above as plain text (for example: ${exampleFields}). Never paraphrase, list, preview, or summarize the contents of the <data> object in your visible response. Never describe what you are about to add to it, or narrate that you are building a report. Your visible response is only the natural conversational question or brief acknowledgment — nothing that reads like a field dump, a JSON fragment, or a report summary.`
+}
+
 function buildSystemPrompt(toolType: ToolType, currentStep: number): string {
   switch (toolType) {
     case 'audience':
@@ -142,6 +148,7 @@ Rules:
 - If you do not have confident content for any field yet, omit the <data> block entirely for that turn — do not send an empty one.
 - Do not force fields early. Early turns having no <data> block, or one with only 1-2 fields, is expected and correct.
 - Output valid JSON with double-quoted strings only, no trailing commas. Do not mention this block or its format to the user.
+${noNarrationInstructions('buying_triggers, motivating_phrases, repelling_phrases, where_to_find_them, dream_outcome')}
 
 <data>
 {
@@ -196,6 +203,7 @@ CRITICAL RULES:
 ${OPTIONS_INSTRUCTIONS}
 
 From step 4 onwards, if you have enough specific information, include a JSON object at the end of your response wrapped in <data> tags. Output valid JSON with double quotes only. Do not mention the data tags to the user.
+${noNarrationInstructions('before_state, the_bridge, proof_point')}
 
 <data>
 {
@@ -230,6 +238,7 @@ ${OPTIONS_INSTRUCTIONS}
 
 DATA:
 Include a <data> block once you know the step 1 answer, and again (updated) after step 2 if applicable. Output valid JSON with double-quoted strings only. Do not mention this block to the user.
+${noNarrationInstructions('has_existing_offer, price, format')}
 
 If they have no existing offer:
 <data>
@@ -357,6 +366,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         console.error('[tools/chat] save', saveError)
       }
     }
+
+    // TEMPORARY DEBUG LOGGING — added to catch a suspected leak of raw <data>
+    // field names into the visible `message` text. Logs the full response
+    // body so a repro can be pulled straight from Vercel runtime logs instead
+    // of losing it. Revert once a few real test sessions confirm the
+    // no-narration prompt fix above holds.
+    console.log('[tools/chat] TEMP full response body', {
+      tool_type,
+      current_step: currentStep,
+      message: cleanedMessage,
+      options,
+      structured_data: structuredData,
+      step_complete: stepComplete,
+    })
 
     return res.status(200).json({
       message: cleanedMessage,
