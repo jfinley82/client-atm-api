@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { saveOutput } from '../../lib/savedOutputs'
+import { GENDER_NEUTRAL_INSTRUCTION } from '../../lib/promptGuidelines'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -207,6 +208,7 @@ Rules:
 - Do not force fields early. Early turns having no <data> block, or one with only 1-2 fields, is expected and correct.
 - Output valid JSON with double-quoted strings only, no trailing commas. Do not mention this block or its format to the user.
 ${noNarrationInstructions('buying_triggers, motivating_phrases, repelling_phrases, pain_points, fears_and_doubts, connection_summary, gap_insight, language_problem, language_solution, other_angles, monetize_bridge, where_to_find_them, sales_objections, avatar_name, problem_statement, dream_outcome')}
+${GENDER_NEUTRAL_INSTRUCTION}
 
 <data>
 {
@@ -255,7 +257,7 @@ These are NOT questions to ask the user — never ask about them directly, the s
 - where_to_find_them: specific platforms, communities, or content types this audience likely spends time in, inferred from who_they_are, their_world, and language_they_use.
 - sales_objections: EXACTLY 5 entries, each a single string with two parts joined by " — ": (1) a specific, plausible sales-resistance thought this audience would actually have about buying coaching from THIS person, rooted in their specific story — reasoned from emotional_state, internal_dialogue, perceived_problem, and real_problem, not a generic "it's expensive" objection; (2) a brief clause on why the MTM discovery process specifically dissolves that exact resistance. You may use why_it_failed as supporting context/flavor for why past attempts didn't land, but never templating it verbatim onto every entry — each of the 5 must draw on a DIFFERENT specific detail from the conversation (a different fear, a different phrase, a different past attempt, a different piece of their internal dialogue), so no two entries share the same root cause or trailing explanation. This is a completely different question from why_it_failed/tried_before: it is not "why did their past unrelated purchases fail," it is "why would a prospect specifically resist buying from this person, and what dissolves that."
 - avatar_name: an invented first name plus a short descriptor capturing this audience's core identity or struggle, in the style of "Sarah the Overwhelmed Coach" — a fictional composite representing the audience, not the real name of any client the coach mentioned. Include this as soon as who_they_are is established enough to name a persona — often step 2 or 3, well before the deeper analysis fields.
-- problem_statement: one punchy sentence — not a paragraph — combining who this person is and their core problem, synthesized from who_they_are and perceived_problem (draw on real_problem too if it sharpens the line). Example: "A coach stuck in the friend zone, giving away expertise for free instead of charging what she's worth." Include this once who_they_are and perceived_problem are both established — often step 3 or 4, same early timing as avatar_name.`
+- problem_statement: one punchy sentence — not a paragraph — combining who this person is and their core problem, synthesized from who_they_are and perceived_problem (draw on real_problem too if it sharpens the line). Example: "A coach stuck in the friend zone, giving away expertise for free instead of charging what they're worth." Include this once who_they_are and perceived_problem are both established — often step 3 or 4, same early timing as avatar_name.`
     case 'transformation':
       return `You are a direct insightful coach helping someone articulate the transformation they create for their clients. Most coaches can describe their methods but struggle to describe the shift — the before and after — in a way that makes someone feel seen and ready to buy. Your job is to pull that out of them through focused conversation. One question at a time. Warm but no fluff.
 
@@ -284,6 +286,7 @@ ${OPTIONS_INSTRUCTIONS}
 
 From step 4 onwards, if you have enough specific information, include a JSON object at the end of your response wrapped in <data> tags. Output valid JSON with double quotes only. Do not mention the data tags to the user.
 ${noNarrationInstructions('before_state, the_bridge, proof_point')}
+${GENDER_NEUTRAL_INSTRUCTION}
 
 <data>
 {
@@ -319,6 +322,7 @@ ${OPTIONS_INSTRUCTIONS}
 DATA:
 Include a <data> block once you know the step 1 answer, and again (updated) after step 2 if applicable. Output valid JSON with double-quoted strings only. Do not mention this block to the user.
 ${noNarrationInstructions('has_existing_offer, price, format')}
+${GENDER_NEUTRAL_INSTRUCTION}
 
 If they have no existing offer:
 <data>

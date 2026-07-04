@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { GENDER_NEUTRAL_INSTRUCTION } from './promptGuidelines'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -69,7 +70,8 @@ Rules:
 - rootCause and rootDesire should go beneath what the client said explicitly — this is your expert psychological read of what is really driving the before/after shift, not a restatement of the surface answers.
 - marketingTranslation should give a concrete before/after phrase pair the coach could literally use in copy — not abstract advice about messaging.
 - selected_id is always null in this output — it is set later by the member.
-- Reason as thoroughly as this decision deserves — it is the foundation the coach's whole business identity will be built on.`
+- Reason as thoroughly as this decision deserves — it is the foundation the coach's whole business identity will be built on.
+${GENDER_NEUTRAL_INSTRUCTION}`
 
 export async function generateTransformationAnalysis(
   transformation: unknown
