@@ -13,3 +13,13 @@ export async function getSavedOutput(userId: string, toolType: string): Promise<
   if (error) throw error
   return data ?? null
 }
+
+export async function saveOutput(userId: string, toolType: string, content: unknown): Promise<void> {
+  const { error } = await supabase
+    .from('saved_outputs')
+    .upsert(
+      { user_id: userId, tool_type: toolType, content, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id,tool_type' }
+    )
+  if (error) throw error
+}
