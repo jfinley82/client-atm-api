@@ -78,6 +78,10 @@ function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<strin
   const dreamOutcome = asString(raw.dream_outcome)
   const avatarName = asString(raw.avatar_name)
   const problemStatement = asString(raw.problem_statement)
+  // Short synthesis that frames the Pain Points / Fears cards — sums up what
+  // this person is going through emotionally/practically and how to connect
+  // with them. Inferred like dream_outcome, never asked directly.
+  const connectionSummary = asString(raw.connection_summary)
 
   // objections comes from the model's own inferred sales_objections field —
   // NOT from templating why_it_failed onto every tried_before entry, which
@@ -106,6 +110,7 @@ function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<strin
   if (whereToFind.length > 0) derived.whereToFind = whereToFind
   if (avatarName !== null) derived.avatarName = avatarName
   if (problemStatement !== null) derived.problemStatement = problemStatement
+  if (connectionSummary !== null) derived.connectionSummary = connectionSummary
   return derived
 }
 
@@ -166,7 +171,7 @@ Rules:
 - If you do not have confident content for any field yet, omit the <data> block entirely for that turn — do not send an empty one.
 - Do not force fields early. Early turns having no <data> block, or one with only 1-2 fields, is expected and correct.
 - Output valid JSON with double-quoted strings only, no trailing commas. Do not mention this block or its format to the user.
-${noNarrationInstructions('buying_triggers, motivating_phrases, repelling_phrases, pain_points, fears_and_doubts, where_to_find_them, sales_objections, avatar_name, problem_statement, dream_outcome')}
+${noNarrationInstructions('buying_triggers, motivating_phrases, repelling_phrases, pain_points, fears_and_doubts, connection_summary, where_to_find_them, sales_objections, avatar_name, problem_statement, dream_outcome')}
 
 <data>
 {
@@ -189,17 +194,19 @@ ${noNarrationInstructions('buying_triggers, motivating_phrases, repelling_phrase
   "where_to_find_them": ["a specific platform, community, or content type this audience likely spends time in"],
   "sales_objections": ["a specific sales-resistance thought this audience would have, paired with why MTM's process specifically dissolves it", "a second, genuinely distinct entry — different resistance, different resolving detail", "a third distinct entry", "a fourth distinct entry", "a fifth distinct entry"],
   "avatar_name": "an invented persona name for the ideal client, e.g. 'Sarah the Overwhelmed Coach'",
-  "problem_statement": "a single punchy distilled sentence combining who this person is and their core problem"
+  "problem_statement": "a single punchy distilled sentence combining who this person is and their core problem",
+  "connection_summary": "2-3 sentences summing up what this person is going through emotionally and practically as a whole, plus a brief note on how to connect with them — framing context that sits above the pain points and fears"
 }
 </data>
 
-ANALYSIS FIELDS (buying_triggers, motivating_phrases, repelling_phrases, pain_points, fears_and_doubts, where_to_find_them, sales_objections, avatar_name, problem_statement):
+ANALYSIS FIELDS (buying_triggers, motivating_phrases, repelling_phrases, pain_points, fears_and_doubts, connection_summary, where_to_find_them, sales_objections, avatar_name, problem_statement):
 These are NOT questions to ask the user — never ask about them directly, the same way dream_outcome is never asked directly. They are your own analysis, synthesized from everything already discussed. Only include each once you have enough context to say something specific and non-generic — typically step 6 onward, same timing as dream_outcome, EXCEPT avatar_name and problem_statement (see below), which don't need that much depth.
 - buying_triggers: reason about SEVERAL distinct likely buying decision points for this audience — do not just wrap triggering_moment in a single-item array. Draw on real_problem, emotional_state, and triggering_moment to identify multiple genuine moments or realizations that would push this audience toward buying, not just the one moment they already described.
 - motivating_phrases: EXACTLY 10 entries — specific phrases or angles that would motivate this audience to act, drawn from language_they_use, emotional_state, internal_dialogue, and dream_outcome — language they would actually respond to, not generic encouragement. Each of the 10 must be genuinely different from the others — a different angle, emotion, or piece of their language — no repeated boilerplate or trivial rewordings, held to the same distinctness standard as sales_objections.
 - repelling_phrases: EXACTLY 10 entries — the inverse of motivating_phrases — specific phrases or positioning that would repel this audience or lose their trust, inferred the same way. Each of the 10 must be genuinely distinct, same no-boilerplate standard as motivating_phrases and sales_objections.
 - pain_points: EXACTLY 5 entries, each a single rich string that fuses the pain itself with WHY that pain exists for THIS specific person — not a generic surface pain, but reasoned from a concrete detail already in the conversation (perceived_problem, real_problem, emotional_state, internal_dialogue, tried_before, their_world). Same one-rich-string pattern as sales_objections: state the pain, then in the same string explain the specific reason it exists for them. Each of the 5 must draw on a DIFFERENT specific detail so no two share the same root — no generic, interchangeable pains.
 - fears_and_doubts: EXACTLY 5 entries, each a single rich string that fuses the fear or doubt with WHY this person carries it — rooted in something specific from the conversation (emotional_state, internal_dialogue, tried_before, why_it_failed, real_problem), not a generic fear. Same one-rich-string pattern as pain_points and sales_objections: state the fear, then in the same string explain the specific reason they hold it. Each of the 5 must draw on a DIFFERENT specific detail so no two share the same root.
+- connection_summary: 2-3 sentences, inferred the same way as dream_outcome (never asked directly, only once you have enough context — typically step 6 onward). Two jobs in one short block: (1) sum up what this person is going through emotionally AND practically as a whole — the felt experience, not a restatement of any single pain or fear; (2) close with a brief note on how to genuinely connect with them (the tone, the angle, what makes them feel understood). This is the framing context that sits ABOVE the pain points and fears cards, so keep it holistic and human — a synthesis, not a list, and distinct from the specific pain_points/fears_and_doubts entries beneath it.
 - where_to_find_them: specific platforms, communities, or content types this audience likely spends time in, inferred from who_they_are, their_world, and language_they_use.
 - sales_objections: EXACTLY 5 entries, each a single string with two parts joined by " — ": (1) a specific, plausible sales-resistance thought this audience would actually have about buying coaching from THIS person, rooted in their specific story — reasoned from emotional_state, internal_dialogue, perceived_problem, and real_problem, not a generic "it's expensive" objection; (2) a brief clause on why the MTM discovery process specifically dissolves that exact resistance. You may use why_it_failed as supporting context/flavor for why past attempts didn't land, but never templating it verbatim onto every entry — each of the 5 must draw on a DIFFERENT specific detail from the conversation (a different fear, a different phrase, a different past attempt, a different piece of their internal dialogue), so no two entries share the same root cause or trailing explanation. This is a completely different question from why_it_failed/tried_before: it is not "why did their past unrelated purchases fail," it is "why would a prospect specifically resist buying from this person, and what dissolves that."
 - avatar_name: an invented first name plus a short descriptor capturing this audience's core identity or struggle, in the style of "Sarah the Overwhelmed Coach" — a fictional composite representing the audience, not the real name of any client the coach mentioned. Include this as soon as who_they_are is established enough to name a persona — often step 2 or 3, well before the deeper analysis fields.
