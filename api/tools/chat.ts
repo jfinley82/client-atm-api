@@ -58,12 +58,23 @@ function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<strin
   const asStringArray = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
 
-  const painPoints = [asString(raw.perceived_problem), asString(raw.real_problem)].filter(
-    (v): v is string => v !== null
-  )
-  const fearsAndDoubts = [asString(raw.emotional_state), asString(raw.internal_dialogue)].filter(
-    (v): v is string => v !== null
-  )
+  // painPoints/fearsAndDoubts now come from the model's own inferred
+  // pain_points/fears_and_doubts arrays — EXACTLY 5 rich entries each, where
+  // every entry fuses the pain/fear itself with WHY it exists for this specific
+  // person (same one-rich-string pattern as sales_objections). We fall back to
+  // the older scalar-derived pair (perceived_problem/real_problem and
+  // emotional_state/internal_dialogue) for early turns, before the analysis
+  // fields have been inferred, so the cards still populate progressively.
+  const painPointsRich = asStringArray(raw.pain_points)
+  const painPoints =
+    painPointsRich.length > 0
+      ? painPointsRich
+      : [asString(raw.perceived_problem), asString(raw.real_problem)].filter((v): v is string => v !== null)
+  const fearsRich = asStringArray(raw.fears_and_doubts)
+  const fearsAndDoubts =
+    fearsRich.length > 0
+      ? fearsRich
+      : [asString(raw.emotional_state), asString(raw.internal_dialogue)].filter((v): v is string => v !== null)
   const dreamOutcome = asString(raw.dream_outcome)
   const avatarName = asString(raw.avatar_name)
   const problemStatement = asString(raw.problem_statement)
@@ -155,7 +166,7 @@ Rules:
 - If you do not have confident content for any field yet, omit the <data> block entirely for that turn — do not send an empty one.
 - Do not force fields early. Early turns having no <data> block, or one with only 1-2 fields, is expected and correct.
 - Output valid JSON with double-quoted strings only, no trailing commas. Do not mention this block or its format to the user.
-${noNarrationInstructions('buying_triggers, motivating_phrases, repelling_phrases, where_to_find_them, sales_objections, avatar_name, problem_statement, dream_outcome')}
+${noNarrationInstructions('buying_triggers, motivating_phrases, repelling_phrases, pain_points, fears_and_doubts, where_to_find_them, sales_objections, avatar_name, problem_statement, dream_outcome')}
 
 <data>
 {
@@ -171,8 +182,10 @@ ${noNarrationInstructions('buying_triggers, motivating_phrases, repelling_phrase
   "triggering_moment": "the specific event or moment that made them finally take action",
   "dream_outcome": "what they actually want their life or business to look like",
   "buying_triggers": ["a specific moment or realization likely to push this audience toward buying", "a second distinct trigger", "a third distinct trigger"],
-  "motivating_phrases": ["a specific phrase or angle likely to motivate this audience to act"],
-  "repelling_phrases": ["a specific phrase or positioning likely to lose this audience's trust"],
+  "motivating_phrases": ["a specific phrase or angle likely to motivate this audience to act", "a second, genuinely distinct angle", "a third", "and so on — EXACTLY 10 distinct entries, no repeated boilerplate"],
+  "repelling_phrases": ["a specific phrase or positioning likely to lose this audience's trust", "a second, genuinely distinct one", "a third", "and so on — EXACTLY 10 distinct entries, no repeated boilerplate"],
+  "pain_points": ["a specific pain this person feels, fused with WHY it exists for them — rooted in a concrete detail from the conversation", "a second, genuinely distinct pain with its own distinct why", "a third distinct entry", "a fourth distinct entry", "a fifth distinct entry"],
+  "fears_and_doubts": ["a specific fear or doubt this person carries, fused with WHY they carry it — rooted in a concrete detail from the conversation", "a second, genuinely distinct fear with its own distinct why", "a third distinct entry", "a fourth distinct entry", "a fifth distinct entry"],
   "where_to_find_them": ["a specific platform, community, or content type this audience likely spends time in"],
   "sales_objections": ["a specific sales-resistance thought this audience would have, paired with why MTM's process specifically dissolves it", "a second, genuinely distinct entry — different resistance, different resolving detail", "a third distinct entry", "a fourth distinct entry", "a fifth distinct entry"],
   "avatar_name": "an invented persona name for the ideal client, e.g. 'Sarah the Overwhelmed Coach'",
@@ -180,11 +193,13 @@ ${noNarrationInstructions('buying_triggers, motivating_phrases, repelling_phrase
 }
 </data>
 
-ANALYSIS FIELDS (buying_triggers, motivating_phrases, repelling_phrases, where_to_find_them, sales_objections, avatar_name, problem_statement):
+ANALYSIS FIELDS (buying_triggers, motivating_phrases, repelling_phrases, pain_points, fears_and_doubts, where_to_find_them, sales_objections, avatar_name, problem_statement):
 These are NOT questions to ask the user — never ask about them directly, the same way dream_outcome is never asked directly. They are your own analysis, synthesized from everything already discussed. Only include each once you have enough context to say something specific and non-generic — typically step 6 onward, same timing as dream_outcome, EXCEPT avatar_name and problem_statement (see below), which don't need that much depth.
 - buying_triggers: reason about SEVERAL distinct likely buying decision points for this audience — do not just wrap triggering_moment in a single-item array. Draw on real_problem, emotional_state, and triggering_moment to identify multiple genuine moments or realizations that would push this audience toward buying, not just the one moment they already described.
-- motivating_phrases: specific phrases or angles that would motivate this audience to act, drawn from language_they_use, emotional_state, internal_dialogue, and dream_outcome — language they would actually respond to, not generic encouragement.
-- repelling_phrases: the inverse of motivating_phrases — specific phrases or positioning that would repel this audience or lose their trust, inferred the same way.
+- motivating_phrases: EXACTLY 10 entries — specific phrases or angles that would motivate this audience to act, drawn from language_they_use, emotional_state, internal_dialogue, and dream_outcome — language they would actually respond to, not generic encouragement. Each of the 10 must be genuinely different from the others — a different angle, emotion, or piece of their language — no repeated boilerplate or trivial rewordings, held to the same distinctness standard as sales_objections.
+- repelling_phrases: EXACTLY 10 entries — the inverse of motivating_phrases — specific phrases or positioning that would repel this audience or lose their trust, inferred the same way. Each of the 10 must be genuinely distinct, same no-boilerplate standard as motivating_phrases and sales_objections.
+- pain_points: EXACTLY 5 entries, each a single rich string that fuses the pain itself with WHY that pain exists for THIS specific person — not a generic surface pain, but reasoned from a concrete detail already in the conversation (perceived_problem, real_problem, emotional_state, internal_dialogue, tried_before, their_world). Same one-rich-string pattern as sales_objections: state the pain, then in the same string explain the specific reason it exists for them. Each of the 5 must draw on a DIFFERENT specific detail so no two share the same root — no generic, interchangeable pains.
+- fears_and_doubts: EXACTLY 5 entries, each a single rich string that fuses the fear or doubt with WHY this person carries it — rooted in something specific from the conversation (emotional_state, internal_dialogue, tried_before, why_it_failed, real_problem), not a generic fear. Same one-rich-string pattern as pain_points and sales_objections: state the fear, then in the same string explain the specific reason they hold it. Each of the 5 must draw on a DIFFERENT specific detail so no two share the same root.
 - where_to_find_them: specific platforms, communities, or content types this audience likely spends time in, inferred from who_they_are, their_world, and language_they_use.
 - sales_objections: EXACTLY 5 entries, each a single string with two parts joined by " — ": (1) a specific, plausible sales-resistance thought this audience would actually have about buying coaching from THIS person, rooted in their specific story — reasoned from emotional_state, internal_dialogue, perceived_problem, and real_problem, not a generic "it's expensive" objection; (2) a brief clause on why the MTM discovery process specifically dissolves that exact resistance. You may use why_it_failed as supporting context/flavor for why past attempts didn't land, but never templating it verbatim onto every entry — each of the 5 must draw on a DIFFERENT specific detail from the conversation (a different fear, a different phrase, a different past attempt, a different piece of their internal dialogue), so no two entries share the same root cause or trailing explanation. This is a completely different question from why_it_failed/tried_before: it is not "why did their past unrelated purchases fail," it is "why would a prospect specifically resist buying from this person, and what dissolves that."
 - avatar_name: an invented first name plus a short descriptor capturing this audience's core identity or struggle, in the style of "Sarah the Overwhelmed Coach" — a fictional composite representing the audience, not the real name of any client the coach mentioned. Include this as soon as who_they_are is established enough to name a persona — often step 2 or 3, well before the deeper analysis fields.
@@ -319,12 +334,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-5',
-      // The audience schema has grown to ~18 fields, several requiring
-      // multi-entry arrays of full sentences (sales_objections alone is 5
-      // sentence-pairs) — 1000 was tight enough that late-conversation turns
-      // could get cut off mid-<data>-block, leaving the closing tag unwritten
-      // and the raw JSON fragment leaking straight into the visible message.
-      max_tokens: 3000,
+      // The audience schema has grown to ~20 fields, several requiring large
+      // multi-entry arrays of full sentences (motivating_phrases and
+      // repelling_phrases are 10 distinct entries each; pain_points,
+      // fears_and_doubts, and sales_objections are 5 rich entries each) — a
+      // tight cap risks late-conversation turns getting cut off mid-<data>-block,
+      // leaving the closing tag unwritten and the raw JSON fragment leaking
+      // straight into the visible message. Sized generously to fit the fullest
+      // final-step block with headroom.
+      max_tokens: 4500,
       thinking: { type: 'disabled' },
       system,
       messages: messages.map((m: { role: string; content: string }) => ({
