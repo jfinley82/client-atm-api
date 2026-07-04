@@ -44,6 +44,39 @@ const MAX_STEPS: Record<ToolType, number> = {
   matcher: 6,
 }
 
+// The audience <data> block carries the full raw fields the model naturally
+// produces (who_they_are, perceived_problem, tried_before, ...) — that raw
+// object is the canonical saved record, consumed directly by the Funnel
+// Builder's MTM Adapter. The report panel only knows how to render a
+// narrower shape (painPoints/fearsAndDoubts/objections/dreamOutcome), so we
+// derive that display subset deterministically here rather than asking the
+// model to emit two parallel schemas, and merge it into the same object —
+// nothing about the raw fields is dropped.
+function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<string, unknown> {
+  const asString = (v: unknown): string | null => (typeof v === 'string' && v.trim().length > 0 ? v : null)
+  const asStringArray = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
+
+  const painPoints = [asString(raw.perceived_problem), asString(raw.real_problem)].filter(
+    (v): v is string => v !== null
+  )
+  const fearsAndDoubts = [asString(raw.emotional_state), asString(raw.internal_dialogue)].filter(
+    (v): v is string => v !== null
+  )
+  const whyItFailed = asString(raw.why_it_failed)
+  const objections = asStringArray(raw.tried_before).map((item) =>
+    whyItFailed ? `I already tried ${item} — ${whyItFailed}` : `I already tried ${item}`
+  )
+  const dreamOutcome = asString(raw.dream_outcome)
+
+  const derived: Record<string, unknown> = {}
+  if (painPoints.length > 0) derived.painPoints = painPoints
+  if (fearsAndDoubts.length > 0) derived.fearsAndDoubts = fearsAndDoubts
+  if (objections.length > 0) derived.objections = objections
+  if (dreamOutcome !== null) derived.dreamOutcome = dreamOutcome
+  return derived
+}
+
 const OPTIONS_INSTRUCTIONS = `
 OPTIONAL ANSWER CHOICES:
 Most of these questions are open-ended by design and must stay free-text — never add choices to a question that asks for a story, their own words, a specific example, or a personal explanation. Only when a question genuinely has a small, natural, enumerable set of answers (a frequency, a scale, a yes/no/something-else) should you offer clickable choices instead. Default to omitting this — most questions in this flow do not qualify.
@@ -91,7 +124,7 @@ CRITICAL RULES:
 ${OPTIONS_INSTRUCTIONS}
 
 PROGRESSIVE REPORT DATA:
-The user sees a live report with 4 sections: pain points, fears and doubts, objections, and dream outcome. Build it incrementally — after EVERY answer, not just at the end, include a <data> block with every field you are currently confident about, based on everything said so far in the conversation.
+Build the user's report incrementally — after EVERY answer, not just at the end, include a <data> block with every field you are currently confident about, based on everything said so far in the conversation.
 
 Rules:
 - Cumulative, not incremental: each <data> block must contain ALL fields you are confident about so far, not just what's new this turn. The frontend simply overwrites its stored report with your latest block, so dropping a field you already knew would erase it from the report.
@@ -102,18 +135,19 @@ Rules:
 
 <data>
 {
-  "painPoints": ["their surface-level description of the problem, in their own words", "the deeper root problem, once you understand it"],
-  "fearsAndDoubts": ["a specific fear, doubt, or piece of self-talk revealed in the conversation"],
-  "objections": ["something they already tried that did not work, phrased as a reason they might be skeptical this will work either"],
-  "dreamOutcome": "what they actually want their life or business to look like, once you have enough context to state it clearly"
+  "who_they_are": "specific description of the person not a category",
+  "their_world": "the context and environment they operate in",
+  "emotional_state": "how they feel day to day while dealing with this",
+  "internal_dialogue": "the actual words and thoughts running through their head",
+  "perceived_problem": "what they think is wrong their own explanation",
+  "real_problem": "what is actually going on underneath the root cause",
+  "tried_before": ["specific thing they tried", "another thing they tried"],
+  "why_it_failed": "the real reason those attempts did not work",
+  "language_they_use": ["exact phrase they use", "another phrase", "how they would search for help"],
+  "triggering_moment": "the specific event or moment that made them finally take action",
+  "dream_outcome": "what they actually want their life or business to look like"
 }
-</data>
-
-Field guidance:
-- painPoints: array, one entry per distinct pain point. Add their surface-level problem (their own words, from step 3) as its own entry once known; add the deeper root problem (from step 6) as a separate entry once you understand it — do not merge the two into one entry.
-- fearsAndDoubts: array, one entry per specific fear, doubt, or piece of internal dialogue revealed (mainly step 7, but use anything relevant said earlier too).
-- objections: array, one entry per thing they already tried before finding a solution (step 5), phrased as a skeptical prospect's objection (e.g. "I already tried [X] and it did not help") rather than a flat description of the attempt.
-- dreamOutcome: a single string, not an array. Only include it once you have enough context (typically step 6 onward) to state it with real specificity — do not guess at it early.`
+</data>`
     case 'transformation':
       return `You are a direct insightful coach helping someone articulate the transformation they create for their clients. Most coaches can describe their methods but struggle to describe the shift — the before and after — in a way that makes someone feel seen and ready to buy. Your job is to pull that out of them through focused conversation. One question at a time. Warm but no fluff.
 
@@ -287,7 +321,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const dataMatch = responseText.match(/<data>([\s\S]*?)<\/data>/)
     if (dataMatch) {
       try {
-        structuredData = JSON.parse(dataMatch[1].trim())
+        const parsed = JSON.parse(dataMatch[1].trim())
+        structuredData =
+          tool_type === 'audience' && parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? { ...parsed, ...deriveAudienceDisplayFields(parsed as Record<string, unknown>) }
+            : parsed
       } catch {
         structuredData = null
       }
