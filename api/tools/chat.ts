@@ -64,11 +64,14 @@ function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<strin
   const fearsAndDoubts = [asString(raw.emotional_state), asString(raw.internal_dialogue)].filter(
     (v): v is string => v !== null
   )
-  const whyItFailed = asString(raw.why_it_failed)
-  const objections = asStringArray(raw.tried_before).map((item) =>
-    whyItFailed ? `I already tried ${item} — ${whyItFailed}` : `I already tried ${item}`
-  )
   const dreamOutcome = asString(raw.dream_outcome)
+
+  // objections comes from the model's own inferred sales_objections field —
+  // NOT from templating why_it_failed onto every tried_before entry, which
+  // guaranteed near-duplicate output (one why_it_failed string repeated
+  // across every past-attempt item). See ANALYSIS FIELDS in the audience
+  // prompt for the generation rules.
+  const objections = asStringArray(raw.sales_objections)
 
   // Straight renames — the model already produces these as arrays; no
   // combining logic needed, just pass through under the report panel's names.
@@ -148,7 +151,7 @@ Rules:
 - If you do not have confident content for any field yet, omit the <data> block entirely for that turn — do not send an empty one.
 - Do not force fields early. Early turns having no <data> block, or one with only 1-2 fields, is expected and correct.
 - Output valid JSON with double-quoted strings only, no trailing commas. Do not mention this block or its format to the user.
-${noNarrationInstructions('buying_triggers, motivating_phrases, repelling_phrases, where_to_find_them, dream_outcome')}
+${noNarrationInstructions('buying_triggers, motivating_phrases, repelling_phrases, where_to_find_them, sales_objections, dream_outcome')}
 
 <data>
 {
@@ -166,16 +169,18 @@ ${noNarrationInstructions('buying_triggers, motivating_phrases, repelling_phrase
   "buying_triggers": ["a specific moment or realization likely to push this audience toward buying", "a second distinct trigger", "a third distinct trigger"],
   "motivating_phrases": ["a specific phrase or angle likely to motivate this audience to act"],
   "repelling_phrases": ["a specific phrase or positioning likely to lose this audience's trust"],
-  "where_to_find_them": ["a specific platform, community, or content type this audience likely spends time in"]
+  "where_to_find_them": ["a specific platform, community, or content type this audience likely spends time in"],
+  "sales_objections": ["a specific sales-resistance thought this audience would have, paired with why MTM's process specifically dissolves it", "a second, genuinely distinct entry — different resistance, different resolving detail", "a third distinct entry", "a fourth distinct entry", "a fifth distinct entry"]
 }
 </data>
 
-ANALYSIS FIELDS (buying_triggers, motivating_phrases, repelling_phrases, where_to_find_them):
-These four are NOT questions to ask the user — never ask about them directly, the same way dream_outcome is never asked directly. They are your own analysis, synthesized from everything already discussed. Only include each once you have enough context to say something specific and non-generic — typically step 6 onward, same timing as dream_outcome.
+ANALYSIS FIELDS (buying_triggers, motivating_phrases, repelling_phrases, where_to_find_them, sales_objections):
+These are NOT questions to ask the user — never ask about them directly, the same way dream_outcome is never asked directly. They are your own analysis, synthesized from everything already discussed. Only include each once you have enough context to say something specific and non-generic — typically step 6 onward, same timing as dream_outcome.
 - buying_triggers: reason about SEVERAL distinct likely buying decision points for this audience — do not just wrap triggering_moment in a single-item array. Draw on real_problem, emotional_state, and triggering_moment to identify multiple genuine moments or realizations that would push this audience toward buying, not just the one moment they already described.
 - motivating_phrases: specific phrases or angles that would motivate this audience to act, drawn from language_they_use, emotional_state, internal_dialogue, and dream_outcome — language they would actually respond to, not generic encouragement.
 - repelling_phrases: the inverse of motivating_phrases — specific phrases or positioning that would repel this audience or lose their trust, inferred the same way.
-- where_to_find_them: specific platforms, communities, or content types this audience likely spends time in, inferred from who_they_are, their_world, and language_they_use.`
+- where_to_find_them: specific platforms, communities, or content types this audience likely spends time in, inferred from who_they_are, their_world, and language_they_use.
+- sales_objections: EXACTLY 5 entries, each a single string with two parts joined by " — ": (1) a specific, plausible sales-resistance thought this audience would actually have about buying coaching from THIS person, rooted in their specific story — reasoned from emotional_state, internal_dialogue, perceived_problem, and real_problem, not a generic "it's expensive" objection; (2) a brief clause on why the MTM discovery process specifically dissolves that exact resistance. You may use why_it_failed as supporting context/flavor for why past attempts didn't land, but never templating it verbatim onto every entry — each of the 5 must draw on a DIFFERENT specific detail from the conversation (a different fear, a different phrase, a different past attempt, a different piece of their internal dialogue), so no two entries share the same root cause or trailing explanation. This is a completely different question from why_it_failed/tried_before: it is not "why did their past unrelated purchases fail," it is "why would a prospect specifically resist buying from this person, and what dissolves that."`
     case 'transformation':
       return `You are a direct insightful coach helping someone articulate the transformation they create for their clients. Most coaches can describe their methods but struggle to describe the shift — the before and after — in a way that makes someone feel seen and ready to buy. Your job is to pull that out of them through focused conversation. One question at a time. Warm but no fluff.
 
