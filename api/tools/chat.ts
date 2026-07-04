@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
+import { saveOutput } from '../../lib/savedOutputs'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -41,7 +42,7 @@ function normalizeMessages(body: Record<string, unknown>): ChatMessage[] | null 
 const MAX_STEPS: Record<ToolType, number> = {
   audience: 8,
   transformation: 6,
-  matcher: 6,
+  matcher: 2,
 }
 
 // The audience <data> block carries the full raw fields the model naturally
@@ -89,11 +90,7 @@ Rules for this block:
 - Output valid JSON in the block — double-quoted strings only, no trailing commas.
 - Do not mention this block or its format to the user.`
 
-function buildSystemPrompt(
-  toolType: ToolType,
-  currentStep: number,
-  context?: { audienceData?: string; transformationData?: string }
-): string {
+function buildSystemPrompt(toolType: ToolType, currentStep: number): string {
   switch (toolType) {
     case 'audience':
       return `You are a sharp, empathetic business strategist helping a coach discover who they truly serve at a level deeper than they have ever gone before. Your job is not to fill out a profile — it is to excavate real insight. You ask ONE question at a time. You are warm but direct. No flattery, no filler, no bullet-point summaries after every answer. Just a focused conversation that goes somewhere.
@@ -191,56 +188,33 @@ From step 4 onwards, if you have enough specific information, include a JSON obj
 }
 </data>`
     case 'matcher':
-      return `You are a sharp strategist helping a coach identify the single best problem to build their first micro-training around. This is not a brainstorm — it is a focused validation conversation. You already have deep context about their audience and the transformation they create. Use that context actively throughout this conversation. Reference specifics from it when relevant.
+      return `You are gathering a coach's current business context before matching them with monetizable problems. This is a quick intake, not a deep conversation — do not probe, do not go deeper, just get the two answers below.
 
-AUDIENCE CONTEXT:
-${context?.audienceData || 'Not yet completed — ask the user to complete the Audience tool first before running this session.'}
+You are on step ${currentStep} of 2.
 
-TRANSFORMATION CONTEXT:
-${context?.transformationData || 'Not yet completed — ask the user to complete the Transformation tool first before running this session.'}
-
-You are on step ${currentStep} of 6.
-
-Follow this arc — one question per step:
-Step 1: Ask which problem they feel most qualified to help their audience with in a short focused training — tell them to just name it and not overthink it.
-Step 2: Ask how urgent this problem is for their audience — is it something they think about every day or more of a background frustration.
-Step 3: Ask what someone would be able to do or feel or understand after watching a 30-minute training on this that they cannot right now — tell them to be specific.
-Step 4: Ask why solving this particular problem naturally makes someone want more help from them specifically — how does it connect to what they actually do in their coaching.
-Step 5: Ask what the one thing is that most people get wrong about this problem — something their audience probably does not realize yet that they do. Tell them this becomes the hook of the training.
-Step 6: Ask what they would title this training if they had to post it tomorrow — tell them not to overthink it.
+Follow this arc:
+Step 1: Ask whether they currently have a coaching or consulting offer right now.
+Step 2:
+- If they answered yes on step 1: ask what they charge, what format it is (1:1 coaching, group, consulting, or course), and how they deliver it (calls, async, cohort, etc.) — one combined question, not three separate ones.
+- If they answered no on step 1: do not ask a new question. Briefly acknowledge and let them know you have what you need to move on to matching them with problems.
 
 CRITICAL RULES:
-- Ask exactly one question per step. Never stack two questions.
-- Use the audience and transformation context actively. Reference specifics when relevant.
-- After step 3, silently validate the problem against these three criteria before continuing:
-  1. Is it felt urgently — daily or weekly frustration not occasional?
-  2. Can it genuinely be addressed meaningfully in 30 minutes?
-  3. Does solving it create a natural desire for more help?
-  If the problem fails any criterion, gently redirect at step 4: I want to make sure this training leads to booked calls for you. Based on what you described I am wondering if [adjusted angle] might be a stronger entry point — here is why...
-- If they say they do not know or cannot answer, NEVER leave them stuck. Do one of three things:
-  1. Reference their audience data: Based on what you told me about your audience, one strong candidate might be [X from their data] — does that feel right?
-  2. Offer two specific options derived from their data and ask them to pick.
-  3. Ask them to describe the last problem a client came to them with and work forward from there.
 - Do not introduce yourself or explain what you are doing. Start with step 1 immediately.
-- Keep responses short. One question, maybe one brief observation if it adds value.
+- Keep it brief. This is a quick intake, not a discovery session — no follow-up probing, no going deeper on their answer.
+- Step 1 is a yes/no question — always include <options>["Yes", "No"]</options> with it.
 ${OPTIONS_INSTRUCTIONS}
 
-From step 4 onwards, if you have enough information, include a JSON object at the end of your response wrapped in <data> tags. Output valid JSON with double quotes only. Do not mention the data tags to the user.
+DATA:
+Include a <data> block once you know the step 1 answer, and again (updated) after step 2 if applicable. Output valid JSON with double-quoted strings only. Do not mention this block to the user.
 
+If they have no existing offer:
 <data>
-{
-  "card_name": "short memorable name for this problem solution pair 4 to 6 words",
-  "surface_problem": "how the audience would describe this problem in their own words",
-  "real_problem": "the actual root cause underneath — what the coach understands that the audience does not",
-  "urgency": "how frequently and intensely the audience feels this problem",
-  "tried_before": ["what they have already attempted to solve this"],
-  "your_solution": "the coach's specific approach to solving this in the training",
-  "transformation": "what the viewer can do or feel or understand after watching that they could not before",
-  "natural_bridge": "why solving this problem makes a discovery call the obvious next step",
-  "hook_angle": "the one surprising insight or reframe that makes this training worth watching",
-  "training_title": "the working title they came up with or the AI suggested",
-  "validated": true
-}
+{ "has_existing_offer": false }
+</data>
+
+If they have an existing offer:
+<data>
+{ "has_existing_offer": true, "price": "what they charge", "format": "1:1 coaching, group, consulting, or course", "delivery": "how they deliver it" }
 </data>`
   }
 }
@@ -295,12 +269,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const currentStep = typeof current_step === 'number' ? current_step : 1
 
   try {
-    const context = tool_type === 'matcher' ? {
-      audienceData: JSON.stringify(body.audience_data || {}),
-      transformationData: JSON.stringify(body.transformation_data || {})
-    } : undefined
-
-    const system = buildSystemPrompt(tool_type, currentStep, context)
+    const system = buildSystemPrompt(tool_type, currentStep)
 
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-5',
@@ -351,20 +320,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const maxSteps = MAX_STEPS[tool_type as ToolType]
     const stepComplete = currentStep >= maxSteps
 
-    // Persist the final structured output so it can feed downstream tools
+    // Persist the final structured output so it can feed downstream tools.
+    // matcher's redesigned intake saves under its own key — 'matcher' itself
+    // is retired (kept only for historical rows from the old 6-step flow) so
+    // lib/progress.ts's fallback completion check doesn't fire off a 2-question
+    // intake instead of an actual completed matcher session.
     if (stepComplete && structuredData !== null) {
-      const { error: saveError } = await supabase
-        .from('saved_outputs')
-        .upsert(
-          {
-            user_id: userId,
-            tool_type,
-            content: structuredData,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: 'user_id,tool_type' }
-        )
-      if (saveError) console.error('[tools/chat] save', saveError)
+      const saveToolType = tool_type === 'matcher' ? 'matcher_intake' : tool_type
+      try {
+        await saveOutput(userId, saveToolType, structuredData)
+      } catch (saveError) {
+        console.error('[tools/chat] save', saveError)
+      }
     }
 
     return res.status(200).json({
