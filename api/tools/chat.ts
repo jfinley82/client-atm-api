@@ -65,6 +65,8 @@ function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<strin
     (v): v is string => v !== null
   )
   const dreamOutcome = asString(raw.dream_outcome)
+  const avatarName = asString(raw.avatar_name)
+  const problemStatement = asString(raw.problem_statement)
 
   // objections comes from the model's own inferred sales_objections field —
   // NOT from templating why_it_failed onto every tried_before entry, which
@@ -91,6 +93,8 @@ function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<strin
   if (motivatingStatements.length > 0) derived.motivatingStatements = motivatingStatements
   if (turnAwayStatements.length > 0) derived.turnAwayStatements = turnAwayStatements
   if (whereToFind.length > 0) derived.whereToFind = whereToFind
+  if (avatarName !== null) derived.avatarName = avatarName
+  if (problemStatement !== null) derived.problemStatement = problemStatement
   return derived
 }
 
@@ -151,7 +155,7 @@ Rules:
 - If you do not have confident content for any field yet, omit the <data> block entirely for that turn — do not send an empty one.
 - Do not force fields early. Early turns having no <data> block, or one with only 1-2 fields, is expected and correct.
 - Output valid JSON with double-quoted strings only, no trailing commas. Do not mention this block or its format to the user.
-${noNarrationInstructions('buying_triggers, motivating_phrases, repelling_phrases, where_to_find_them, sales_objections, dream_outcome')}
+${noNarrationInstructions('buying_triggers, motivating_phrases, repelling_phrases, where_to_find_them, sales_objections, avatar_name, problem_statement, dream_outcome')}
 
 <data>
 {
@@ -170,17 +174,21 @@ ${noNarrationInstructions('buying_triggers, motivating_phrases, repelling_phrase
   "motivating_phrases": ["a specific phrase or angle likely to motivate this audience to act"],
   "repelling_phrases": ["a specific phrase or positioning likely to lose this audience's trust"],
   "where_to_find_them": ["a specific platform, community, or content type this audience likely spends time in"],
-  "sales_objections": ["a specific sales-resistance thought this audience would have, paired with why MTM's process specifically dissolves it", "a second, genuinely distinct entry — different resistance, different resolving detail", "a third distinct entry", "a fourth distinct entry", "a fifth distinct entry"]
+  "sales_objections": ["a specific sales-resistance thought this audience would have, paired with why MTM's process specifically dissolves it", "a second, genuinely distinct entry — different resistance, different resolving detail", "a third distinct entry", "a fourth distinct entry", "a fifth distinct entry"],
+  "avatar_name": "an invented persona name for the ideal client, e.g. 'Sarah the Overwhelmed Coach'",
+  "problem_statement": "a single punchy distilled sentence combining who this person is and their core problem"
 }
 </data>
 
-ANALYSIS FIELDS (buying_triggers, motivating_phrases, repelling_phrases, where_to_find_them, sales_objections):
-These are NOT questions to ask the user — never ask about them directly, the same way dream_outcome is never asked directly. They are your own analysis, synthesized from everything already discussed. Only include each once you have enough context to say something specific and non-generic — typically step 6 onward, same timing as dream_outcome.
+ANALYSIS FIELDS (buying_triggers, motivating_phrases, repelling_phrases, where_to_find_them, sales_objections, avatar_name, problem_statement):
+These are NOT questions to ask the user — never ask about them directly, the same way dream_outcome is never asked directly. They are your own analysis, synthesized from everything already discussed. Only include each once you have enough context to say something specific and non-generic — typically step 6 onward, same timing as dream_outcome, EXCEPT avatar_name and problem_statement (see below), which don't need that much depth.
 - buying_triggers: reason about SEVERAL distinct likely buying decision points for this audience — do not just wrap triggering_moment in a single-item array. Draw on real_problem, emotional_state, and triggering_moment to identify multiple genuine moments or realizations that would push this audience toward buying, not just the one moment they already described.
 - motivating_phrases: specific phrases or angles that would motivate this audience to act, drawn from language_they_use, emotional_state, internal_dialogue, and dream_outcome — language they would actually respond to, not generic encouragement.
 - repelling_phrases: the inverse of motivating_phrases — specific phrases or positioning that would repel this audience or lose their trust, inferred the same way.
 - where_to_find_them: specific platforms, communities, or content types this audience likely spends time in, inferred from who_they_are, their_world, and language_they_use.
-- sales_objections: EXACTLY 5 entries, each a single string with two parts joined by " — ": (1) a specific, plausible sales-resistance thought this audience would actually have about buying coaching from THIS person, rooted in their specific story — reasoned from emotional_state, internal_dialogue, perceived_problem, and real_problem, not a generic "it's expensive" objection; (2) a brief clause on why the MTM discovery process specifically dissolves that exact resistance. You may use why_it_failed as supporting context/flavor for why past attempts didn't land, but never templating it verbatim onto every entry — each of the 5 must draw on a DIFFERENT specific detail from the conversation (a different fear, a different phrase, a different past attempt, a different piece of their internal dialogue), so no two entries share the same root cause or trailing explanation. This is a completely different question from why_it_failed/tried_before: it is not "why did their past unrelated purchases fail," it is "why would a prospect specifically resist buying from this person, and what dissolves that."`
+- sales_objections: EXACTLY 5 entries, each a single string with two parts joined by " — ": (1) a specific, plausible sales-resistance thought this audience would actually have about buying coaching from THIS person, rooted in their specific story — reasoned from emotional_state, internal_dialogue, perceived_problem, and real_problem, not a generic "it's expensive" objection; (2) a brief clause on why the MTM discovery process specifically dissolves that exact resistance. You may use why_it_failed as supporting context/flavor for why past attempts didn't land, but never templating it verbatim onto every entry — each of the 5 must draw on a DIFFERENT specific detail from the conversation (a different fear, a different phrase, a different past attempt, a different piece of their internal dialogue), so no two entries share the same root cause or trailing explanation. This is a completely different question from why_it_failed/tried_before: it is not "why did their past unrelated purchases fail," it is "why would a prospect specifically resist buying from this person, and what dissolves that."
+- avatar_name: an invented first name plus a short descriptor capturing this audience's core identity or struggle, in the style of "Sarah the Overwhelmed Coach" — a fictional composite representing the audience, not the real name of any client the coach mentioned. Include this as soon as who_they_are is established enough to name a persona — often step 2 or 3, well before the deeper analysis fields.
+- problem_statement: one punchy sentence — not a paragraph — combining who this person is and their core problem, synthesized from who_they_are and perceived_problem (draw on real_problem too if it sharpens the line). Example: "A coach stuck in the friend zone, giving away expertise for free instead of charging what she's worth." Include this once who_they_are and perceived_problem are both established — often step 3 or 4, same early timing as avatar_name.`
     case 'transformation':
       return `You are a direct insightful coach helping someone articulate the transformation they create for their clients. Most coaches can describe their methods but struggle to describe the shift — the before and after — in a way that makes someone feel seen and ready to buy. Your job is to pull that out of them through focused conversation. One question at a time. Warm but no fluff.
 
