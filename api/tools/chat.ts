@@ -104,12 +104,43 @@ function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<strin
   // that the angle could anchor its own Micro-Training. Kept deliberately shallow
   // — no urgency scoring, offer suggestions, or deep reasoning — so the Monetize
   // tool's later deep pass over the same territory doesn't feel redundant.
-  const otherAngles = Array.isArray(raw.other_angles)
+  //
+  // Salvage, not all-or-nothing: the previous version required BOTH reframe and
+  // monetization_hint on every entry and dropped the ENTIRE field if a single
+  // entry (or a key-name/shape drift) failed, so one near-miss silently erased
+  // the whole "Other Angles" card. Now each entry is salvaged independently:
+  // accept common key-name drifts, accept a bare string as a reframe, keep an
+  // entry as long as it carries the core content (the reframe) even if the hint
+  // is missing, and only drop entries that have no usable reframe at all.
+  const asAngle = (a: unknown): { reframe: string; monetization_hint: string } | null => {
+    // A bare string entry (model flattened the array) → treat as the reframe.
+    if (typeof a === 'string') {
+      const r = a.trim()
+      return r.length > 0 ? { reframe: r, monetization_hint: '' } : null
+    }
+    if (typeof a !== 'object' || a === null || Array.isArray(a)) return null
+    const obj = a as Record<string, unknown>
+    // Accept the documented key plus plausible near-miss aliases the model drifts to.
+    const reframe = asString(obj.reframe) ?? asString(obj.angle) ?? asString(obj.reframing)
+    const hint =
+      asString(obj.monetization_hint) ??
+      asString(obj.monetizationHint) ??
+      asString(obj.monetization) ??
+      asString(obj.hint) ??
+      ''
+    // Keep the entry if it has the core content; a hint with no reframe has
+    // nothing to render, so it is dropped.
+    return reframe !== null ? { reframe, monetization_hint: hint } : null
+  }
+  // Accept an array (normal) or a single object the model forgot to wrap.
+  const rawAngles = Array.isArray(raw.other_angles)
     ? raw.other_angles
-        .filter((a): a is Record<string, unknown> => typeof a === 'object' && a !== null && !Array.isArray(a))
-        .map((a) => ({ reframe: asString(a.reframe), monetization_hint: asString(a.monetization_hint) }))
-        .filter((a): a is { reframe: string; monetization_hint: string } => a.reframe !== null && a.monetization_hint !== null)
-    : []
+    : raw.other_angles && typeof raw.other_angles === 'object'
+      ? [raw.other_angles]
+      : []
+  const otherAngles = rawAngles
+    .map(asAngle)
+    .filter((a): a is { reframe: string; monetization_hint: string } => a !== null)
   // One closing insight previewing the kind of Micro-Training this audience is
   // primed for — closes the Audience report and hands off toward Monetize.
   const monetizeBridge = asString(raw.monetize_bridge)
@@ -148,6 +179,55 @@ function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<strin
   if (otherAngles.length > 0) derived.otherAngles = otherAngles
   if (monetizeBridge !== null) derived.monetizeBridge = monetizeBridge
   return derived
+}
+
+// TEMP diagnostic (paired with the response-body log in the handler). For the
+// Gap-card fields that have been reported as never populating, this pins down —
+// on a single real test turn — WHICH layer is losing each field, ending the
+// generation-vs-derivation-vs-frontend ambiguity that log truncation blocked:
+//   - ABSENT_IN_RAW      → the model never emitted it in the <data> block
+//                          (generation / prompt-salience problem)
+//   - DROPPED_IN_DERIVE  → present in raw, gone after derivation
+//                          (a code/validation problem)
+//   - present            → in the final structured_data the frontend receives;
+//                          if the card is still empty, the problem is frontend
+// It also captures the raw shape of other_angles verbatim, so any key-name or
+// nesting drift the model produces is visible directly. Remove once the Gap
+// card is confirmed populating.
+function auditAudienceGapFields(
+  raw: Record<string, unknown>,
+  structured: Record<string, unknown>
+): Record<string, string> {
+  // rawKey → the key the frontend ultimately reads (derived camelCase where one
+  // exists; perceived_problem/real_problem have none — they pass through as-is).
+  const FIELDS: Array<[string, string]> = [
+    ['perceived_problem', 'perceived_problem'],
+    ['real_problem', 'real_problem'],
+    ['gap_insight', 'gapInsight'],
+    ['language_problem', 'languageProblem'],
+    ['language_solution', 'languageSolution'],
+    ['other_angles', 'otherAngles'],
+    ['connection_summary', 'connectionSummary'],
+    ['monetize_bridge', 'monetizeBridge'],
+  ]
+  const has = (o: Record<string, unknown>, k: string): boolean => {
+    const v = o[k]
+    if (v == null) return false
+    if (typeof v === 'string') return v.trim().length > 0
+    if (Array.isArray(v)) return v.length > 0
+    return true
+  }
+  const audit: Record<string, string> = {}
+  for (const [rawKey, finalKey] of FIELDS) {
+    const inRaw = has(raw, rawKey)
+    const inFinal = has(structured, finalKey)
+    audit[rawKey] = inFinal
+      ? 'present'
+      : inRaw
+        ? 'DROPPED_IN_DERIVE'
+        : 'ABSENT_IN_RAW'
+  }
+  return audit
 }
 
 const OPTIONS_INSTRUCTIONS = `
@@ -418,10 +498,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (dataMatch) {
       try {
         const parsed = JSON.parse(dataMatch[1].trim())
-        structuredData =
-          tool_type === 'audience' && parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-            ? { ...parsed, ...deriveAudienceDisplayFields(parsed as Record<string, unknown>) }
-            : parsed
+        if (tool_type === 'audience' && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const rawParsed = parsed as Record<string, unknown>
+          const merged = { ...rawParsed, ...deriveAudienceDisplayFields(rawParsed) }
+          structuredData = merged
+          // TEMP: field-level audit of the Gap-card fields (see
+          // auditAudienceGapFields). Logs raw other_angles verbatim so any
+          // shape/key drift is visible. Remove once the card is confirmed.
+          console.log('[tools/chat] TEMP audience Gap-field audit', {
+            current_step: currentStep,
+            gap_field_status: auditAudienceGapFields(rawParsed, merged),
+            other_angles_raw: rawParsed.other_angles ?? null,
+          })
+        } else {
+          structuredData = parsed
+        }
       } catch {
         structuredData = null
       }
