@@ -26,7 +26,7 @@ const tsOf = (row: any): string | null =>
  */
 export async function getMtmSessionProgress(userId: string): Promise<SessionProgress[]> {
   const [{ data: outputs }, { data: cards }, { data: gens }] = await Promise.all([
-    supabase.from('saved_outputs').select('tool_type, created_at, updated_at').eq('user_id', userId),
+    supabase.from('saved_outputs').select('tool_type, content, created_at, updated_at').eq('user_id', userId),
     supabase
       .from('problem_solution_cards')
       .select('validated, created_at, updated_at')
@@ -47,6 +47,14 @@ export async function getMtmSessionProgress(userId: string): Promise<SessionProg
   const transformation = outputByType.get('transformation')
   const matcherOutput = outputByType.get('matcher')
 
+  // Completion is now an explicit flag stored in the saved_outputs content, NOT
+  // mere row existence. Since audience/transformation are persisted on every
+  // turn (so the row appears after the first message), row existence would
+  // report "complete" prematurely; content.completed === true is set only when
+  // the session genuinely finishes. Strict check (no fallback to existence) so
+  // the funnel gate fails closed rather than unlocking early.
+  const isComplete = (row: any): boolean => !!row && row.content?.completed === true
+
   const validatedCard = (cards || []).find((c: any) => c.validated) || null
   const anyCard = (cards || [])[0] || null
   const matcherCard = validatedCard || anyCard
@@ -56,8 +64,8 @@ export async function getMtmSessionProgress(userId: string): Promise<SessionProg
   const generation = (gens || [])[0] || null
 
   return [
-    { key: 'audience', label: 'Audience', completed: !!audience, completed_at: tsOf(audience) },
-    { key: 'transformation', label: 'Transformation', completed: !!transformation, completed_at: tsOf(transformation) },
+    { key: 'audience', label: 'Audience', completed: isComplete(audience), completed_at: isComplete(audience) ? tsOf(audience) : null },
+    { key: 'transformation', label: 'Transformation', completed: isComplete(transformation), completed_at: isComplete(transformation) ? tsOf(transformation) : null },
     { key: 'matcher', label: 'Matcher', completed: matcherCompleted, completed_at: matcherAt },
     { key: 'blueprint', label: 'Blueprint Generation', completed: !!generation, completed_at: generation ? generation.created_at : null },
   ]

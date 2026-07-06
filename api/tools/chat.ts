@@ -46,6 +46,30 @@ const MAX_STEPS: Record<ToolType, number> = {
   matcher: 2,
 }
 
+// Server-side "the session genuinely finished" signal, independent of the
+// client-supplied current_step (which the frontend was not sending, so the
+// stepComplete gate never fired). Checks the terminal fields of each tool's arc
+// — fields that only appear once the conversation has reached its end (verified
+// against production logs: absent on mid-conversation turns, present only on the
+// completing turn). Used to set the stored `completed` flag as
+// `stepComplete || hasTerminalFields(...)`, so completion tracking works today
+// AND upgrades automatically once the frontend sends a numeric current_step.
+function hasTerminalFields(toolType: ToolType, data: Record<string, unknown>): boolean {
+  const filled = (k: string): boolean => typeof data[k] === 'string' && (data[k] as string).trim().length > 0
+  switch (toolType) {
+    case 'audience':
+      // step-8 answer (triggering_moment) plus the closing hand-off field.
+      return filled('triggering_moment') && filled('monetize_bridge')
+    case 'transformation':
+      return filled('after_state') && filled('the_bridge') && filled('proof_point')
+    case 'matcher':
+      // intake is done once they've answered: no existing offer, or its details.
+      return data.has_existing_offer === false || filled('price') || filled('format')
+    default:
+      return false
+  }
+}
+
 // The audience <data> block carries the full raw fields the model naturally
 // produces (who_they_are, perceived_problem, tried_before, ...) — that raw
 // object is the canonical saved record, consumed directly by the Funnel
@@ -589,8 +613,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // off a 2-question intake instead of an actual completed matcher session.
     if (structuredData !== null) {
       const saveToolType = tool_type === 'matcher' ? 'matcher_intake' : tool_type
+      // Explicit completion flag stored IN the content. Because we now persist
+      // every turn, "a row exists" no longer means "the session finished" — so
+      // consumers (lib/progress.ts, lib/funnels.ts) must read content.completed
+      // instead of row existence. completed is true when the client's step
+      // reaches the tool max (honored automatically once the frontend sends a
+      // numeric current_step) OR when the arc's terminal fields are present.
+      const isObj = typeof structuredData === 'object' && !Array.isArray(structuredData)
+      const dataObj = isObj ? (structuredData as Record<string, unknown>) : {}
+      const completed = isObj && (stepComplete || hasTerminalFields(tool_type, dataObj))
+      const toSave = isObj ? { ...dataObj, completed } : structuredData
       try {
-        await saveOutput(userId, saveToolType, structuredData)
+        await saveOutput(userId, saveToolType, toSave)
       } catch (saveError) {
         console.error('[tools/chat] save', saveError)
       }
