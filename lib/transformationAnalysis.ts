@@ -106,13 +106,6 @@ Generate the transformation analysis now.`
     zoneOfImpact: typeof parsed.zoneOfImpact === 'string' ? parsed.zoneOfImpact : '',
     intersection: Array.isArray(parsed.intersection) ? parsed.intersection : [],
     uniquelyEquipped: Array.isArray(parsed.uniquelyEquipped) ? parsed.uniquelyEquipped : [],
-    // Accept the "candidates" spelling too — the prompt now asks for
-    // "selectedProblems", but keep a fallback so a model that echoes the older
-    // key name still parses instead of returning an empty array.
-    selectedProblems: Array.isArray(parsed.selectedProblems)
-      ? parsed.selectedProblems
-      : Array.isArray(parsed.candidates)
-        ? parsed.candidates
-        : [],
+    selectedProblems: Array.isArray(parsed.selectedProblems) ? parsed.selectedProblems : [],
   }
 }
