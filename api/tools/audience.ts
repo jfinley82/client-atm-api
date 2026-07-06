@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import chatHandler from './chat'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
-import { getSavedOutput } from '../../lib/savedOutputs'
+import { getSavedOutput, stripSessionHistory, extractSessionHistory } from '../../lib/savedOutputs'
 
 // REST alias for the unified tools chat handler. The frontend calls the tool by
 // path (/api/tools/audience); we fix tool_type from the path and delegate to the
@@ -10,8 +10,9 @@ import { getSavedOutput } from '../../lib/savedOutputs'
 //
 // GET: confirmed via prod logs that the frontend calls GET here (alongside
 // /api/progress and /api/auth/me on load) to check for an existing saved
-// session before starting a new one. Always returns { output, exists } so
-// callers never have to null-check the whole body.
+// session before starting a new one. Returns { output, session_history, exists }
+// — output is the profile (transcript stripped, unchanged contract);
+// session_history lets the frontend rehydrate an in-progress conversation.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'GET') {
     if (setCors(req, res)) return
@@ -19,7 +20,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!userId) return
     try {
       const saved = await getSavedOutput(userId, 'audience')
-      return res.status(200).json({ output: saved?.content ?? null, exists: !!saved })
+      return res.status(200).json({
+        output: stripSessionHistory(saved?.content) ?? null,
+        session_history: extractSessionHistory(saved?.content),
+        exists: !!saved,
+      })
     } catch (err) {
       console.error('[tools/audience] GET', err)
       return res.status(500).json({ error: 'Failed to load saved output' })

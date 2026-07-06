@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
 import { requireActiveUser } from '../../../lib/auth'
 import { setCors } from '../../../lib/cors'
-import { getSavedOutput, saveOutput } from '../../../lib/savedOutputs'
+import { getSavedOutput, saveOutput, stripSessionHistory, isContentComplete } from '../../../lib/savedOutputs'
 import { generateTransformationAnalysis, TransformationAnalysis } from '../../../lib/transformationAnalysis'
 
 // GET: return the stored transformation analysis (404 if none generated yet).
@@ -40,9 +40,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const transformationRow = await getSavedOutput(userId, 'transformation')
-    if (!transformationRow) return res.status(400).json({ error: 'transformation_incomplete' })
+    // Require completion, not mere existence — a transcript-only row now exists
+    // from the first turn under per-turn persistence.
+    if (!isContentComplete(transformationRow?.content))
+      return res.status(400).json({ error: 'transformation_incomplete' })
 
-    const generated = await generateTransformationAnalysis(transformationRow.content)
+    // Strip the transcript before feeding the profile to the analyzer.
+    const generated = await generateTransformationAnalysis(stripSessionHistory(transformationRow!.content))
 
     if (generated.candidates.length !== 3) {
       console.error('[transformation/analyze] generation returned malformed output', {

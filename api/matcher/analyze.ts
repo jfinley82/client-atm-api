@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
-import { getSavedOutput, saveOutput } from '../../lib/savedOutputs'
+import { getSavedOutput, saveOutput, stripSessionHistory, isContentComplete } from '../../lib/savedOutputs'
 import { generateTop10, generateSuggestedOffer, MatcherAnalysis, MatcherIntake, SuggestedOffer } from '../../lib/matcherAnalysis'
 
 // GET: return the stored top-10 analysis (404 if none generated yet).
@@ -44,15 +44,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       getSavedOutput(userId, 'matcher_intake'),
     ])
 
-    if (!audienceRow) return res.status(400).json({ error: 'audience_incomplete' })
-    if (!transformationRow) return res.status(400).json({ error: 'transformation_incomplete' })
-    if (!intakeRow) return res.status(400).json({ error: 'intake_incomplete' })
+    // Require the source sessions to be COMPLETE, not merely present — under
+    // per-turn persistence a row exists from the first message, so an existence
+    // check would let analysis run on a half-finished (or transcript-only)
+    // profile. content.completed is set only when the session genuinely ends.
+    if (!isContentComplete(audienceRow?.content)) return res.status(400).json({ error: 'audience_incomplete' })
+    if (!isContentComplete(transformationRow?.content)) return res.status(400).json({ error: 'transformation_incomplete' })
+    if (!isContentComplete(intakeRow?.content)) return res.status(400).json({ error: 'intake_incomplete' })
 
-    const intake = intakeRow.content as MatcherIntake
+    // Strip the transcript before using content as the profile / casting to
+    // MatcherIntake, so it never bloats the generation prompts.
+    const intake = stripSessionHistory(intakeRow!.content) as MatcherIntake
 
     const { top_10, recommended_ids, why_recommended, insights } = await generateTop10(
-      audienceRow.content,
-      transformationRow.content,
+      stripSessionHistory(audienceRow!.content),
+      stripSessionHistory(transformationRow!.content),
       intake
     )
 
