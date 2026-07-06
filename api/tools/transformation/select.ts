@@ -28,7 +28,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!analysisRow) return res.status(404).json({ error: 'No analysis generated yet' })
 
     const analysis = analysisRow.content as TransformationAnalysis
-    const exists = analysis.candidates.some((c) => c.id === selectedId)
+    const exists = analysis.selectedProblems.some((c) => c.id === selectedId)
     if (!exists) {
       return res.status(400).json({ error: `Unknown candidate id: ${selectedId}` })
     }

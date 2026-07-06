@@ -21,7 +21,15 @@ export type TransformationAnalysis = {
   zoneOfImpact: string
   intersection: string[]
   uniquelyEquipped: string[]
-  candidates: TransformationCandidate[]
+  // Top-level simple-string before/after, carried over verbatim from the 6-step
+  // transformation conversation (profile.before_state / after_state). The
+  // frontend TransformationOutput reads these directly; they are NOT the deeper
+  // per-problem beforeState/afterState objects nested inside each candidate.
+  beforeState: string
+  afterState: string
+  // Frontend TransformationOutput reads this array as "selectedProblems". Kept
+  // in sync with that key name — a prior "candidates" spelling rendered blank.
+  selectedProblems: TransformationCandidate[]
   selected_id: string | null
   confirmed: boolean
 }
@@ -45,7 +53,7 @@ Output ONLY valid JSON, no preamble, no markdown, no code fences. Double quotes 
   "zoneOfImpact": "a specific articulation of this coach's overarching business positioning — grounded in their actual transformation data, not generic. Computed once, independent of which candidate is later chosen.",
   "intersection": ["a specific point where this coach's unique approach, their ideal client's felt need, and a real market opportunity all overlap", "a second distinct intersection point", "a third distinct intersection point"],
   "uniquelyEquipped": ["a specific reason this coach specifically (not coaches in general) is positioned to deliver this transformation", "a second distinct reason", "a third distinct reason"],
-  "candidates": [
+  "selectedProblems": [
     {
       "id": "t1",
       "problem": "a specific articulation of the problem this framing centers on",
@@ -64,8 +72,8 @@ Output ONLY valid JSON, no preamble, no markdown, no code fences. Double quotes 
 }
 
 Rules:
-- candidates must have EXACTLY 3 entries, ids "t1", "t2", "t3".
-- The 3 candidates must be genuinely distinct articulations of the SAME core transformation this coach delivers — different angle, different emphasis, different emotional entry point — NOT 3 different problems, and NOT 3 trivial rewordings of the same sentence. A reader should be able to tell instantly which one they would rather build a business around.
+- selectedProblems must have EXACTLY 3 entries, ids "t1", "t2", "t3".
+- The 3 entries must be genuinely distinct articulations of the SAME core transformation this coach delivers — different angle, different emphasis, different emotional entry point — NOT 3 different problems, and NOT 3 trivial rewordings of the same sentence. A reader should be able to tell instantly which one they would rather build a business around.
 - Ground every field in the specific conversation data provided. Use the client's own language where it strengthens a field. Do not write generic coaching-industry platitudes.
 - rootCause and rootDesire should go beneath what the client said explicitly — this is your expert psychological read of what is really driving the before/after shift, not a restatement of the surface answers.
 - marketingTranslation should give a concrete before/after phrase pair the coach could literally use in copy — not abstract advice about messaging.
@@ -75,7 +83,7 @@ ${GENDER_NEUTRAL_INSTRUCTION}`
 
 export async function generateTransformationAnalysis(
   transformation: unknown
-): Promise<{ zoneOfImpact: string; intersection: string[]; uniquelyEquipped: string[]; candidates: TransformationCandidate[] }> {
+): Promise<{ zoneOfImpact: string; intersection: string[]; uniquelyEquipped: string[]; selectedProblems: TransformationCandidate[] }> {
   const userMessage = `TRANSFORMATION DATA: ${JSON.stringify(transformation)}
 Generate the transformation analysis now.`
 
@@ -98,6 +106,6 @@ Generate the transformation analysis now.`
     zoneOfImpact: typeof parsed.zoneOfImpact === 'string' ? parsed.zoneOfImpact : '',
     intersection: Array.isArray(parsed.intersection) ? parsed.intersection : [],
     uniquelyEquipped: Array.isArray(parsed.uniquelyEquipped) ? parsed.uniquelyEquipped : [],
-    candidates: Array.isArray(parsed.candidates) ? parsed.candidates : [],
+    selectedProblems: Array.isArray(parsed.selectedProblems) ? parsed.selectedProblems : [],
   }
 }

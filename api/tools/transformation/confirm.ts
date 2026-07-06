@@ -70,13 +70,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'candidate.id must match the currently selected_id — call /select first' })
     }
 
-    const updatedCandidates = analysis.candidates.map((c) => (c.id === candidate.id ? candidate : c))
+    const updatedProblems = analysis.selectedProblems.map((c) => (c.id === candidate.id ? candidate : c))
 
     const updated: TransformationAnalysis = {
       zoneOfImpact: zoneOfImpact as string,
       intersection: intersection as string[],
       uniquelyEquipped: uniquelyEquipped as string[],
-      candidates: updatedCandidates,
+      // Top-level before/after are derived from the conversation, not edited in
+      // this step — carry them straight over from the stored analysis so they
+      // survive confirmation.
+      beforeState: analysis.beforeState ?? '',
+      afterState: analysis.afterState ?? '',
+      selectedProblems: updatedProblems,
       selected_id: candidate.id,
       confirmed: true,
     }

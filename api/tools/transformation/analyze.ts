@@ -46,17 +46,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'transformation_incomplete' })
 
     // Strip the transcript before feeding the profile to the analyzer.
-    const generated = await generateTransformationAnalysis(stripSessionHistory(transformationRow!.content))
+    const profile = stripSessionHistory(transformationRow!.content) as Record<string, unknown>
+    const generated = await generateTransformationAnalysis(profile)
 
-    if (generated.candidates.length !== 3) {
+    if (generated.selectedProblems.length !== 3) {
       console.error('[transformation/analyze] generation returned malformed output', {
-        candidate_count: generated.candidates.length,
+        selected_problem_count: generated.selectedProblems.length,
       })
       return res.status(502).json({ error: 'Analysis generation failed' })
     }
 
+    // Top-level before/after are carried straight over from the 6-step
+    // conversation's before_state/after_state strings — the analyzer does not
+    // regenerate them. Without this copy the frontend's TransformationOutput
+    // .beforeState/.afterState render blank.
     const analysis: TransformationAnalysis = {
       ...generated,
+      beforeState: typeof profile.before_state === 'string' ? profile.before_state : '',
+      afterState: typeof profile.after_state === 'string' ? profile.after_state : '',
       selected_id: null,
       confirmed: false,
     }
