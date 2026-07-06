@@ -3,7 +3,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
-import { saveOutput } from '../../lib/savedOutputs'
+import { getSavedOutput, saveOutput } from '../../lib/savedOutputs'
 import { GENDER_NEUTRAL_INSTRUCTION } from '../../lib/promptGuidelines'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
@@ -615,32 +615,60 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // 'matcher' itself is retired (kept only for historical rows from the old
     // 6-step flow) so lib/progress.ts's fallback completion check doesn't fire
     // off a 2-question intake instead of an actual completed matcher session.
-    if (structuredData !== null) {
-      const saveToolType = tool_type === 'matcher' ? 'matcher_intake' : tool_type
-      // Explicit completion flag stored IN the content. Because we now persist
-      // every turn, "a row exists" no longer means "the session finished" — so
-      // consumers (lib/progress.ts, lib/funnels.ts) must read content.completed
-      // instead of row existence.
-      //
-      // audience and transformation are open-ended conversations with no fixed
-      // length, so completion is driven PURELY by hasTerminalFields (the arc's
-      // terminal fields being present) — a step count can't mean "done", and
-      // current_step/stepComplete are legacy/inert for them. matcher stays a
-      // short, fixed, deterministic 2-step intake, so its step gate remains a
-      // valid completion signal.
-      const isObj = typeof structuredData === 'object' && !Array.isArray(structuredData)
-      const dataObj = isObj ? (structuredData as Record<string, unknown>) : {}
-      const completed =
-        isObj &&
-        (tool_type === 'matcher'
-          ? stepComplete || hasTerminalFields(tool_type, dataObj)
-          : hasTerminalFields(tool_type, dataObj))
-      const toSave = isObj ? { ...dataObj, completed } : structuredData
-      try {
-        await saveOutput(userId, saveToolType, toSave)
-      } catch (saveError) {
-        console.error('[tools/chat] save', saveError)
+    const saveToolType = tool_type === 'matcher' ? 'matcher_intake' : tool_type
+
+    // The raw transcript, including THIS assistant reply, saved on EVERY turn
+    // (below) — even turns with no <data> block yet — so a mid-conversation
+    // refresh rehydrates the actual chat, not just the extracted report. Stored
+    // flat, as a `session_history` sibling of the profile fields and `completed`
+    // flag. Prefer the request's `messages` array if it sent one; otherwise
+    // reconstruct from session_history + the new user message.
+    const sessionHistoryToSave: unknown[] =
+      Array.isArray(body.messages) && body.messages.length > 0
+        ? [...(body.messages as unknown[]), { role: 'assistant', content: cleanedMessage }]
+        : [
+            ...(Array.isArray(body.session_history) ? (body.session_history as unknown[]) : []),
+            { role: 'user', content: body.message },
+            { role: 'assistant', content: cleanedMessage },
+          ]
+
+    // Persist PROGRESSIVELY on every turn (upsert keyed on user_id+tool_type).
+    // Completion is an explicit flag stored IN the content — because a row now
+    // exists from the first message, "a row exists" no longer means "finished",
+    // so lib/progress.ts, lib/funnels.ts, and the analyze endpoints read
+    // content.completed instead of row existence. audience/transformation are
+    // open-ended, so completion is driven purely by hasTerminalFields; matcher
+    // is a fixed 2-step intake, so its step gate still counts.
+    try {
+      const isObj = typeof structuredData === 'object' && structuredData !== null && !Array.isArray(structuredData)
+      let base: Record<string, unknown>
+      let completed: boolean
+      if (isObj) {
+        // This turn produced a data object — it's the cumulative snapshot.
+        base = structuredData as Record<string, unknown>
+        completed =
+          tool_type === 'matcher'
+            ? stepComplete || hasTerminalFields(tool_type, base)
+            : hasTerminalFields(tool_type, base)
+      } else {
+        // No usable data object this turn (early turns with no <data>, a parse
+        // miss, or a rare non-object <data>). Persist the transcript WITHOUT
+        // wiping a profile an earlier turn already saved: merge onto the prior
+        // row's content and keep its completion flag; only the transcript is
+        // refreshed. If there's no prior row yet, this writes a transcript-only
+        // row (completed:false) so the chat survives refresh from turn one.
+        const prior = await getSavedOutput(userId, saveToolType)
+        const priorContent =
+          prior?.content && typeof prior.content === 'object' && !Array.isArray(prior.content)
+            ? (prior.content as Record<string, unknown>)
+            : {}
+        const { session_history: _priorHistory, completed: priorCompleted, ...priorProfile } = priorContent
+        base = priorProfile
+        completed = priorCompleted === true
       }
+      await saveOutput(userId, saveToolType, { ...base, completed, session_history: sessionHistoryToSave })
+    } catch (saveError) {
+      console.error('[tools/chat] save', saveError)
     }
 
     // TEMPORARY DEBUG LOGGING — added to catch a suspected leak of raw <data>

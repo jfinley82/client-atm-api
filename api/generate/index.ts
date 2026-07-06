@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
+import { stripSessionHistory } from '../../lib/savedOutputs'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -53,7 +54,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .in('tool_type', ['audience', 'transformation'])
 
       const byType: Record<string, unknown> = {}
-      for (const row of outputs || []) byType[row.tool_type] = row.content
+      // Strip the transcript so it never bloats the generation prompt — feed the
+      // model the profile only.
+      for (const row of outputs || []) byType[row.tool_type] = stripSessionHistory(row.content)
 
       const userMessage = `AUDIENCE INTELLIGENCE: ${JSON.stringify(byType['audience'] ?? {})}
 TRANSFORMATION DATA: ${JSON.stringify(byType['transformation'] ?? {})}
