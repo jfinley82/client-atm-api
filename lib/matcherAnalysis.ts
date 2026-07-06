@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
-import { GENDER_NEUTRAL_INSTRUCTION } from './promptGuidelines'
+import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -59,7 +59,8 @@ Rules:
 - top_10 must have exactly 10 entries, ids "p1" through "p10", each a genuinely distinct problem — not 10 rephrasings of the same idea.
 - Ground every reasoning field in specifics from the data provided (e.g. real_problem, internal_dialogue, tried_before, the_bridge, proof_point) — name what you are drawing from, do not speak in generalities.
 - recommended_ids must have exactly 3 ids, chosen for being felt urgently, addressable by this coach's specific transformation capability, and likely to create natural demand for more help.
-${GENDER_NEUTRAL_INSTRUCTION}`
+${GENDER_NEUTRAL_INSTRUCTION}
+${STYLE_GUIDELINES}`
 
 export async function generateTop10(
   audience: unknown,
@@ -103,7 +104,8 @@ Output ONLY valid JSON, no preamble, no markdown, no code fences. Double quotes 
   "price_point": "a suggested price point, or null if keeping their existing price",
   "angle_note": "if they have an existing offer: the sharper angle/positioning suggestion, specific to this problem. If proposing new packaging: a short note on why this packaging fits. Always populated, never null."
 }
-${GENDER_NEUTRAL_INSTRUCTION}`
+${GENDER_NEUTRAL_INSTRUCTION}
+${STYLE_GUIDELINES}`
 
 export async function generateSuggestedOffer(problem: Top10Problem, intake: MatcherIntake): Promise<SuggestedOffer> {
   const userMessage = `MONETIZABLE PROBLEM: ${JSON.stringify(problem)}

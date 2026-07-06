@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
-import { GENDER_NEUTRAL_INSTRUCTION } from './promptGuidelines'
+import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -104,7 +104,8 @@ Rules:
 - Do NOT include a "color" field on phases — colors are assigned separately.
 - The phases, steps, descriptive_copy, use_cases, and audience_language describe the SAME delivery method regardless of which name is chosen — the name is a label on the method, not a different method. Do not tailor the phases to a specific name option.
 - Ground every field in the specific confirmed transformation and audience data provided. Use the client's own language where it strengthens a field. No generic coaching-industry platitudes.
-${GENDER_NEUTRAL_INSTRUCTION}`
+${GENDER_NEUTRAL_INSTRUCTION}
+${STYLE_GUIDELINES}`
 
 type GeneratedFramework = {
   nameOptions: FrameworkNameOption[]
