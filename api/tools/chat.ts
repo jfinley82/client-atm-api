@@ -79,6 +79,14 @@ function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<strin
   const dreamOutcome = asString(raw.dream_outcome)
   const avatarName = asString(raw.avatar_name)
   const problemStatement = asString(raw.problem_statement)
+  // camelCase aliases for The Gap card. The model emits these as snake_case
+  // (perceived_problem/real_problem) and they always have — but the Gap-card UI
+  // reads output.perceivedProblem / output.realProblem, so the raw snake_case
+  // keys never matched and the card rendered blank. The snake_case keys stay in
+  // the record (via ...parsed) for the Funnel Builder's MTM Adapter; these are
+  // additive camelCase copies the frontend can actually read.
+  const perceivedProblem = asString(raw.perceived_problem)
+  const realProblem = asString(raw.real_problem)
   // Short synthesis that frames the Pain Points / Fears cards — sums up what
   // this person is going through emotionally/practically and how to connect
   // with them. Inferred like dream_outcome, never asked directly.
@@ -112,11 +120,16 @@ function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<strin
   // accept common key-name drifts, accept a bare string as a reframe, keep an
   // entry as long as it carries the core content (the reframe) even if the hint
   // is missing, and only drop entries that have no usable reframe at all.
-  const asAngle = (a: unknown): { reframe: string; monetization_hint: string } | null => {
+  // Output shape carries BOTH key spellings for the hint: the Gap-card UI reads
+  // angle.monetizationHint (camelCase), while monetization_hint (snake_case) is
+  // kept for the raw record / any snake_case consumer. reframe already matched
+  // the UI, so it needs no alias.
+  type Angle = { reframe: string; monetization_hint: string; monetizationHint: string }
+  const asAngle = (a: unknown): Angle | null => {
     // A bare string entry (model flattened the array) → treat as the reframe.
     if (typeof a === 'string') {
       const r = a.trim()
-      return r.length > 0 ? { reframe: r, monetization_hint: '' } : null
+      return r.length > 0 ? { reframe: r, monetization_hint: '', monetizationHint: '' } : null
     }
     if (typeof a !== 'object' || a === null || Array.isArray(a)) return null
     const obj = a as Record<string, unknown>
@@ -130,7 +143,7 @@ function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<strin
       ''
     // Keep the entry if it has the core content; a hint with no reframe has
     // nothing to render, so it is dropped.
-    return reframe !== null ? { reframe, monetization_hint: hint } : null
+    return reframe !== null ? { reframe, monetization_hint: hint, monetizationHint: hint } : null
   }
   // Accept an array (normal) or a single object the model forgot to wrap.
   const rawAngles = Array.isArray(raw.other_angles)
@@ -138,9 +151,7 @@ function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<strin
     : raw.other_angles && typeof raw.other_angles === 'object'
       ? [raw.other_angles]
       : []
-  const otherAngles = rawAngles
-    .map(asAngle)
-    .filter((a): a is { reframe: string; monetization_hint: string } => a !== null)
+  const otherAngles = rawAngles.map(asAngle).filter((a): a is Angle => a !== null)
   // One closing insight previewing the kind of Micro-Training this audience is
   // primed for — closes the Audience report and hands off toward Monetize.
   const monetizeBridge = asString(raw.monetize_bridge)
@@ -172,6 +183,8 @@ function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<strin
   if (whereToFind.length > 0) derived.whereToFind = whereToFind
   if (avatarName !== null) derived.avatarName = avatarName
   if (problemStatement !== null) derived.problemStatement = problemStatement
+  if (perceivedProblem !== null) derived.perceivedProblem = perceivedProblem
+  if (realProblem !== null) derived.realProblem = realProblem
   if (connectionSummary !== null) derived.connectionSummary = connectionSummary
   if (gapInsight !== null) derived.gapInsight = gapInsight
   if (languageProblem.length > 0) derived.languageProblem = languageProblem
@@ -201,8 +214,8 @@ function auditAudienceGapFields(
   // rawKey → the key the frontend ultimately reads (derived camelCase where one
   // exists; perceived_problem/real_problem have none — they pass through as-is).
   const FIELDS: Array<[string, string]> = [
-    ['perceived_problem', 'perceived_problem'],
-    ['real_problem', 'real_problem'],
+    ['perceived_problem', 'perceivedProblem'],
+    ['real_problem', 'realProblem'],
     ['gap_insight', 'gapInsight'],
     ['language_problem', 'languageProblem'],
     ['language_solution', 'languageSolution'],
