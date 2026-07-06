@@ -568,12 +568,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const maxSteps = MAX_STEPS[tool_type as ToolType]
     const stepComplete = currentStep >= maxSteps
 
-    // Persist the final structured output so it can feed downstream tools.
-    // matcher's redesigned intake saves under its own key — 'matcher' itself
-    // is retired (kept only for historical rows from the old 6-step flow) so
-    // lib/progress.ts's fallback completion check doesn't fire off a 2-question
-    // intake instead of an actual completed matcher session.
-    if (stepComplete && structuredData !== null) {
+    // Persist the structured output PROGRESSIVELY — on every turn that produced
+    // data — rather than only on the final step. saveOutput is an upsert keyed
+    // on (user_id, tool_type), so each write just overwrites the single row with
+    // that turn's cumulative snapshot; the last/most-complete turn wins, and
+    // downstream tools always read the latest.
+    //
+    // This deliberately no longer gates on stepComplete. Persistence used to
+    // require currentStep >= maxSteps, but currentStep is derived from the
+    // request's `current_step` field (a JSON number), and the frontend was not
+    // sending it as a number — so currentStep silently fell back to 1,
+    // stepComplete was never true, and NOTHING was ever saved (confirmed via
+    // SQL: zero saved_outputs rows for completed sessions). Decoupling the save
+    // from the client-supplied step makes it robust no matter whether/how the
+    // frontend sends current_step. structuredData is null on turns with no
+    // <data> block (or a parse failure), so a good saved report is never
+    // overwritten with nothing. matcher saves under its own intake key —
+    // 'matcher' itself is retired (kept only for historical rows from the old
+    // 6-step flow) so lib/progress.ts's fallback completion check doesn't fire
+    // off a 2-question intake instead of an actual completed matcher session.
+    if (structuredData !== null) {
       const saveToolType = tool_type === 'matcher' ? 'matcher_intake' : tool_type
       try {
         await saveOutput(userId, saveToolType, structuredData)
