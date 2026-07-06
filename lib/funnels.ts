@@ -49,7 +49,7 @@ export async function checkBlueprintComplete(
   userId: string
 ): Promise<{ complete: boolean; missing: string[] }> {
   const [{ data: outputs }, { data: cards }] = await Promise.all([
-    supabase.from('saved_outputs').select('tool_type').eq('user_id', userId),
+    supabase.from('saved_outputs').select('tool_type, content').eq('user_id', userId),
     supabase
       .from('problem_solution_cards')
       .select('id')
@@ -58,10 +58,18 @@ export async function checkBlueprintComplete(
       .limit(1),
   ])
 
-  const savedTypes = new Set((outputs || []).map((o: any) => o.tool_type))
+  // Completion is an explicit flag in the saved_outputs content, not row
+  // existence: audience/transformation are now persisted every turn, so a row
+  // appears after the first message. content.completed === true is set only when
+  // the session genuinely finishes. The problem_solution leg already checks a
+  // real completion boolean (problem_solution_cards.validated, set only at
+  // matcher finalize), so it needs no equivalent guard.
+  const completedTypes = new Set(
+    (outputs || []).filter((o: any) => o.content?.completed === true).map((o: any) => o.tool_type)
+  )
   const done: Record<string, boolean> = {
-    audience: savedTypes.has('audience'),
-    transformation: savedTypes.has('transformation'),
+    audience: completedTypes.has('audience'),
+    transformation: completedTypes.has('transformation'),
     problem_solution: (cards || []).length > 0,
   }
 

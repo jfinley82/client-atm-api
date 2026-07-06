@@ -46,6 +46,30 @@ const MAX_STEPS: Record<ToolType, number> = {
   matcher: 2,
 }
 
+// Server-side "the session genuinely finished" signal, independent of the
+// client-supplied current_step (which the frontend was not sending, so the
+// stepComplete gate never fired). Checks the terminal fields of each tool's arc
+// — fields that only appear once the conversation has reached its end (verified
+// against production logs: absent on mid-conversation turns, present only on the
+// completing turn). Used to set the stored `completed` flag as
+// `stepComplete || hasTerminalFields(...)`, so completion tracking works today
+// AND upgrades automatically once the frontend sends a numeric current_step.
+function hasTerminalFields(toolType: ToolType, data: Record<string, unknown>): boolean {
+  const filled = (k: string): boolean => typeof data[k] === 'string' && (data[k] as string).trim().length > 0
+  switch (toolType) {
+    case 'audience':
+      // step-8 answer (triggering_moment) plus the closing hand-off field.
+      return filled('triggering_moment') && filled('monetize_bridge')
+    case 'transformation':
+      return filled('after_state') && filled('the_bridge') && filled('proof_point')
+    case 'matcher':
+      // intake is done once they've answered: no existing offer, or its details.
+      return data.has_existing_offer === false || filled('price') || filled('format')
+    default:
+      return false
+  }
+}
+
 // The audience <data> block carries the full raw fields the model naturally
 // produces (who_they_are, perceived_problem, tried_before, ...) — that raw
 // object is the canonical saved record, consumed directly by the Funnel
@@ -568,15 +592,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const maxSteps = MAX_STEPS[tool_type as ToolType]
     const stepComplete = currentStep >= maxSteps
 
-    // Persist the final structured output so it can feed downstream tools.
-    // matcher's redesigned intake saves under its own key — 'matcher' itself
-    // is retired (kept only for historical rows from the old 6-step flow) so
-    // lib/progress.ts's fallback completion check doesn't fire off a 2-question
-    // intake instead of an actual completed matcher session.
-    if (stepComplete && structuredData !== null) {
+    // Persist the structured output PROGRESSIVELY — on every turn that produced
+    // data — rather than only on the final step. saveOutput is an upsert keyed
+    // on (user_id, tool_type), so each write just overwrites the single row with
+    // that turn's cumulative snapshot; the last/most-complete turn wins, and
+    // downstream tools always read the latest.
+    //
+    // This deliberately no longer gates on stepComplete. Persistence used to
+    // require currentStep >= maxSteps, but currentStep is derived from the
+    // request's `current_step` field (a JSON number), and the frontend was not
+    // sending it as a number — so currentStep silently fell back to 1,
+    // stepComplete was never true, and NOTHING was ever saved (confirmed via
+    // SQL: zero saved_outputs rows for completed sessions). Decoupling the save
+    // from the client-supplied step makes it robust no matter whether/how the
+    // frontend sends current_step. structuredData is null on turns with no
+    // <data> block (or a parse failure), so a good saved report is never
+    // overwritten with nothing. matcher saves under its own intake key —
+    // 'matcher' itself is retired (kept only for historical rows from the old
+    // 6-step flow) so lib/progress.ts's fallback completion check doesn't fire
+    // off a 2-question intake instead of an actual completed matcher session.
+    if (structuredData !== null) {
       const saveToolType = tool_type === 'matcher' ? 'matcher_intake' : tool_type
+      // Explicit completion flag stored IN the content. Because we now persist
+      // every turn, "a row exists" no longer means "the session finished" — so
+      // consumers (lib/progress.ts, lib/funnels.ts) must read content.completed
+      // instead of row existence. completed is true when the client's step
+      // reaches the tool max (honored automatically once the frontend sends a
+      // numeric current_step) OR when the arc's terminal fields are present.
+      const isObj = typeof structuredData === 'object' && !Array.isArray(structuredData)
+      const dataObj = isObj ? (structuredData as Record<string, unknown>) : {}
+      const completed = isObj && (stepComplete || hasTerminalFields(tool_type, dataObj))
+      const toSave = isObj ? { ...dataObj, completed } : structuredData
       try {
-        await saveOutput(userId, saveToolType, structuredData)
+        await saveOutput(userId, saveToolType, toSave)
       } catch (saveError) {
         console.error('[tools/chat] save', saveError)
       }
