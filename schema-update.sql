@@ -69,7 +69,7 @@ create table if not exists unlock_schedule (
 insert into unlock_schedule (item_key, label, unlock_at) values
   ('training',       'Watch Training',         null),
   ('quiz',           'A.T.M. Quiz',            null),
-  ('audience',       'Audience Analyzer',      null),
+  ('audience',       'Attract',                null),
   ('transformation', 'Transformation Builder', null),
   ('monetization',   'Monetization Creator',   null),
   ('blueprint',      'My Blueprint',           null)
