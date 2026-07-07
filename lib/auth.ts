@@ -1,4 +1,4 @@
-import { SignJWT, jwtVerify } from 'jose'
+import { SignJWT, jwtVerify, decodeProtectedHeader, decodeJwt } from 'jose'
 import type { IncomingMessage, ServerResponse } from 'http'
 import { supabase } from './supabase'
 
@@ -17,7 +17,32 @@ export async function verifySessionToken(token: string): Promise<{ userId: strin
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET)
     return { userId: payload.userId as string }
-  } catch {
+  } catch (e: any) {
+    // TEMPORARY diagnostic — the bare `catch { return null }` hid WHY a token
+    // was rejected (signature vs expiry vs malformed). Decode the token WITHOUT
+    // verifying to surface its header/claims alongside the real jose error, so a
+    // browser-valid token that 401s from the script can be pinned to a specific
+    // mechanism. Logs no secrets and only a masked slice of the token. Revert
+    // once the auth failure is diagnosed.
+    let hdr: any = null
+    let claims: any = null
+    try { hdr = decodeProtectedHeader(token) } catch {}
+    try { claims = decodeJwt(token) } catch {}
+    console.error('[auth] verifySessionToken REJECT', {
+      err_name: e?.constructor?.name,
+      err_code: e?.code,
+      err_msg: e?.message,
+      token_len: token.length,
+      token_head: token.slice(0, 12),
+      token_tail: token.slice(-6),
+      alg: hdr?.alg,
+      typ: hdr?.typ,
+      claim_userId: claims?.userId,
+      claim_exp: claims?.exp,
+      claim_iat: claims?.iat,
+      now_epoch: Math.floor(Date.now() / 1000),
+      secret_len: (process.env.JWT_SECRET || '').length,
+    })
     return null
   }
 }
@@ -93,6 +118,15 @@ export function json(res: ServerResponse, status: number, data: unknown) {
 export async function requireActiveUser(req: any, res: any): Promise<string | null> {
   const token = getSessionFromRequest(req)
   if (!token) {
+    // TEMPORARY diagnostic — distinguishes "no Authorization header arrived"
+    // from "header arrived but was rejected" (the latter logs in
+    // verifySessionToken). Revert with the other auth diagnostics.
+    console.error('[auth] 401 no token extracted', {
+      has_authorization: !!req.headers['authorization'],
+      authorization_prefix: String(req.headers['authorization'] || '').slice(0, 8),
+      has_cookie: !!req.headers['cookie'],
+      path: req.url,
+    })
     res.status(401).json({ error: 'Unauthorized' })
     return null
   }
