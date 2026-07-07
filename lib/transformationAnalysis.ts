@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
-import { GENDER_NEUTRAL_INSTRUCTION } from './promptGuidelines'
+import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -79,7 +79,8 @@ Rules:
 - marketingTranslation should give a concrete before/after phrase pair the coach could literally use in copy — not abstract advice about messaging.
 - selected_id is always null in this output — it is set later by the member.
 - Reason as thoroughly as this decision deserves — it is the foundation the coach's whole business identity will be built on.
-${GENDER_NEUTRAL_INSTRUCTION}`
+${GENDER_NEUTRAL_INSTRUCTION}
+${STYLE_GUIDELINES}`
 
 export async function generateTransformationAnalysis(
   transformation: unknown

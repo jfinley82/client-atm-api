@@ -4,7 +4,7 @@ import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { getSavedOutput, saveOutput } from '../../lib/savedOutputs'
-import { GENDER_NEUTRAL_INSTRUCTION } from '../../lib/promptGuidelines'
+import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from '../../lib/promptGuidelines'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -328,6 +328,7 @@ Rules:
 - Output valid JSON with double-quoted strings only, no trailing commas. Do not mention this block or its format to the user.
 ${noNarrationInstructions('buying_triggers, motivating_phrases, repelling_phrases, pain_points, fears_and_doubts, connection_summary, gap_insight, language_problem, language_solution, other_angles, monetize_bridge, where_to_find_them, sales_objections, avatar_name, problem_statement, dream_outcome')}
 ${GENDER_NEUTRAL_INSTRUCTION}
+${STYLE_GUIDELINES}
 
 <data>
 {
@@ -408,6 +409,7 @@ ${OPTIONS_INSTRUCTIONS}
 Once you have enough specific information — typically after the first few themes — include a JSON object at the end of your response wrapped in <data> tags. Output valid JSON with double quotes only. Do not mention the data tags to the user.
 ${noNarrationInstructions('before_state, the_bridge, proof_point')}
 ${GENDER_NEUTRAL_INSTRUCTION}
+${STYLE_GUIDELINES}
 
 <data>
 {
@@ -444,6 +446,7 @@ DATA:
 Include a <data> block once you know the step 1 answer, and again (updated) after step 2 if applicable. Output valid JSON with double-quoted strings only. Do not mention this block to the user.
 ${noNarrationInstructions('has_existing_offer, price, format')}
 ${GENDER_NEUTRAL_INSTRUCTION}
+${STYLE_GUIDELINES}
 
 If they have no existing offer:
 <data>
