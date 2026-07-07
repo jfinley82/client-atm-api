@@ -1,0 +1,9 @@
+{
+  "tool": "matcher",
+  "_note": "Matcher is a short 2-step intake (do you have an offer → its details). Completion fires as soon as has_existing_offer is answered (false) or price/format is given. This sample answers 'yes' and gives the details.",
+  "expectedFields": ["has_existing_offer", "price", "format", "delivery"],
+  "answers": [
+    "Yes, I have an offer right now.",
+    "I charge $2,000 for a 12-week 1:1 coaching program. It's one-on-one coaching, delivered over weekly Zoom calls plus async Voxer support between sessions."
+  ]
+}
