@@ -37,7 +37,7 @@ for (let i = 0; i < argv.length; i++) {
 
 const specPath = positional[0]
 if (!specPath) {
-  console.error('Usage: node scripts/run-conversation.mjs <spec.json> [--token <jwt>] [--base <url>] [--tool <t>] [--max-turns N] [--verbose]')
+  console.error('Usage: node scripts/run-conversation.mjs <spec.json> [--token <jwt>] [--base <url>] [--tool <t>] [--max-turns N] [--verbose] [--swap]')
   process.exit(2)
 }
 
@@ -46,6 +46,10 @@ const base = (flags.base || process.env.API_BASE || DEFAULT_BASE).replace(/\/+$/
 const token = flags.token || process.env.CATM_TOKEN || ''
 const maxTurns = Number(flags['max-turns'] || 30)
 const verbose = !!flags.verbose
+// --swap: exercise the re-select path at each decision point in the Transform
+// pipeline (transformation candidate, framework name) instead of the default
+// pick, so the swap/re-select code path itself gets tested too.
+const swap = !!flags.swap
 
 if (!token) {
   console.error('ERROR: no auth token. Pass --token <jwt> or set CATM_TOKEN.\n' +
@@ -144,6 +148,79 @@ function scanArrayAnomalies(data) {
     }
   }
   return issues
+}
+
+// Recursively collects "path: value" for every empty leaf (empty string or
+// empty array) under an object — used to spot-check the deep nested fields in
+// transformation candidates / framework phases that the top-level anomaly
+// scan (which only looks at direct fields) never reaches. Skips `id`/`color`
+// keys, which are structural, not content.
+function deepEmptyFields(obj, prefix = '') {
+  const out = []
+  if (!obj || typeof obj !== 'object') return out
+  for (const [k, v] of Object.entries(obj)) {
+    if (k === 'id' || k === 'color') continue
+    const path = prefix ? `${prefix}.${k}` : k
+    if (v && typeof v === 'object' && !Array.isArray(v)) out.push(...deepEmptyFields(v, path))
+    else if (isEmptyVal(v)) out.push(path)
+  }
+  return out
+}
+
+// Flags exact-duplicate text across a set of items that are supposed to be 3
+// genuinely distinct angles on the same thing (candidates' problem framing,
+// framework name options, framework phases) — the same "distinctness" bar the
+// backend prompts themselves require.
+function checkDistinctText(items, getText, label) {
+  const texts = items.map(getText)
+  const seen = new Set(), dups = new Set()
+  for (const t of texts) { if (seen.has(t)) dups.add(t); seen.add(t) }
+  return dups.size ? [`${label}: ${dups.size} of ${items.length} entries are textually identical`] : []
+}
+
+// POST helper for the one-shot Transform pipeline endpoints (analyze/select/
+// confirm). Any HTTP failure is treated as a stage failure — same discipline
+// as the per-turn conversation loop: print exactly which stage broke, then
+// exit(1) immediately rather than continuing into a stage whose precondition
+// just failed.
+async function postJson(path, body, stageLabel) {
+  const fullUrl = `${base}${path}`
+  let res
+  try {
+    res = await fetch(fullUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body ?? {}),
+    })
+  } catch (e) {
+    console.error(`\n✖ STAGE FAILED: ${stageLabel}\n  POST ${path}\n  network error: ${e.message}`)
+    process.exit(1)
+  }
+  const text = await res.text()
+  if (!res.ok) {
+    let hint = ''
+    if (res.status === 401) hint = ' (401 → auth token issue)'
+    if (res.status === 403) hint = ' (403 → test account likely lacks a paid membership_tier: low_ticket/full)'
+    if (res.status === 400) hint = ' (400 → a precondition for this stage was not met — see body below)'
+    console.error(`\n✖ STAGE FAILED: ${stageLabel}\n  POST ${path}\n  HTTP ${res.status} ${res.statusText}${hint}\n  ${trunc(text, 500)}`)
+    process.exit(1)
+  }
+  try {
+    return JSON.parse(text)
+  } catch {
+    console.error(`\n✖ STAGE FAILED: ${stageLabel}\n  POST ${path}\n  non-JSON response:\n  ${trunc(text, 500)}`)
+    process.exit(1)
+  }
+}
+
+// Structural "expected state" assertion — the counts/shape the user asked to
+// be treated as hard failures, not soft anomalies (unlike content-quality
+// issues like empty nested fields or duplicate text, which are collected as
+// warnings instead). Exits immediately with the exact stage name on violation.
+function assertStage(condition, stageLabel, detail) {
+  if (condition) return
+  console.error(`\n✖ STAGE FAILED: ${stageLabel}\n  ${detail}`)
+  process.exit(1)
 }
 
 // ─── run ─────────────────────────────────────────────────────────────────────
@@ -303,10 +380,172 @@ else console.log('  ✓ no narration leaks in any visible message')
 console.log('\nFinal structured_data:')
 console.log(finalStructured ? JSON.stringify(finalStructured, null, 2) : '  (none captured)')
 
+// ─── Transform pipeline (analyze → select → confirm, both Part A and Part B) ──
+// Only applies to the transformation tool, and only once the conversation
+// itself genuinely completed — the pipeline's own preconditions require a
+// completed transformation session (and a completed audience session, for the
+// framework stage).
+const pipelineIssues = []   // soft content-quality anomalies — reported, flips VERDICT, doesn't abort
+let pipelineRan = false
+
+if (tool === 'transformation' && completedReached) {
+  pipelineRan = true
+  console.log('\n' + '━'.repeat(70))
+  console.log(`TRANSFORM PIPELINE${swap ? '  (--swap: exercising the re-select path at each decision point)' : ''}`)
+  console.log('━'.repeat(70))
+
+  // ── Stage 1: transformation/analyze ──
+  console.log('\n[1/6] POST /api/tools/transformation/analyze')
+  const analysis = await postJson('/api/tools/transformation/analyze', {}, 'transformation/analyze')
+  assertStage(
+    Array.isArray(analysis.selectedProblems) && analysis.selectedProblems.length === 3,
+    'transformation/analyze',
+    `expected exactly 3 candidates, got ${Array.isArray(analysis.selectedProblems) ? analysis.selectedProblems.length : typeof analysis.selectedProblems}`
+  )
+  console.log(`  zoneOfImpact     : ${trunc(analysis.zoneOfImpact, 200)}`)
+  console.log(`  intersection     : ${JSON.stringify(analysis.intersection)}`)
+  console.log(`  uniquelyEquipped : ${JSON.stringify(analysis.uniquelyEquipped)}`)
+  for (const c of analysis.selectedProblems) {
+    console.log(`  candidate ${c.id}: problem: ${trunc(c.problem, 140)}`)
+    console.log(`             whySelected: ${trunc(c.whySelected, 140)}`)
+  }
+  pipelineIssues.push(...checkDistinctText(analysis.selectedProblems, (c) => c.problem, 'candidates[].problem'))
+  for (const c of analysis.selectedProblems) {
+    const empties = deepEmptyFields(c)
+    if (empties.length) pipelineIssues.push(`candidate ${c.id}: empty field(s) — ${empties.join(', ')}`)
+  }
+
+  // ── Stage 2: transformation/select ──
+  // No model-suggested default exists here (unlike framework) — selected_id is
+  // always null coming out of /analyze, so /select is required every run, not
+  // only for --swap. Default picks the first candidate (t1); --swap re-selects
+  // a second, different candidate afterward to also exercise the re-select
+  // path (confirmed resets to false on re-selection).
+  console.log('\n[2/6] POST /api/tools/transformation/select')
+  const firstPick = analysis.selectedProblems[0]
+  console.log(`  picking ${firstPick.id} (default — transformation/analyze has no model-suggested selected_id to accept as-is)`)
+  let selectResult = await postJson('/api/tools/transformation/select', { selected_id: firstPick.id }, 'transformation/select')
+  assertStage(selectResult.selected_id === firstPick.id, 'transformation/select', `selected_id did not stick: expected ${firstPick.id}, got ${selectResult.selected_id}`)
+  if (swap) {
+    const swapTarget = analysis.selectedProblems.find((c) => c.id !== firstPick.id)
+    console.log(`  --swap: re-selecting ${swapTarget.id} to exercise the re-select path`)
+    selectResult = await postJson('/api/tools/transformation/select', { selected_id: swapTarget.id }, 'transformation/select (swap)')
+    assertStage(selectResult.selected_id === swapTarget.id, 'transformation/select (swap)', `selected_id did not swap: expected ${swapTarget.id}, got ${selectResult.selected_id}`)
+    assertStage(selectResult.confirmed === false, 'transformation/select (swap)', 'expected confirmed:false to reset on re-selection')
+  }
+  console.log(`  selected_id=${selectResult.selected_id}  confirmed=${selectResult.confirmed}`)
+
+  // ── Stage 3: transformation/confirm ──
+  console.log('\n[3/6] POST /api/tools/transformation/confirm')
+  const chosenCandidate = selectResult.selectedProblems.find((c) => c.id === selectResult.selected_id)
+  const confirmedAnalysis = await postJson('/api/tools/transformation/confirm', {
+    zoneOfImpact: selectResult.zoneOfImpact,
+    intersection: selectResult.intersection,
+    uniquelyEquipped: selectResult.uniquelyEquipped,
+    candidate: chosenCandidate,
+  }, 'transformation/confirm')
+  assertStage(confirmedAnalysis.confirmed === true, 'transformation/confirm', `expected confirmed:true, got ${confirmedAnalysis.confirmed}`)
+  assertStage(confirmedAnalysis.selected_id === chosenCandidate.id, 'transformation/confirm', 'selected_id changed unexpectedly on confirm')
+  console.log(`  confirmed candidate: ${confirmedAnalysis.selected_id}  confirmed=${confirmedAnalysis.confirmed}`)
+
+  // ── Stage 4: transformation/framework/analyze ──
+  console.log('\n[4/6] POST /api/tools/transformation/framework/analyze')
+  const framework = await postJson('/api/tools/transformation/framework/analyze', {}, 'transformation/framework/analyze')
+  assertStage(
+    Array.isArray(framework.name_options) && framework.name_options.length === 3,
+    'transformation/framework/analyze',
+    `expected exactly 3 name_options, got ${Array.isArray(framework.name_options) ? framework.name_options.length : typeof framework.name_options}`
+  )
+  assertStage(
+    Array.isArray(framework.phases) && framework.phases.length === 3,
+    'transformation/framework/analyze',
+    `expected exactly 3 phases, got ${Array.isArray(framework.phases) ? framework.phases.length : typeof framework.phases}`
+  )
+  for (const p of framework.phases) {
+    assertStage(
+      Array.isArray(p.steps) && p.steps.length >= 2 && p.steps.length <= 3,
+      'transformation/framework/analyze',
+      `phase ${p.id} (${p.name}) has ${Array.isArray(p.steps) ? p.steps.length : typeof p.steps} steps, expected 2-3`
+    )
+  }
+  console.log(`  name_options: ${framework.name_options.map((o) => `${o.id}="${trunc(o.name, 60)}"`).join('  |  ')}`)
+  console.log(`  model's own pick (selected_name_id): ${framework.selected_name_id}`)
+  for (const p of framework.phases) console.log(`  phase ${p.id}: ${trunc(p.name, 60)}  (${p.steps.length} steps)`)
+  pipelineIssues.push(...checkDistinctText(framework.name_options, (o) => o.name, 'name_options[].name'))
+  pipelineIssues.push(...checkDistinctText(framework.phases, (p) => p.name, 'phases[].name'))
+  for (const o of framework.name_options) {
+    const empties = deepEmptyFields(o)
+    if (empties.length) pipelineIssues.push(`name_option ${o.id}: empty field(s) — ${empties.join(', ')}`)
+  }
+  for (const p of framework.phases) {
+    const empties = deepEmptyFields(p)
+    if (empties.length) pipelineIssues.push(`phase ${p.id}: empty field(s) — ${empties.join(', ')}`)
+    for (const s of p.steps) {
+      const stepEmpties = deepEmptyFields(s)
+      if (stepEmpties.length) pipelineIssues.push(`phase ${p.id} step ${s.id}: empty field(s) — ${stepEmpties.join(', ')}`)
+    }
+  }
+
+  // ── Stage 5: transformation/framework/select (only with --swap) ──
+  // framework/analyze DOES carry a real model-suggested default (selected_name_id,
+  // already resolved into frameworkName/frameworkTagline) — unlike transformation's
+  // candidates, so the default path genuinely accepts it as-is and skips /select.
+  let chosenFramework = framework
+  console.log('\n[5/6] POST /api/tools/transformation/framework/select')
+  if (swap) {
+    const swapTarget = framework.name_options.find((o) => o.id !== framework.selected_name_id)
+    console.log(`  --swap: selecting ${swapTarget.id} instead of the model's own pick (${framework.selected_name_id})`)
+    chosenFramework = await postJson('/api/tools/transformation/framework/select', { selected_name_id: swapTarget.id }, 'transformation/framework/select')
+    assertStage(chosenFramework.selected_name_id === swapTarget.id, 'transformation/framework/select', `selected_name_id did not swap: expected ${swapTarget.id}, got ${chosenFramework.selected_name_id}`)
+    console.log(`  frameworkName now: ${trunc(chosenFramework.frameworkName, 80)}`)
+  } else {
+    console.log(`  skipped — accepting the model's own selected_name_id (${framework.selected_name_id}) as-is`)
+  }
+
+  // ── Stage 6: transformation/framework/confirm ──
+  console.log('\n[6/6] POST /api/tools/transformation/framework/confirm')
+  const confirmedFramework = await postJson('/api/tools/transformation/framework/confirm', {
+    frameworkName: chosenFramework.frameworkName,
+    frameworkTagline: chosenFramework.frameworkTagline,
+    phases: chosenFramework.phases,
+    descriptiveCopy: chosenFramework.descriptiveCopy,
+    useCases: chosenFramework.useCases,
+    audienceLanguage: chosenFramework.audienceLanguage,
+  }, 'transformation/framework/confirm')
+  assertStage(confirmedFramework.confirmed === true, 'transformation/framework/confirm', `expected confirmed:true, got ${confirmedFramework.confirmed}`)
+  const finalFrameworkFields = ['frameworkName', 'frameworkTagline', 'descriptiveCopy', 'useCases', 'audienceLanguage']
+  const missingFrameworkFields = finalFrameworkFields.filter((f) => isEmptyVal(confirmedFramework[f]))
+  assertStage(
+    missingFrameworkFields.length === 0,
+    'transformation/framework/confirm',
+    `required field(s) empty after confirm: ${missingFrameworkFields.join(', ')}`
+  )
+  console.log(`  confirmed=${confirmedFramework.confirmed}`)
+  console.log(`  frameworkName    : ${confirmedFramework.frameworkName}`)
+  console.log(`  frameworkTagline : ${confirmedFramework.frameworkTagline}`)
+  console.log(`  descriptiveCopy  : ${trunc(confirmedFramework.descriptiveCopy, 160)}`)
+  console.log(`  useCases         : ${JSON.stringify(confirmedFramework.useCases)}`)
+  console.log(`  audienceLanguage : ${trunc(confirmedFramework.audienceLanguage, 160)}`)
+
+  // ── Pipeline summary ──
+  console.log('\n' + '━'.repeat(70))
+  console.log('TRANSFORM PIPELINE SUMMARY')
+  console.log('━'.repeat(70))
+  console.log('Stage results     : all 6 stages reached their expected state ✅')
+  console.log(`Candidates        : exactly 3 (${analysis.selectedProblems.map((c) => c.id).join(', ')}) ✅`)
+  console.log(`Phases            : exactly 3, each with 2-3 steps (${framework.phases.map((p) => p.steps.length).join(', ')}) ✅`)
+  console.log(`Framework fields  : frameworkName/frameworkTagline/descriptiveCopy/useCases/audienceLanguage all populated ✅`)
+  console.log('\nAnomaly scan (Transform pipeline):')
+  console.log('  (narration-leak scan not applicable — no conversational message channel in this pipeline, only direct JSON responses)')
+  if (pipelineIssues.length) pipelineIssues.forEach((i) => console.log(`  ⚠ ${i}`))
+  else console.log('  ✓ no empty nested fields, no duplicate/templated candidate, name, or phase text')
+}
+
 // plain verdict
 const clean = completedReached && !answersExhausted &&
   (!expectedFields || expectedFields.every((f) => finalStructured && !isEmptyVal(finalStructured[f]))) &&
-  emptyFields.length === 0 && arrayIssues.length === 0 && leaks.length === 0
+  emptyFields.length === 0 && arrayIssues.length === 0 && leaks.length === 0 &&
+  (!pipelineRan || pipelineIssues.length === 0)
 console.log('\n' + '━'.repeat(70))
 console.log(clean ? 'VERDICT: ✅ clean run — completed, all fields populated, no anomalies.'
                   : 'VERDICT: ⚠ review the warnings above.')

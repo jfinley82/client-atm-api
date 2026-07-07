@@ -32,6 +32,7 @@ stored session token). It's a long-lived token (1-year expiry).
 | `--tool` | from spec | override the tool_type |
 | `--max-turns` | `30` | safety cap on turns |
 | `--verbose` | off | print full `structured_data` every turn |
+| `--swap` | off | Transform only — exercise the re-select path at each decision point instead of the default pick (see below) |
 
 Examples:
 ```bash
@@ -59,6 +60,56 @@ changed (which fields were added/changed), and the **`completed`** flag. It
 
 Exit code is `0` on a clean run, `1` if anything looked off — so you can wire it
 into CI later if you want.
+
+## Transform pipeline (transformation only)
+
+Once a `transformation` conversation reaches a genuine `completed: true`, the
+runner automatically continues through the rest of Transform end to end — no
+extra flag needed:
+
+1. `POST /api/tools/transformation/analyze` — prints the 3 candidates
+   (`id`/`problem`/`whySelected`) plus `zoneOfImpact`/`intersection`/`uniquelyEquipped`.
+2. `POST /api/tools/transformation/select` — **always required**: unlike
+   framework (below), `transformation/analyze` has no model-suggested default
+   (`selected_id` is always `null`), so the runner picks the first candidate
+   (`t1`) by default. `--swap` re-selects a *different* candidate afterward,
+   which also exercises the real re-select code path (`confirmed` resets to
+   `false` on re-selection).
+3. `POST /api/tools/transformation/confirm` — the chosen candidate and shared
+   fields, passed through unedited.
+4. `POST /api/tools/transformation/framework/analyze` — prints the 3
+   `name_options` and the 3 `phases` (name + step count each).
+5. `POST /api/tools/transformation/framework/select` — **skipped by default**:
+   framework/analyze *does* return a real model-chosen `selected_name_id`
+   (already resolved into `frameworkName`/`frameworkTagline`), so the default
+   run accepts it as-is. `--swap` selects a different name option instead.
+6. `POST /api/tools/transformation/framework/confirm` — the chosen framework,
+   passed through unedited.
+
+**Expected-state checks** (hard failures — the run exits immediately with a
+`STAGE FAILED: <exact stage>` message naming which stage broke, on the first
+violation): exactly 3 candidates, exactly 3 name options, exactly 3 phases,
+each phase has 2-3 steps, and `frameworkName`/`frameworkTagline`/
+`descriptiveCopy`/`useCases`/`audienceLanguage` are all populated after
+`framework/confirm`.
+
+**Anomaly scan** (soft — collected and reported, flips the final VERDICT and
+exit code but doesn't stop the pipeline): empty nested fields anywhere in the
+candidates/name options/phases/steps, and duplicate/near-duplicate text across
+the 3 candidates' `problem`s, the 3 name options' `name`s, or the 3 phases'
+`name`s. Narration-leak scanning does not apply here (there's no conversational
+`message` channel in this pipeline, only direct JSON responses).
+
+```bash
+# full Transform pipeline, accepting the model's own picks
+CATM_TOKEN=… node scripts/run-conversation.mjs scripts/conversations/transformation.sample.json
+
+# same, but exercise the re-select/swap path at both decision points
+CATM_TOKEN=… node scripts/run-conversation.mjs scripts/conversations/transformation.sample.json --swap
+```
+
+For `audience`/`matcher` runs, none of this applies — the runner stops at the
+conversation summary exactly as before.
 
 ## Spec file format
 
@@ -89,8 +140,10 @@ handles this: it only stops when `completed: true` arrives **together with
 `structured_data` produced during this run**, and prints a `(note: … inherited
 from a prior completed session …)` line while it waits for the conversation to
 generate its own data. Net effect: re-runs work; they just play the whole
-conversation again and the new `<data>` overwrites the old profile. (There is
-no reset endpoint — to start from a truly blank slate, use a fresh test user.)
+conversation again and the new `<data>` overwrites the old profile. For a truly
+blank slate instead, call `DELETE /api/tools/{tool}` first (the same reset
+"Restart Chat" uses) — see the endpoint's own comments for exactly which rows
+it clears per tool.
 
 ## Notes on how it mimics the frontend
 - **Auth:** `Authorization: Bearer <token>` (falls back to cookie server-side,
