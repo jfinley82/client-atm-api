@@ -152,6 +152,29 @@ console.log('━'.repeat(70))
 console.log(`Conversation runner  ·  tool=${tool}`)
 console.log(`POST ${url}`)
 console.log(`answers: ${answers.length} scripted  ·  max turns: ${maxTurns}`)
+
+// ── Auth preflight diagnostic ──
+// The server accepts a Bearer token alone (no cookie required — see
+// lib/auth.ts getSessionFromRequest, which returns the header token before ever
+// looking at cookies). So a 401 with a token that works in the browser almost
+// always means the token STRING sent here differs from the browser's — most
+// often stray whitespace/newline captured into CATM_TOKEN (e.g. `export
+// CATM_TOKEN=$(cat file)` keeps the trailing newline). This surfaces the exact
+// header shape so that's visible before the request fires. Token is masked.
+{
+  const rawLen = token.length
+  const trimmed = token.trim()
+  const edgeWs = rawLen - trimmed.length
+  const innerWs = /\s/.test(trimmed)
+  const jwtShape = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(trimmed)
+  const mask = (t) => (t.length <= 20 ? '<suspiciously short>' : `${t.slice(0, 12)}…${t.slice(-6)}`)
+  console.log('auth preflight:')
+  console.log(`  header sent : "Authorization: Bearer ${mask(token)}"`)
+  console.log(`  token length: ${rawLen}`)
+  console.log(`  leading/trailing whitespace: ${edgeWs ? `YES ⚠  (${edgeWs} char(s) — this is very likely the 401 cause)` : 'none'}`)
+  console.log(`  inner whitespace/newline    : ${innerWs ? 'YES ⚠  (token is mangled — not a clean JWT)' : 'none'}`)
+  console.log(`  JWT shape (3 base64url parts): ${jwtShape ? 'ok' : 'NO ⚠  (does not look like a header.payload.signature JWT)'}`)
+}
 console.log('━'.repeat(70))
 
 const sessionHistory = []   // [{role, content}, ...] cumulative, exactly like the frontend
