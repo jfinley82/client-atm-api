@@ -24,6 +24,39 @@ export async function saveOutput(userId: string, toolType: string, content: unkn
   if (error) throw error
 }
 
+// Which saved_outputs rows a "Restart Chat" clears for each tool. The tool's
+// own conversation row plus its DERIVED analysis row are cleared (the analysis
+// is computed from the conversation being wiped, so it'd otherwise be stale).
+// FINALIZED DELIVERABLES are deliberately left alone — restarting a Part-A
+// intake must not silently destroy downstream work:
+//   - transformation restart keeps 'framework' (Transform Part B, Results Framework)
+//   - matcher restart keeps problem_solution_cards (the Monetize output)
+// Both of those become out-of-sync with the reset intake; surfacing that is a
+// frontend UX decision (warn before restart), not something this endpoint does.
+const RESET_KEYS: Record<'audience' | 'transformation' | 'matcher', string[]> = {
+  audience: ['audience'],
+  transformation: ['transformation', 'transformation_analysis'],
+  matcher: ['matcher_intake', 'matcher_analysis'],
+}
+
+// Clears a user's saved_outputs rows for a tool so "Restart Chat" starts truly
+// fresh (no monotonic completed:true carried into the new conversation).
+// Scoped to the caller's own rows; idempotent — deleting absent rows is a no-op.
+// Returns the tool_type keys targeted.
+export async function resetToolOutputs(
+  userId: string,
+  tool: 'audience' | 'transformation' | 'matcher'
+): Promise<string[]> {
+  const keys = RESET_KEYS[tool]
+  const { error } = await supabase
+    .from('saved_outputs')
+    .delete()
+    .eq('user_id', userId)
+    .in('tool_type', keys)
+  if (error) throw error
+  return keys
+}
+
 // Content is stored FLAT: the profile fields, plus a `completed` flag and the
 // raw `session_history` transcript, all as siblings in the same object. These
 // helpers let the transcript ride along for mid-conversation rehydration
