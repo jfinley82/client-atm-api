@@ -1,0 +1,22 @@
+{
+  "tool": "transformation",
+  "_note": "Sample answers reconstructed from the 2026-07-07 test transcript (the 'Sarah the coach' generalist→specialist story). Replace `answers` with your own transcript to test a different conversation. `expectedFields` are the raw <data> fields the completed transformation session should carry.",
+  "expectedFields": [
+    "before_state", "before_internal_talk", "before_results",
+    "after_state", "after_internal_talk", "after_results",
+    "the_bridge", "proof_point"
+  ],
+  "answers": [
+    "I help online coaches who are stuck in constant hustle finally build a repeatable business. The biggest change is they go from being a generalist who starts over every month to a specialist with a clear process and consistent income.",
+    "Let me walk you through one real client, Sarah. Before we worked together she'd been in business a few years, making content daily, going live, running challenges and events, booking discovery calls — but almost nothing was converting.",
+    "She was booking about 10 discovery calls a month, but only 3 or 4 would even show up, and she'd close maybe 1 or 2, at a rate way lower than she should have been charging. Under $5,000 a month while spending 20+ hours a week on content and running a free community.",
+    "Her self-talk was brutal. She'd tell herself 'I can get clients if I stay active, but it's never consistent. People book calls and don't buy. I'm the one they ask for free advice and then go pay someone else for the actual work.'",
+    "What she believed was that she just needed to be more visible — more content, more lives, a better funnel. She thought the problem was marketing volume. She didn't believe her expertise was actually worth a premium price.",
+    "The shift was she stopped being a generalist. We narrowed exactly who she helps and why, and built a repeatable process so every client wasn't a reinvention. Her sales calls went from convincing to diagnosing — she'd walk the prospect through their real problem and position her program as the fit.",
+    "After: 6 to 7 out of 10 booked calls show up now, her close rate jumped, and she raised her prices significantly. She built a paid waitlist where people put down deposits to work with her, and she's launched additional programs beyond 1:1 so her income isn't tied only to her time.",
+    "Her language completely changed. She told me 'I never thought I'd have people paying to wait for me like I'm somebody special. I'm humbled, and I know exactly who I help, why, and how.' That's a total identity shift, not just a numbers change.",
+    "What made it possible that nothing else did: everything she'd tried before — courses, masterminds, funnels, group software — fixed tactics or delivery mechanics but never touched the core issue. She'd trained her whole audience to see her as free help. We fixed the positioning and the offer structure first, then the tactics actually worked.",
+    "The proof point I'd point to: she went from closing 1-2 clients a month at a discount to a paid waitlist with deposits and a full roster at nearly double her old rate, inside about 90 days — without adding more content, just changing how she positioned and sold.",
+    "If she ran into her old self from six months ago — the one grinding 20 hours a week for one or two closes — she'd want her to know that the answer was never more hustle. It was picking a lane, owning her expertise, and letting her offer reflect the real value instead of discounting out of guilt."
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "tool": "audience",
+  "_note": "Sample answers reconstructed from the 2026-07-07 test transcript ('Sarah the Friend-Zoned Coach'). Replace `answers` with your own transcript. `expectedFields` includes the terminal fields (triggering_moment + monetize_bridge) that drive completion, plus the analysis fields that should be inferred by the end.",
+  "expectedFields": [
+    "who_they_are", "their_world", "emotional_state", "internal_dialogue",
+    "perceived_problem", "real_problem", "tried_before", "why_it_failed",
+    "language_they_use", "triggering_moment", "dream_outcome",
+    "buying_triggers", "motivating_phrases", "repelling_phrases", "where_to_find_them",
+    "sales_objections", "avatar_name", "problem_statement", "monetize_bridge"
+  ],
+  "answers": [
+    "I work with online coaches — life and business coaches mostly — who are still working a full-time job and trying to transition into coaching full time but aren't making enough to quit yet.",
+    "Think of my client Sarah. She's experienced and genuinely good, always active online — content, lives, challenges, events, booking calls — but stuck in an inconsistent cycle where every month feels like starting over.",
+    "When she first came to me the first thing out of her mouth was basically 'I feel like I'm the one everyone asks for advice, and then they go pay someone else for the actual work.' That line stuck with me.",
+    "She thought the problem was marketing and conversion — that she needed better ads, more traffic, or a script that got people to say yes without her having to convince them.",
+    "She'd tried a ton: courses, masterminds, paid coaching programs, new funnels, group coaching software, and just constant content, lives, and challenges. None of it created consistency.",
+    "What actually failed was that none of it touched the real issue. She'd trained her entire audience to see her as a generous free-help friend, so there was no path from friend to paying client, and her offer was built around what she wanted to deliver, not what clients actually needed.",
+    "Underneath it, the real problem is she friend-zoned her own audience by over-delivering free value and discounting out of guilt. She undervalues her own expertise and can't clearly articulate how she gets results, so her messaging is muddy and people default to taking the free advice.",
+    "Day to day she was exhausted, stressed, and quietly ashamed. She felt like a failure despite genuine effort, scared she'd have to go back to a regular job, frustrated that all the work wasn't converting into stability.",
+    "Her actual self-talk when pitching was 'I hope this isn't too much and they say no. I really need this client, the money would help. If they say no it means people won't pay real prices unless you're some kind of guru.'",
+    "The phrases she uses, to me or in her own head, are things like 'starting over,' 'friend zone,' 'they ask me for advice and go pay other people,' 'I can't get consistent clients,' and 'my messaging feels mucky.'",
+    "What finally pushed her to reach out: she watched a video that described her exact 'friend zone' problem and how it got solved for someone else. Hearing it named out loud hit her hard — that was the moment she decided she couldn't keep doing this.",
+    "What she really wants is a real business with real, consistent clients and steady income — to charge what she's worth, set boundaries, take time off without guilt, and stop measuring her worth in hours worked. She doesn't need to be famous, she just wants stability and fair pay.",
+    "One more piece — she told me the exact phrase that cuts through for her is feeling 'good enough to give advice, but not good enough to pay for the real services.' That distinction is everything to her."
+  ]
+}
