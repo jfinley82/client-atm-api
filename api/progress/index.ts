@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { requireActiveUser } from '../../lib/auth'
-import { setCors } from '../../lib/cors'
+import { setCors, noStore } from '../../lib/cors'
 import { getMtmSessionProgress } from '../../lib/progress'
 
 // GET /api/progress — the member dashboard's MTM session progress reader
@@ -9,6 +9,7 @@ import { getMtmSessionProgress } from '../../lib/progress'
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
   if (req.method !== 'GET') return res.status(405).end()
+  noStore(res)
 
   const userId = await requireActiveUser(req, res)
   if (!userId) return

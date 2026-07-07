@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import chatHandler from './chat'
 import { requireActiveUser } from '../../lib/auth'
-import { setCors } from '../../lib/cors'
+import { setCors, noStore } from '../../lib/cors'
 import { getSavedOutput, stripSessionHistory, extractSessionHistory, resetToolOutputs } from '../../lib/savedOutputs'
 
 // REST alias for the unified tools chat handler. The frontend calls the tool by
@@ -16,6 +16,7 @@ import { getSavedOutput, stripSessionHistory, extractSessionHistory, resetToolOu
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'GET') {
     if (setCors(req, res)) return
+    noStore(res)
     const userId = await requireActiveUser(req, res)
     if (!userId) return
     try {

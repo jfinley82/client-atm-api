@@ -30,3 +30,13 @@ export function setCors(req: any, res: any): boolean {
   }
   return false
 }
+
+// Defensive hardening for GET endpoints backing live dashboard/sidebar state
+// (progress, the tool GETs, auth/me). No caching layer here was ever found to
+// be the cause of a reported "stale until navigation" bug — no Cache-Control
+// is set anywhere in this codebase and every read hits Supabase live — but
+// this closes off the possibility entirely for any downstream proxy/CDN/
+// browser heuristic cache, cheaply and unambiguously.
+export function noStore(res: any): void {
+  res.setHeader('Cache-Control', 'no-store')
+}

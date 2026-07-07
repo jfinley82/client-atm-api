@@ -1,13 +1,14 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { getSessionFromRequest, verifySessionToken } from '../../lib/auth'
-import { setCors } from '../../lib/cors'
+import { setCors, noStore } from '../../lib/cors'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     if (setCors(req, res)) return
 
     if (req.method !== 'GET') return res.status(405).end()
+    noStore(res)
 
     const sessionToken = getSessionFromRequest(req as any)
     if (!sessionToken) return res.status(401).json({ user: null })
