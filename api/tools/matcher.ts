@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import chatHandler from './chat'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
-import { getSavedOutput, stripSessionHistory, extractSessionHistory } from '../../lib/savedOutputs'
+import { getSavedOutput, stripSessionHistory, extractSessionHistory, resetToolOutputs } from '../../lib/savedOutputs'
 
 // REST alias for the unified tools chat handler (tool_type fixed from the path).
 // matcher is now a short existing-offer intake (has_existing_offer, price,
@@ -28,6 +28,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } catch (err) {
       console.error('[tools/matcher] GET', err)
       return res.status(500).json({ error: 'Failed to load saved output' })
+    }
+  }
+  if (req.method === 'DELETE') {
+    // "Restart Chat" — clear the matcher intake + its derived analysis so a new
+    // intake starts fresh. Keeps problem_solution_cards (the finalized Monetize
+    // output); restarting the intake leaves those out of sync, a frontend warn.
+    if (setCors(req, res)) return
+    const userId = await requireActiveUser(req, res)
+    if (!userId) return
+    try {
+      const cleared = await resetToolOutputs(userId, 'matcher')
+      return res.status(200).json({ reset: true, cleared })
+    } catch (err) {
+      console.error('[tools/matcher] DELETE', err)
+      return res.status(500).json({ error: 'Failed to reset' })
     }
   }
   if (req.method === 'POST') {

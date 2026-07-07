@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import chatHandler from './chat'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
-import { getSavedOutput, stripSessionHistory, extractSessionHistory } from '../../lib/savedOutputs'
+import { getSavedOutput, stripSessionHistory, extractSessionHistory, resetToolOutputs } from '../../lib/savedOutputs'
 
 // REST alias for the unified tools chat handler. The frontend calls the tool by
 // path (/api/tools/audience); we fix tool_type from the path and delegate to the
@@ -28,6 +28,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } catch (err) {
       console.error('[tools/audience] GET', err)
       return res.status(500).json({ error: 'Failed to load saved output' })
+    }
+  }
+  if (req.method === 'DELETE') {
+    // "Restart Chat" — clear the audience row so a new conversation starts fresh
+    // (no completed:true carried forward). No derived analysis row to cascade.
+    if (setCors(req, res)) return
+    const userId = await requireActiveUser(req, res)
+    if (!userId) return
+    try {
+      const cleared = await resetToolOutputs(userId, 'audience')
+      return res.status(200).json({ reset: true, cleared })
+    } catch (err) {
+      console.error('[tools/audience] DELETE', err)
+      return res.status(500).json({ error: 'Failed to reset' })
     }
   }
   if (req.method === 'POST') {
