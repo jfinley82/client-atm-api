@@ -680,24 +680,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.error('[tools/chat] save', saveError)
     }
 
-    // TEMPORARY DEBUG LOGGING — added to catch a suspected leak of raw <data>
-    // field names/markup into the visible `message` text. Logs the full
-    // response body plus stop_reason/response length so a repro can be
-    // conclusively diagnosed (token-cutoff vs. narration) straight from
-    // Vercel runtime logs instead of losing it. Revert once a few real test
-    // sessions confirm the max_tokens increase + no-narration prompt fix hold.
-    console.log('[tools/chat] TEMP full response body', {
-      tool_type,
-      current_step: currentStep,
-      stop_reason: message.stop_reason,
-      response_text_length: responseText.length,
-      message: cleanedMessage,
-      options,
-      structured_data: structuredData,
-      step_complete: stepComplete,
-      completed: sessionCompleted,
-    })
-
     return res.status(200).json({
       message: cleanedMessage,
       options,
