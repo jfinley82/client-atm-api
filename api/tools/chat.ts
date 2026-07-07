@@ -639,14 +639,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // content.completed instead of row existence. audience/transformation are
     // open-ended, so completion is driven purely by hasTerminalFields; matcher
     // is a fixed 2-step intake, so its step gate still counts.
+    // The REAL, hasTerminalFields-driven completion signal for this session —
+    // hoisted out of the save block so it can also be returned in the response.
+    // This is the authoritative "the conversation genuinely finished" flag; the
+    // response's legacy step_complete is derived from the client's current_step
+    // (which the frontend does not send, so it's effectively always false). The
+    // frontend must key completion off THIS field, not step_complete.
+    let sessionCompleted = false
     try {
       const isObj = typeof structuredData === 'object' && structuredData !== null && !Array.isArray(structuredData)
       let base: Record<string, unknown>
-      let completed: boolean
       if (isObj) {
         // This turn produced a data object — it's the cumulative snapshot.
         base = structuredData as Record<string, unknown>
-        completed =
+        sessionCompleted =
           tool_type === 'matcher'
             ? stepComplete || hasTerminalFields(tool_type, base)
             : hasTerminalFields(tool_type, base)
@@ -664,9 +670,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             : {}
         const { session_history: _priorHistory, completed: priorCompleted, ...priorProfile } = priorContent
         base = priorProfile
-        completed = priorCompleted === true
+        sessionCompleted = priorCompleted === true
       }
-      await saveOutput(userId, saveToolType, { ...base, completed, session_history: sessionHistoryToSave })
+      await saveOutput(userId, saveToolType, { ...base, completed: sessionCompleted, session_history: sessionHistoryToSave })
     } catch (saveError) {
       console.error('[tools/chat] save', saveError)
     }
@@ -686,13 +692,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       options,
       structured_data: structuredData,
       step_complete: stepComplete,
+      completed: sessionCompleted,
     })
 
     return res.status(200).json({
       message: cleanedMessage,
       options,
       structured_data: structuredData,
+      // Legacy: derived from the client's current_step, which the frontend does
+      // not send, so this is effectively always false. Kept for back-compat.
       step_complete: stepComplete,
+      // The REAL completion signal (hasTerminalFields-driven, same value stored
+      // in saved_outputs.content.completed). The frontend should trigger
+      // /analyze and Part A -> Part B navigation off THIS, not step_complete.
+      completed: sessionCompleted,
     })
   } catch (err) {
     console.error('[tools/chat]', err)
