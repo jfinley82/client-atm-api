@@ -180,6 +180,7 @@ console.log('━'.repeat(70))
 const sessionHistory = []   // [{role, content}, ...] cumulative, exactly like the frontend
 let prevStructured = null
 let finalStructured = null
+let sawDataThisRun = false  // did THIS run produce its own <data>? (see stop condition)
 let completedReached = false
 let turnsTaken = 0
 let answersExhausted = false
@@ -218,7 +219,7 @@ for (let turn = 1; turn <= maxTurns; turn++) {
   turnsTaken = turn
   const { message = '', options = null, structured_data = null, step_complete, completed } = json
   const diff = diffStructured(prevStructured, structured_data)
-  if (structured_data != null) { prevStructured = structured_data; finalStructured = structured_data }
+  if (structured_data != null) { prevStructured = structured_data; finalStructured = structured_data; sawDataThisRun = true }
 
   // narration-leak scan on the visible message
   const hits = scanLeak(String(message))
@@ -243,8 +244,16 @@ for (let turn = 1; turn <= maxTurns; turn++) {
   sessionHistory.push({ role: 'user', content: answer })
   sessionHistory.push({ role: 'assistant', content: message })
 
-  if (completed === true) { completedReached = true; break }
-  if (completed === undefined && step_complete === true) {
+  // Stop only on a REAL completion of THIS run: completed:true accompanied by
+  // structured_data produced during this run. A completed:true with no data yet
+  // is the server carrying a PRIOR completed session's flag forward (monotonic
+  // completion — see api/tools/chat.ts), i.e. inherited, not earned here — so we
+  // keep going until this conversation generates its own <data>/terminal fields.
+  if (completed === true && sawDataThisRun) { completedReached = true; break }
+  if (completed === true && !sawDataThisRun) {
+    console.log('  (note: completed:true but no structured_data yet — inherited from a prior completed session for this user; continuing)')
+  }
+  if (completed === undefined && step_complete === true && sawDataThisRun) {
     // Fallback for a deploy that predates the `completed` field.
     console.log('  (note: response had no `completed` field; stopping on legacy step_complete)')
     completedReached = true; break

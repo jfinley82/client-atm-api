@@ -79,6 +79,19 @@ nudge toward completion and flags in the summary that scripted answers ran out.
 Drop your own transcripts in as new `*.json` files here and point the runner at
 them.
 
+## Re-running against a user who already completed a tool
+
+Completion is stored per `(user, tool_type)` and is **monotonic** — once a tool
+is finished, the server carries `completed: true` forward. So if the test user
+already completed, say, `transformation`, the very first (data-less) turn of a
+new run comes back `completed: true` before any new data exists. The runner
+handles this: it only stops when `completed: true` arrives **together with
+`structured_data` produced during this run**, and prints a `(note: … inherited
+from a prior completed session …)` line while it waits for the conversation to
+generate its own data. Net effect: re-runs work; they just play the whole
+conversation again and the new `<data>` overwrites the old profile. (There is
+no reset endpoint — to start from a truly blank slate, use a fresh test user.)
+
 ## Notes on how it mimics the frontend
 - **Auth:** `Authorization: Bearer <token>` (falls back to cookie server-side,
   but this runner uses the header, same as the cross-domain frontend).
