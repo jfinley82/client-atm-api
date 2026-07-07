@@ -701,6 +701,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       cleanedMessage = cleanedMessage.replace(/<options>[\s\S]*?<\/options>/, '').trim()
     }
 
+    // Defensive fallback: on rare turns the model's entire raw output is just
+    // tag content (a <data> and/or <options> block) with no surrounding prose
+    // at all — verified this is not a stripping bug (real prose in front of a
+    // tag always survives; confirmed via isolated testing), just an occasional
+    // generation-side lapse. Whatever the cause, a real user must never see a
+    // literally blank chat bubble, so substitute a neutral filler line rather
+    // than sending empty text. structured_data/options for the turn are
+    // unaffected — only the visible message is patched.
+    if (cleanedMessage.length === 0) {
+      cleanedMessage = "Got it, let's keep going."
+    }
+
     const maxSteps = MAX_STEPS[tool_type as ToolType]
     const stepComplete = currentStep >= maxSteps
 
