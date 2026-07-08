@@ -219,3 +219,95 @@ it clears per tool.
   completion signal is `hasTerminalFields`-driven (see `api/tools/chat.ts`), so
   completion does not actually depend on `current_step`; the runner stops on the
   `completed` field, which is the signal the frontend should also use.
+
+---
+
+# Toolkits test script (`run-toolkits.mjs`)
+
+Exercises the 4 supplementary Toolkits — High Ticket Offer Creator (`program`),
+Content Creator (`content`), Micro-Training Slide Creator (`slides`), AI Lead
+Qualifier (`qualifier`) — against the **live deployed** API. Unlike
+`run-conversation.mjs`, these 4 tools have no conversational turn loop of
+their own: each is a direct one-shot POST against an **already fully-set-up
+account** (audience completed, transformation confirmed, framework confirmed,
+core_offers confirmed, 3 validated blueprint cards). That's why this is a
+separate sibling script rather than a mode bolted onto the turn-based runner.
+
+## Run it
+
+```bash
+CATM_TOKEN='<real-session-jwt>' node scripts/run-toolkits.mjs --card-id <validated-blueprint-id>
+```
+
+| flag / env | default | meaning |
+|---|---|---|
+| `CATM_TOKEN` / `--token` | — (required) | session JWT for the test account |
+| `API_BASE` / `--base` | production URL | API origin to hit |
+| `--card-id` | none | a real, validated `problem_solution_cards.id` for this account — required for the `slides`/`qualifier` stages; those two are skipped with a clear note if omitted |
+| `--platform` | `chatgpt` | passed to `qualifier` (`chatgpt` or `claude`) |
+| `--verbose` | off | print full post/slide/system_prompt content |
+
+### Getting a `card_id`
+
+There is currently **no live endpoint that lists** a user's validated
+`problem_solution_cards` ids — `/api/cards` (which used to) was deprecated
+to `410 Gone` earlier tonight, and the only remaining reads of that table
+(`api/dashboard/mtm-profile.ts`, `api/generate/index.ts`'s join) return
+`card_name`, not `id`. The real id has to come from where the frontend would
+already have it cached: the response of `POST /api/matcher/finalize` returns
+the full inserted rows, including `id`. Grab one from there (or query
+`problem_solution_cards` directly), and pass it via `--card-id`.
+
+## What it runs
+
+1. `POST /api/toolkits/program/analyze` — no body required
+2. `POST /api/toolkits/content/analyze` — run **twice**: once with no body
+   (default/skipped intake) and once with an explicit
+   `{ platform: 'LinkedIn', tone: 'professional' }`, to exercise both the
+   default-fallback path and the explicit-intake path
+3. `POST /api/toolkits/slides/analyze` — `{ card_id }` (skipped without `--card-id`)
+4. `POST /api/toolkits/qualifier/analyze` — `{ card_id, platform }` (skipped without `--card-id`)
+
+**Hard checks** (exit immediately with `STAGE FAILED: <exact stage>`):
+`program`'s `weekly_breakdown.length === total_weeks` and `deliverables`
+count (4-6); `content`'s exactly 15 posts (3 per category × 5 categories, in
+order) and exactly 5 emails; `slides`'s slide count (10-12) and sequential
+`slide_number`s; `qualifier`'s `coach_name`/`system_prompt`/
+`deployment_instructions` all non-empty. A `502 generation_truncated`
+response is also a hard failure — that means max_tokens was hit for real,
+not just close to it (see below).
+
+**Soft anomaly scan** (collected and reported, flips the VERDICT and exit
+code but doesn't stop the run): empty fields anywhere in the response,
+duplicate/templated text across `program.weekly_breakdown`/`deliverables`,
+`content.posts`/`.emails`, or `slides[].title`/`.speaker_notes`, and a
+**max_tokens proximity check** — see below. Narration-leak scanning does not
+apply (none of these 4 tools have a conversational message channel, only
+direct JSON responses).
+
+## max_tokens proximity check
+
+Each tool's real `max_tokens` ceiling is mirrored in this script from source
+(`lib/programAnalysis.ts` 4000, `lib/contentAnalysis.ts` 8000,
+`lib/slidesAnalysis.ts` 6000, `lib/qualifierAnalysis.ts` 3000 — update here
+too if those change). None of these endpoints currently surface Anthropic's
+own `usage.output_tokens` over HTTP, so the script estimates it from the
+stringified response length (~4 characters per token for English text) —
+an early-warning heuristic, not a precise reading. If a response is
+already using **75% or more** of its ceiling, that's flagged as a warning:
+the same failure class as Matcher's earlier truncation bug (a schema grew,
+`max_tokens` didn't, and a real account eventually pushed it over into a
+generic 500). Catching "already close" before a live account pushes it over
+is the point.
+
+## Verified against a mock server
+
+Before relying on live production access, this script was verified against
+a local mock server implementing the 4 real endpoint contracts, covering:
+the clean default path, both `content` intake variants, induced malformed
+counts (`weekly_breakdown` mismatch, wrong post count), induced duplicate/
+templated content across all 4 tools' array fields, a response near its
+`max_tokens` ceiling (correctly flagged as a soft warning), a genuine
+`502 generation_truncated` response (correctly a hard failure, distinguished
+from the soft "close to ceiling" warning), and running with `--card-id`
+omitted (slides/qualifier skip gracefully rather than erroring).
