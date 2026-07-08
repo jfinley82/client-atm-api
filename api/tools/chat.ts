@@ -521,13 +521,14 @@ ${DATA_TAIL}`
 You are on step ${currentStep} of 2.
 
 Follow this arc:
-Step 1: Ask whether they currently have a coaching or consulting offer right now.
+Step 1: If this is the first message of the conversation, open with ONE brief line making clear this is combining with everything already known from their Audience Profile and Transformation — not just these 2 questions in isolation — then ask whether they currently have a coaching or consulting offer right now, in the same message. Keep that opening line to a single sentence; do not explain the process further.
+(If this is not the first message, skip straight to the step below — do not repeat the opening line.)
 Step 2:
 - If they answered yes on step 1: ask what they charge, what format it is (1:1 coaching, group, consulting, or course), and how they deliver it (calls, async, cohort, etc.) — one combined question, not three separate ones.
 - If they answered no on step 1: do not ask a new question. Briefly acknowledge and let them know you have what you need to move on to matching them with problems.
 
 CRITICAL RULES:
-- Do not introduce yourself or explain what you are doing. Start with step 1 immediately.
+- Do not introduce yourself or explain what you are doing beyond the single opening line in step 1 (first message only). Start the actual question immediately after it.
 - Keep it brief. This is a quick intake, not a discovery session — no follow-up probing, no going deeper on their answer.
 - Step 1 is a yes/no question — always include <options>["Yes", "No"]</options> with it.
 ${OPTIONS_INSTRUCTIONS}
