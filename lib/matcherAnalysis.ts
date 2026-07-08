@@ -65,7 +65,8 @@ ${STYLE_GUIDELINES}`
 export async function generateTop10(
   audience: unknown,
   transformation: unknown,
-  intake: MatcherIntake
+  intake: MatcherIntake,
+  voiceContext?: string
 ): Promise<{ top_10: Top10Problem[]; recommended_ids: string[]; why_recommended: string; insights: string }> {
   const userMessage = `AUDIENCE INTELLIGENCE: ${JSON.stringify(audience)}
 TRANSFORMATION DATA: ${JSON.stringify(transformation)}
@@ -76,7 +77,7 @@ Generate the top 10 monetizable problems now.`
     model: 'claude-sonnet-5',
     max_tokens: 4000,
     thinking: { type: 'disabled' },
-    system: TOP_10_PROMPT,
+    system: voiceContext ? `${TOP_10_PROMPT}\n\n${voiceContext}` : TOP_10_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
   })
 
@@ -107,7 +108,11 @@ Output ONLY valid JSON, no preamble, no markdown, no code fences. Double quotes 
 ${GENDER_NEUTRAL_INSTRUCTION}
 ${STYLE_GUIDELINES}`
 
-export async function generateSuggestedOffer(problem: Top10Problem, intake: MatcherIntake): Promise<SuggestedOffer> {
+export async function generateSuggestedOffer(
+  problem: Top10Problem,
+  intake: MatcherIntake,
+  voiceContext?: string
+): Promise<SuggestedOffer> {
   const userMessage = `MONETIZABLE PROBLEM: ${JSON.stringify(problem)}
 CURRENT BUSINESS CONTEXT: ${JSON.stringify(intake)}
 Generate the suggested_offer now.`
@@ -116,7 +121,7 @@ Generate the suggested_offer now.`
     model: 'claude-sonnet-5',
     max_tokens: 500,
     thinking: { type: 'disabled' },
-    system: SUGGESTED_OFFER_PROMPT,
+    system: voiceContext ? `${SUGGESTED_OFFER_PROMPT}\n\n${voiceContext}` : SUGGESTED_OFFER_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
   })
 

@@ -11,6 +11,7 @@ import {
   FrameworkPhase,
   PHASE_COLORS,
 } from '../../../../lib/frameworkAnalysis'
+import { getVoiceContext } from '../../../../lib/voiceGuide'
 
 // Transformation Part B: Your Results Framework.
 // GET: return the stored framework (404 if none generated yet).
@@ -86,9 +87,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       confirmedTransformation: confirmedCandidate,
     }
 
+    const voiceContext = await getVoiceContext(userId)
     const generated = await generateFramework(
       transformationContext,
-      stripSessionHistory(audienceRow!.content)
+      stripSessionHistory(audienceRow!.content),
+      voiceContext
     )
 
     // Structural guard — the framework is unusable without exactly 3 named

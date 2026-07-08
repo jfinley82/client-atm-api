@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { stripSessionHistory } from '../../lib/savedOutputs'
+import { getVoiceContext } from '../../lib/voiceGuide'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -63,10 +64,12 @@ TRANSFORMATION DATA: ${JSON.stringify(byType['transformation'] ?? {})}
 PROBLEM/SOLUTION CARD: ${JSON.stringify(card)}
 Generate the complete micro-training system now.`
 
+      const voiceContext = await getVoiceContext(userId)
+
       const message = await anthropic.messages.create({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 4000,
-        system: GENERATION_PROMPT,
+        system: `${GENERATION_PROMPT}\n\n${voiceContext}`,
         messages: [{ role: 'user', content: userMessage }],
       })
 
