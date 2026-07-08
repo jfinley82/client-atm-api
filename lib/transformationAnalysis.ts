@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
+import { extractJson } from './aiJson'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -34,14 +35,6 @@ export type TransformationAnalysis = {
   confirmed: boolean
 }
 
-function extractJson(text: string): any {
-  const cleaned = text
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/i, '')
-    .replace(/```\s*$/, '')
-    .trim()
-  return JSON.parse(cleaned)
-}
 
 const TRANSFORMATION_ANALYSIS_PROMPT = `You are an expert brand strategist and messaging psychologist helping a coach identify the transformation they should build their entire business identity around. This is the single most important output in their process — they will personally stand behind whichever candidate they choose as the foundation of their positioning, offers, and marketing. Reason carefully and specifically; do not produce generic coaching language.
 

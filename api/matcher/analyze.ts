@@ -5,6 +5,7 @@ import { setCors } from '../../lib/cors'
 import { getSavedOutput, saveOutput, stripSessionHistory, isContentComplete } from '../../lib/savedOutputs'
 import { generateTop10, generateSuggestedOffer, MatcherAnalysis, MatcherIntake, SuggestedOffer } from '../../lib/matcherAnalysis'
 import { getVoiceContext } from '../../lib/voiceGuide'
+import { GenerationParseError } from '../../lib/aiJson'
 
 // GET: return the stored top-10 analysis (404 if none generated yet).
 // POST: generate a fresh analysis from audience + transformation + the
@@ -101,6 +102,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json(analysis)
   } catch (err) {
+    if (err instanceof GenerationParseError) {
+      console.error('[matcher/analyze] POST generation_truncated', err.message, { rawTextLength: err.rawText.length })
+      return res.status(502).json({ error: 'generation_truncated' })
+    }
     console.error('[matcher/analyze] POST', err)
     return res.status(500).json({ error: 'Analysis failed' })
   }

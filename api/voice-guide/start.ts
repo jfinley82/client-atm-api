@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { startInterview, QaEntry } from '../../lib/voiceGuide'
+import { GenerationParseError } from '../../lib/aiJson'
 
 // Resets/creates the voice_guides row for this user and kicks off a fresh
 // interview — including the writing/talking samples in the opening turn if
@@ -49,6 +50,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({ status: 'in_progress', qaLog })
   } catch (err) {
+    if (err instanceof GenerationParseError) {
+      console.error('[voice-guide/start] POST generation_truncated', err.message, { rawTextLength: err.rawText.length })
+      return res.status(502).json({ error: 'generation_truncated' })
+    }
     console.error('[voice-guide/start] POST', err)
     return res.status(500).json({ error: 'Failed to start interview' })
   }
