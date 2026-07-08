@@ -32,7 +32,7 @@ stored session token). It's a long-lived token (1-year expiry).
 | `--tool` | from spec | override the tool_type |
 | `--max-turns` | `30` | safety cap on turns |
 | `--verbose` | off | print full `structured_data` every turn |
-| `--swap` | off | Transform only — exercise the re-select path at each decision point instead of the default pick (see below) |
+| `--swap` | off | Transform/Matcher only — exercise the re-select path at each decision point instead of the default pick (see below) |
 
 Examples:
 ```bash
@@ -108,7 +108,70 @@ CATM_TOKEN=… node scripts/run-conversation.mjs scripts/conversations/transform
 CATM_TOKEN=… node scripts/run-conversation.mjs scripts/conversations/transformation.sample.json --swap
 ```
 
-For `audience`/`matcher` runs, none of this applies — the runner stops at the
+## Matcher pipeline (matcher only)
+
+Once a `matcher` conversation (the short existing-offer intake) reaches a
+genuine `completed: true`, the runner automatically continues through the
+rest of Matcher end to end — no extra flag needed:
+
+1. `POST /api/matcher/analyze` — requires `audience`, `transformation`, and
+   the matcher intake to **all already be complete** for this user (it 400s
+   with `audience_incomplete`/`transformation_incomplete` otherwise — a real
+   precondition, not a runner bug). Prints the full `top_10` list
+   (`problem`/`reasoning`/`match_strength`/`match_factors` scores each,
+   recommended ones marked with `★`, always in server-guaranteed
+   `match_strength`-descending order regardless of model emission order), the
+   3 `recommended_ids`, `why_recommended`, and `insights`.
+2. `POST /api/matcher/selection` — **skipped by default**: unlike
+   `transformation/select` (where `selected_id` is always `null` out of
+   `/analyze`), `matcher/analyze` already sets `selected_ids` to its own
+   `recommended_ids` and generates `suggested_offers` for them in the same
+   call — so the default run accepts that as-is, the same way
+   `framework/select` gets skipped. `--swap` calls it with a genuinely
+   different combination of 3 ids drawn from the remaining 7.
+3. `POST /api/matcher/finalize` — submits the 3 selected items' generated
+   content unedited. Note: the request body here is the bare array of 3
+   cards, not wrapped in an object (unlike every other pipeline endpoint).
+   `card_name` is not produced anywhere in the generation pipeline
+   (`Top10Problem` only has `id`/`problem`/`reasoning`, and
+   `suggested_offer.name` is `null` whenever the coach already has an
+   existing offer) — Vibe presumably lets the member type/edit this, so the
+   runner synthesizes a `card_name` from the problem text as a test-only
+   stand-in. Prints the resulting `problem_solution_cards` rows
+   (`card_name`, `validated`).
+
+**Expected-state checks** (hard failures — exits immediately with
+`STAGE FAILED: <exact stage>`): exactly 10 `top_10` entries, exactly 3
+`recommended_ids`, every `top_10` entry carries `match_factors` and a numeric
+`match_strength`, exactly 3 finalized cards all with `validated: true`,
+non-empty `card_name`/`problem_text`/`reasoning`/`suggested_offer`, and a
+non-empty `suggested_offer.angle_note` (the type contract says this field is
+always populated).
+
+**Anomaly scan** (soft — collected and reported, flips the final VERDICT and
+exit code but doesn't stop the pipeline): empty nested fields in `top_10`
+entries, duplicate/near-duplicate text across the 10 `top_10` problems or the
+3 finalized cards' `problem_text`/`angle_note`, a **clustering check** on
+`match_strength` (flags if the standard deviation across the 10 entries is
+below `0.5` — i.e. scores converged instead of genuinely differentiating the
+problems), a **templating check** on each of the 4 `match_factors`'
+`reasoning` sentences (flags duplicate text across entries, per factor), and
+— only when the intake said there was **no** existing offer — empty
+`suggested_offer.name`/`format`/`price_point` (these are contractually
+allowed to be `null` when the
+coach already has an offer, so they're not flagged in that case). Narration
+leaks are covered by the intake conversation's own per-turn scan above (there
+is no separate conversational channel in the pipeline stages themselves).
+
+```bash
+# full Matcher pipeline, accepting the model's own recommended_ids
+CATM_TOKEN=… node scripts/run-conversation.mjs scripts/conversations/matcher.sample.json
+
+# same, but exercise the re-select/swap path
+CATM_TOKEN=… node scripts/run-conversation.mjs scripts/conversations/matcher.sample.json --swap
+```
+
+For `audience` runs, none of this applies — the runner stops at the
 conversation summary exactly as before.
 
 ## Spec file format

@@ -47,8 +47,9 @@ const token = flags.token || process.env.CATM_TOKEN || ''
 const maxTurns = Number(flags['max-turns'] || 30)
 const verbose = !!flags.verbose
 // --swap: exercise the re-select path at each decision point in the Transform
-// pipeline (transformation candidate, framework name) instead of the default
-// pick, so the swap/re-select code path itself gets tested too.
+// pipeline (transformation candidate, framework name) or the Matcher pipeline
+// (problem selection) instead of the default pick, so the swap/re-select code
+// path itself gets tested too.
 const swap = !!flags.swap
 
 if (!token) {
@@ -539,6 +540,174 @@ if (tool === 'transformation' && completedReached) {
   console.log('  (narration-leak scan not applicable — no conversational message channel in this pipeline, only direct JSON responses)')
   if (pipelineIssues.length) pipelineIssues.forEach((i) => console.log(`  ⚠ ${i}`))
   else console.log('  ✓ no empty nested fields, no duplicate/templated candidate, name, or phase text')
+}
+
+// ─── Matcher pipeline (analyze → selection → finalize) ──────────────────────
+// Only applies to the matcher tool, and only once the intake conversation
+// itself genuinely completed. Contracts verified against source (api/matcher/
+// {analyze,selection,finalize}.ts), not assumed:
+// - matcher/analyze requires audience + transformation + matcher_intake to all
+//   be COMPLETE already (isContentComplete), not just present — a run against
+//   a fresh test user with only the matcher intake done will 400 here with
+//   audience_incomplete/transformation_incomplete. That's a real precondition,
+//   not a runner bug.
+// - matcher/analyze ALSO sets selected_ids = recommended_ids server-side
+//   before saving (see api/matcher/analyze.ts) and generates suggested_offers
+//   for those 3 ids in the same call — so, like framework/select (and unlike
+//   transformation/select, where selected_id is always null out of /analyze),
+//   /selection is NOT required to accept the model's own picks. The default
+//   run skips it; --swap calls it with a genuinely different combination of 3
+//   ids drawn from the remaining 7.
+// - matcher/finalize's body is the bare array of 3 cards, not wrapped in an
+//   object (unlike every other pipeline endpoint in this app).
+// - card_name is not produced anywhere in the generation pipeline (Top10Problem
+//   only has id/problem/reasoning; SuggestedOffer.name is null whenever the
+//   coach already has an existing offer — which matcher.sample.json's intake
+//   does). Vibe presumably lets the member type/edit this. Since the ask here
+//   is to submit "generated content unedited," the runner synthesizes a
+//   card_name from the problem text so the required, non-empty field is
+//   satisfied — that's a test-only stand-in, not a value the backend ever
+//   generates itself. Flagged here rather than silently assumed.
+if (tool === 'matcher' && completedReached) {
+  pipelineRan = true
+  console.log('\n' + '━'.repeat(70))
+  console.log(`MATCHER PIPELINE${swap ? '  (--swap: exercising the re-select path with a different combination of 3)' : ''}`)
+  console.log('━'.repeat(70))
+
+  // ── Stage 1: matcher/analyze ──
+  console.log('\n[1/3] POST /api/matcher/analyze')
+  const analysis = await postJson('/api/matcher/analyze', {}, 'matcher/analyze')
+  assertStage(
+    Array.isArray(analysis.top_10) && analysis.top_10.length === 10,
+    'matcher/analyze',
+    `expected exactly 10 top_10 entries, got ${Array.isArray(analysis.top_10) ? analysis.top_10.length : typeof analysis.top_10}`
+  )
+  assertStage(
+    Array.isArray(analysis.recommended_ids) && analysis.recommended_ids.length === 3,
+    'matcher/analyze',
+    `expected exactly 3 recommended_ids, got ${Array.isArray(analysis.recommended_ids) ? analysis.recommended_ids.length : typeof analysis.recommended_ids}`
+  )
+  console.log(`  why_recommended: ${trunc(analysis.why_recommended, 200)}`)
+  console.log(`  insights       : ${trunc(analysis.insights, 200)}`)
+  console.log(`  recommended_ids: ${JSON.stringify(analysis.recommended_ids)}`)
+  console.log('  top_10 (sorted by match_strength desc — server-guaranteed, not model order):')
+  const MATCH_FACTOR_KEYS = ['audience_resonance', 'transformation_fit', 'conversion_ease', 'monetization_potential']
+  for (const p of analysis.top_10) {
+    console.log(`    ${p.id}${analysis.recommended_ids.includes(p.id) ? ' ★' : '  '} match_strength=${p.match_strength}: ${trunc(p.problem, 140)}`)
+    console.log(`      reasoning: ${trunc(p.reasoning, 140)}`)
+    if (p.match_factors) {
+      const line = MATCH_FACTOR_KEYS.map((k) => `${k}=${p.match_factors[k]?.score}`).join(' ')
+      console.log(`      match_factors: ${line}`)
+    }
+  }
+  pipelineIssues.push(...checkDistinctText(analysis.top_10, (p) => p.problem, 'top_10[].problem'))
+  for (const p of analysis.top_10) {
+    const empties = deepEmptyFields(p)
+    if (empties.length) pipelineIssues.push(`top_10 ${p.id}: empty field(s) — ${empties.join(', ')}`)
+  }
+
+  // ── match_factors differentiation check ──
+  // Guards against the exact failure mode this feature must avoid: the model
+  // clustering every entry around the same score, or templating the same
+  // reasoning sentence onto all 10 instead of genuinely scoring each one.
+  assertStage(
+    analysis.top_10.every((p) => p.match_factors && typeof p.match_strength === 'number'),
+    'matcher/analyze',
+    'every top_10 entry must carry match_factors and a numeric match_strength'
+  )
+  const strengths = analysis.top_10.map((p) => p.match_strength)
+  const strengthMean = strengths.reduce((a, b) => a + b, 0) / strengths.length
+  const strengthStdev = Math.sqrt(strengths.reduce((a, b) => a + (b - strengthMean) ** 2, 0) / strengths.length)
+  console.log(`  match_strength spread: min=${Math.min(...strengths)} max=${Math.max(...strengths)} stdev=${strengthStdev.toFixed(2)}`)
+  if (strengthStdev < 0.5) pipelineIssues.push(`match_strength stdev is only ${strengthStdev.toFixed(2)} across the 10 entries — looks clustered, not genuinely differentiated`)
+  for (const key of MATCH_FACTOR_KEYS) {
+    pipelineIssues.push(...checkDistinctText(analysis.top_10, (p) => p.match_factors?.[key]?.reasoning ?? '', `top_10[].match_factors.${key}.reasoning`))
+  }
+
+  // ── Stage 2: matcher/selection ──
+  let selected = analysis
+  console.log('\n[2/3] POST /api/matcher/selection')
+  if (swap) {
+    const swapIds = analysis.top_10.filter((p) => !analysis.recommended_ids.includes(p.id)).slice(0, 3).map((p) => p.id)
+    assertStage(swapIds.length === 3, 'matcher/selection (swap)', `expected 3 non-recommended ids to swap in, found ${swapIds.length}`)
+    console.log(`  --swap: selecting ${JSON.stringify(swapIds)} instead of the model's own recommended_ids (${JSON.stringify(analysis.recommended_ids)})`)
+    selected = await postJson('/api/matcher/selection', { selected_ids: swapIds }, 'matcher/selection')
+    assertStage(
+      Array.isArray(selected.selected_ids) && selected.selected_ids.length === 3 && swapIds.every((id) => selected.selected_ids.includes(id)),
+      'matcher/selection',
+      `selected_ids did not swap: expected ${JSON.stringify(swapIds)}, got ${JSON.stringify(selected.selected_ids)}`
+    )
+    for (const id of swapIds) {
+      assertStage(!!selected.suggested_offers[id], 'matcher/selection', `no suggested_offer generated for newly-selected id ${id}`)
+    }
+    console.log(`  selected_ids now: ${JSON.stringify(selected.selected_ids)}`)
+  } else {
+    console.log(`  skipped — matcher/analyze already set selected_ids to the model's own recommended_ids (${JSON.stringify(analysis.selected_ids)}) with suggested_offers generated`)
+  }
+
+  // ── Stage 3: matcher/finalize ──
+  console.log('\n[3/3] POST /api/matcher/finalize')
+  const finalIds = selected.selected_ids
+  const byId = new Map(analysis.top_10.map((p) => [p.id, p]))
+  const cards = finalIds.map((id) => {
+    const p = byId.get(id)
+    return {
+      id,
+      card_name: trunc(p.problem, 60),
+      problem_text: p.problem,
+      reasoning: p.reasoning,
+      suggested_offer: selected.suggested_offers[id],
+    }
+  })
+  const finalized = await postJson('/api/matcher/finalize', cards, 'matcher/finalize')
+  assertStage(
+    Array.isArray(finalized) && finalized.length === 3,
+    'matcher/finalize',
+    `expected exactly 3 cards created, got ${Array.isArray(finalized) ? finalized.length : typeof finalized}`
+  )
+  for (const row of finalized) {
+    assertStage(row.validated === true, 'matcher/finalize', `card "${row.card_name}" has validated=${row.validated}, expected true`)
+    assertStage(typeof row.card_name === 'string' && row.card_name.trim().length > 0, 'matcher/finalize', `card ${row.id ?? '?'} missing card_name`)
+    assertStage(typeof row.problem_text === 'string' && row.problem_text.trim().length > 0, 'matcher/finalize', `card "${row.card_name}" missing problem_text`)
+    assertStage(typeof row.reasoning === 'string' && row.reasoning.trim().length > 0, 'matcher/finalize', `card "${row.card_name}" missing reasoning`)
+    assertStage(row.suggested_offer && typeof row.suggested_offer === 'object', 'matcher/finalize', `card "${row.card_name}" missing suggested_offer`)
+    assertStage(
+      typeof row.suggested_offer.angle_note === 'string' && row.suggested_offer.angle_note.trim().length > 0,
+      'matcher/finalize',
+      `card "${row.card_name}" suggested_offer.angle_note is empty (contract: always populated, never null)`
+    )
+  }
+  console.log(`  ${finalized.length} card(s) created, all validated=true:`)
+  // name/format/price_point are contractually null when the coach already has
+  // an existing offer (SuggestedOffer — see lib/matcherAnalysis.ts), so they're
+  // only flagged as an anomaly when the intake said there was NO existing offer.
+  const hasExistingOffer = finalStructured ? finalStructured.has_existing_offer : undefined
+  for (const row of finalized) {
+    console.log(`    "${row.card_name}"`)
+    console.log(`      problem_text    : ${trunc(row.problem_text, 140)}`)
+    console.log(`      reasoning       : ${trunc(row.reasoning, 140)}`)
+    console.log(`      suggested_offer : name=${JSON.stringify(row.suggested_offer.name)} format=${JSON.stringify(row.suggested_offer.format)} price_point=${JSON.stringify(row.suggested_offer.price_point)}`)
+    console.log(`                        angle_note=${trunc(row.suggested_offer.angle_note, 120)}`)
+    if (hasExistingOffer === false) {
+      if (isEmptyVal(row.suggested_offer.name)) pipelineIssues.push(`card "${row.card_name}": suggested_offer.name empty (expected populated — intake said no existing offer)`)
+      if (isEmptyVal(row.suggested_offer.format)) pipelineIssues.push(`card "${row.card_name}": suggested_offer.format empty (expected populated — intake said no existing offer)`)
+      if (isEmptyVal(row.suggested_offer.price_point)) pipelineIssues.push(`card "${row.card_name}": suggested_offer.price_point empty (expected populated — intake said no existing offer)`)
+    }
+  }
+  pipelineIssues.push(...checkDistinctText(finalized, (r) => r.problem_text, 'finalized cards[].problem_text'))
+  pipelineIssues.push(...checkDistinctText(finalized, (r) => r.suggested_offer?.angle_note ?? '', 'finalized cards[].suggested_offer.angle_note'))
+
+  // ── Pipeline summary ──
+  console.log('\n' + '━'.repeat(70))
+  console.log('MATCHER PIPELINE SUMMARY')
+  console.log('━'.repeat(70))
+  console.log('Stage results     : all 3 stages reached their expected state ✅')
+  console.log(`Top 10            : exactly 10 (${analysis.top_10.map((p) => p.id).join(', ')}) ✅`)
+  console.log(`Finalized cards   : exactly 3, all validated=true (${finalized.map((r) => `"${r.card_name}"`).join(', ')}) ✅`)
+  console.log('\nAnomaly scan (Matcher pipeline):')
+  console.log(`  narration-leak scan: covered by the intake conversation turns above (${leaks.length ? `${leaks.length} leak(s) found — see above` : '✓ none found'})`)
+  if (pipelineIssues.length) pipelineIssues.forEach((i) => console.log(`  ⚠ ${i}`))
+  else console.log('  ✓ no empty nested fields, no duplicate/templated top_10 or finalized-card text')
 }
 
 // plain verdict

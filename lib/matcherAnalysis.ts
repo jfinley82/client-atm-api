@@ -10,10 +10,28 @@ export type MatcherIntake = {
   delivery?: string
 }
 
+export type MatchFactor = {
+  score: number
+  reasoning: string
+}
+
+export type MatchFactors = {
+  audience_resonance: MatchFactor
+  transformation_fit: MatchFactor
+  conversion_ease: MatchFactor
+  monetization_potential: MatchFactor
+}
+
 export type Top10Problem = {
   id: string
   problem: string
   reasoning: string
+  match_factors: MatchFactors
+  // Backend-computed average of the 4 match_factors scores — never trust the
+  // model's own arithmetic, and top_10 is always re-sorted on this value
+  // before being returned (see generateTop10) so display order never depends
+  // on the order the model emitted entries in.
+  match_strength: number
 }
 
 export type SuggestedOffer = {
@@ -48,7 +66,17 @@ Output ONLY valid JSON, no preamble, no markdown, no code fences. Double quotes 
 
 {
   "top_10": [
-    { "id": "p1", "problem": "a specific, monetizable problem statement", "reasoning": "connect one specific detail from the audience intelligence to one specific detail from the transformation data by name — do not speak generically" }
+    {
+      "id": "p1",
+      "problem": "a specific, monetizable problem statement",
+      "reasoning": "connect one specific detail from the audience intelligence to one specific detail from the transformation data by name — do not speak generically",
+      "match_factors": {
+        "audience_resonance": { "score": <integer 1-10>, "reasoning": "one sentence" },
+        "transformation_fit": { "score": <integer 1-10>, "reasoning": "one sentence" },
+        "conversion_ease": { "score": <integer 1-10>, "reasoning": "one sentence" },
+        "monetization_potential": { "score": <integer 1-10>, "reasoning": "one sentence" }
+      }
+    }
   ],
   "recommended_ids": ["p_", "p_", "p_"],
   "why_recommended": "a specific explanation of why these 3 beat the other 7, referencing specifics from the data",
@@ -59,8 +87,39 @@ Rules:
 - top_10 must have exactly 10 entries, ids "p1" through "p10", each a genuinely distinct problem — not 10 rephrasings of the same idea.
 - Ground every reasoning field in specifics from the data provided (e.g. real_problem, internal_dialogue, tried_before, the_bridge, proof_point) — name what you are drawing from, do not speak in generalities.
 - recommended_ids must have exactly 3 ids, chosen for being felt urgently, addressable by this coach's specific transformation capability, and likely to create natural demand for more help.
+- match_factors: score EVERY one of the 10 entries on all 4 factors below, 1-10, using ONLY the data already provided in this prompt — no outside knowledge, no invented facts. Scores must genuinely differentiate across the 10 problems; do not default to the same score or a narrow clustered range for every entry, and do not template the reasoning sentences.
+  - audience_resonance: how directly this problem's framing mirrors the audience's own language — draw specifically from language_problem, client_language_before, and pain_points. Higher score = closer to how they'd describe it themselves in their own words.
+  - transformation_fit: how tightly solving this problem connects to the transformation data's after_state, the_bridge, and dream_outcome. Higher score = more directly on the path to what this coach's clients are already becoming.
+  - conversion_ease: based on the audience's sales_objections already provided, how much resistance this specific problem's offer would likely face. Higher score = fewer or weaker objections apply, a smoother path to a yes.
+  - monetization_potential: using the current business context (has_existing_offer, price, format, delivery). If they already have an offer, judge whether this problem maps to refining that existing offer (higher score, low friction) or would require building something from scratch (lower score, more effort) — reference the offer fit qualitatively in the reasoning sentence, do not invent a full new offer here. If they do NOT have an existing offer, score how clearly monetizable the problem/solution pairing is on its own.
+- Do NOT compute or include an overall/average score — the app computes match_strength itself from the 4 scores.
+- Do NOT include a suggested_offer object on top_10 entries — that is generated separately, only for the 3 finally selected problems.
 ${GENDER_NEUTRAL_INSTRUCTION}
 ${STYLE_GUIDELINES}`
+
+function normalizeMatchFactor(raw: unknown): MatchFactor {
+  const v = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const n = typeof v.score === 'number' ? v.score : Number(v.score)
+  const score = Number.isFinite(n) ? Math.min(10, Math.max(1, Math.round(n))) : 5
+  return { score, reasoning: typeof v.reasoning === 'string' ? v.reasoning : '' }
+}
+
+function normalizeMatchFactors(raw: unknown): MatchFactors {
+  const v = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  return {
+    audience_resonance: normalizeMatchFactor(v.audience_resonance),
+    transformation_fit: normalizeMatchFactor(v.transformation_fit),
+    conversion_ease: normalizeMatchFactor(v.conversion_ease),
+    monetization_potential: normalizeMatchFactor(v.monetization_potential),
+  }
+}
+
+// One decimal place is plenty of resolution for a 1-10 average and avoids
+// floating-point noise (e.g. 6.766666...) leaking into the sorted display.
+function computeMatchStrength(f: MatchFactors): number {
+  const sum = f.audience_resonance.score + f.transformation_fit.score + f.conversion_ease.score + f.monetization_potential.score
+  return Math.round((sum / 4) * 10) / 10
+}
 
 export async function generateTop10(
   audience: unknown,
@@ -84,8 +143,23 @@ Generate the top 10 monetizable problems now.`
   const text = message.content[0]?.type === 'text' ? message.content[0].text : ''
   const parsed = extractJson(text)
 
+  const rawTop10 = Array.isArray(parsed.top_10) ? parsed.top_10 : []
+  const top_10: Top10Problem[] = rawTop10.map((p: any) => {
+    const match_factors = normalizeMatchFactors(p?.match_factors)
+    return {
+      id: typeof p?.id === 'string' ? p.id : '',
+      problem: typeof p?.problem === 'string' ? p.problem : '',
+      reasoning: typeof p?.reasoning === 'string' ? p.reasoning : '',
+      match_factors,
+      match_strength: computeMatchStrength(match_factors),
+    }
+  })
+  // Guaranteed display order regardless of what order the model emitted
+  // entries in — never rely on the model's own ordering.
+  top_10.sort((a, b) => b.match_strength - a.match_strength)
+
   return {
-    top_10: Array.isArray(parsed.top_10) ? parsed.top_10 : [],
+    top_10,
     recommended_ids: Array.isArray(parsed.recommended_ids) ? parsed.recommended_ids : [],
     why_recommended: typeof parsed.why_recommended === 'string' ? parsed.why_recommended : '',
     insights: typeof parsed.insights === 'string' ? parsed.insights : '',
