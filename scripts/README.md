@@ -118,8 +118,10 @@ rest of Matcher end to end — no extra flag needed:
    the matcher intake to **all already be complete** for this user (it 400s
    with `audience_incomplete`/`transformation_incomplete` otherwise — a real
    precondition, not a runner bug). Prints the full `top_10` list
-   (`problem`/`reasoning` each, recommended ones marked with `★`), the 3
-   `recommended_ids`, `why_recommended`, and `insights`.
+   (`problem`/`reasoning`/`match_strength`/`match_factors` scores each,
+   recommended ones marked with `★`, always in server-guaranteed
+   `match_strength`-descending order regardless of model emission order), the
+   3 `recommended_ids`, `why_recommended`, and `insights`.
 2. `POST /api/matcher/selection` — **skipped by default**: unlike
    `transformation/select` (where `selected_id` is always `null` out of
    `/analyze`), `matcher/analyze` already sets `selected_ids` to its own
@@ -140,7 +142,8 @@ rest of Matcher end to end — no extra flag needed:
 
 **Expected-state checks** (hard failures — exits immediately with
 `STAGE FAILED: <exact stage>`): exactly 10 `top_10` entries, exactly 3
-`recommended_ids`, exactly 3 finalized cards all with `validated: true`,
+`recommended_ids`, every `top_10` entry carries `match_factors` and a numeric
+`match_strength`, exactly 3 finalized cards all with `validated: true`,
 non-empty `card_name`/`problem_text`/`reasoning`/`suggested_offer`, and a
 non-empty `suggested_offer.angle_note` (the type contract says this field is
 always populated).
@@ -148,9 +151,14 @@ always populated).
 **Anomaly scan** (soft — collected and reported, flips the final VERDICT and
 exit code but doesn't stop the pipeline): empty nested fields in `top_10`
 entries, duplicate/near-duplicate text across the 10 `top_10` problems or the
-3 finalized cards' `problem_text`/`angle_note`, and — only when the intake
-said there was **no** existing offer — empty `suggested_offer.name`/
-`format`/`price_point` (these are contractually allowed to be `null` when the
+3 finalized cards' `problem_text`/`angle_note`, a **clustering check** on
+`match_strength` (flags if the standard deviation across the 10 entries is
+below `0.5` — i.e. scores converged instead of genuinely differentiating the
+problems), a **templating check** on each of the 4 `match_factors`'
+`reasoning` sentences (flags duplicate text across entries, per factor), and
+— only when the intake said there was **no** existing offer — empty
+`suggested_offer.name`/`format`/`price_point` (these are contractually
+allowed to be `null` when the
 coach already has an offer, so they're not flagged in that case). Narration
 leaks are covered by the intake conversation's own per-turn scan above (there
 is no separate conversational channel in the pipeline stages themselves).

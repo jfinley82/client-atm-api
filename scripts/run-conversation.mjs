@@ -590,15 +590,38 @@ if (tool === 'matcher' && completedReached) {
   console.log(`  why_recommended: ${trunc(analysis.why_recommended, 200)}`)
   console.log(`  insights       : ${trunc(analysis.insights, 200)}`)
   console.log(`  recommended_ids: ${JSON.stringify(analysis.recommended_ids)}`)
-  console.log('  top_10:')
+  console.log('  top_10 (sorted by match_strength desc — server-guaranteed, not model order):')
+  const MATCH_FACTOR_KEYS = ['audience_resonance', 'transformation_fit', 'conversion_ease', 'monetization_potential']
   for (const p of analysis.top_10) {
-    console.log(`    ${p.id}${analysis.recommended_ids.includes(p.id) ? ' ★' : '  '}: ${trunc(p.problem, 140)}`)
+    console.log(`    ${p.id}${analysis.recommended_ids.includes(p.id) ? ' ★' : '  '} match_strength=${p.match_strength}: ${trunc(p.problem, 140)}`)
     console.log(`      reasoning: ${trunc(p.reasoning, 140)}`)
+    if (p.match_factors) {
+      const line = MATCH_FACTOR_KEYS.map((k) => `${k}=${p.match_factors[k]?.score}`).join(' ')
+      console.log(`      match_factors: ${line}`)
+    }
   }
   pipelineIssues.push(...checkDistinctText(analysis.top_10, (p) => p.problem, 'top_10[].problem'))
   for (const p of analysis.top_10) {
     const empties = deepEmptyFields(p)
     if (empties.length) pipelineIssues.push(`top_10 ${p.id}: empty field(s) — ${empties.join(', ')}`)
+  }
+
+  // ── match_factors differentiation check ──
+  // Guards against the exact failure mode this feature must avoid: the model
+  // clustering every entry around the same score, or templating the same
+  // reasoning sentence onto all 10 instead of genuinely scoring each one.
+  assertStage(
+    analysis.top_10.every((p) => p.match_factors && typeof p.match_strength === 'number'),
+    'matcher/analyze',
+    'every top_10 entry must carry match_factors and a numeric match_strength'
+  )
+  const strengths = analysis.top_10.map((p) => p.match_strength)
+  const strengthMean = strengths.reduce((a, b) => a + b, 0) / strengths.length
+  const strengthStdev = Math.sqrt(strengths.reduce((a, b) => a + (b - strengthMean) ** 2, 0) / strengths.length)
+  console.log(`  match_strength spread: min=${Math.min(...strengths)} max=${Math.max(...strengths)} stdev=${strengthStdev.toFixed(2)}`)
+  if (strengthStdev < 0.5) pipelineIssues.push(`match_strength stdev is only ${strengthStdev.toFixed(2)} across the 10 entries — looks clustered, not genuinely differentiated`)
+  for (const key of MATCH_FACTOR_KEYS) {
+    pipelineIssues.push(...checkDistinctText(analysis.top_10, (p) => p.match_factors?.[key]?.reasoning ?? '', `top_10[].match_factors.${key}.reasoning`))
   }
 
   // ── Stage 2: matcher/selection ──
