@@ -21,17 +21,17 @@
 // upserts the test user's saved_outputs rows just like a real session would.
 //
 // Usage:
-//   CATM_TOKEN=<jwt> node scripts/run-toolkits.mjs --card-id <validated-blueprint-id>
+//   CATM_TOKEN=<jwt> node scripts/run-toolkits.mjs
 //   node scripts/run-toolkits.mjs --token <jwt> --base <url> --card-id <id> --platform claude
 //
-// If --card-id is omitted, the slides and qualifier stages are skipped with a
-// clear note (there is currently no live endpoint that LISTS a user's
-// validated problem_solution_cards ids — /api/cards was deprecated tonight,
-// and the only remaining reads of that table return card_name, not id. The
-// real card_id has to come from where the Vibe frontend would already have
-// it: the response of POST /api/matcher/finalize, which returns the full
-// inserted rows including their ids. Grab one from there, or query
-// problem_solution_cards directly, and pass it via --card-id.)
+// card_id resolution: if --card-id is omitted, the script calls
+// GET /api/matcher/cards and uses the first validated Blueprint returned
+// (this endpoint was added specifically to fill the gap left by deprecating
+// /api/cards — see its own file for details). --card-id remains a valid
+// override when you want to test one specific Blueprint. If discovery comes
+// back with an empty array (or fails outright), the slides and qualifier
+// stages are skipped with a clear note — program/content still run either way,
+// since they don't need a card_id at all.
 
 import { readFileSync } from 'node:fs'
 
@@ -51,7 +51,8 @@ for (let i = 0; i < argv.length; i++) {
 const DEFAULT_BASE = 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
 const base = (flags.base || process.env.API_BASE || DEFAULT_BASE).replace(/\/+$/, '')
 const token = flags.token || process.env.CATM_TOKEN || ''
-const cardId = typeof flags['card-id'] === 'string' ? flags['card-id'] : undefined
+let cardId = typeof flags['card-id'] === 'string' ? flags['card-id'] : undefined
+const explicitCardId = !!cardId   // --card-id stays a valid override for testing one specific card
 const platform = typeof flags.platform === 'string' ? flags.platform : 'chatgpt'
 const verbose = !!flags.verbose
 
@@ -149,6 +150,40 @@ async function postJson(path, body, stageLabel) {
   }
 }
 
+// Auto-discovery for --card-id: GET /api/matcher/cards and use the first
+// validated blueprint returned. This is best-effort, not a hard pipeline
+// stage — a failure here should still let program/content run (they don't
+// need a card_id at all), just falling back to the existing graceful skip
+// for slides/qualifier. Never exits the process.
+async function discoverCardId() {
+  const path = '/api/matcher/cards'
+  let res
+  try {
+    res = await fetch(`${base}${path}`, { headers: { Authorization: `Bearer ${token}` } })
+  } catch (e) {
+    console.log(`  card discovery: network error calling GET ${path} (${e.message}) — slides/qualifier will be skipped`)
+    return undefined
+  }
+  const text = await res.text()
+  if (!res.ok) {
+    console.log(`  card discovery: GET ${path} returned HTTP ${res.status} ${res.statusText} — slides/qualifier will be skipped\n    ${trunc(text, 300)}`)
+    return undefined
+  }
+  let cards
+  try {
+    cards = JSON.parse(text)
+  } catch {
+    console.log(`  card discovery: GET ${path} returned non-JSON — slides/qualifier will be skipped`)
+    return undefined
+  }
+  if (!Array.isArray(cards) || cards.length === 0) {
+    console.log('  card discovery: no validated Blueprints found for this account — slides/qualifier will be skipped')
+    return undefined
+  }
+  console.log(`  card discovery: found ${cards.length} validated Blueprint(s), using the first: "${trunc(cards[0].card_name, 60)}" (${cards[0].id})`)
+  return cards[0].id
+}
+
 function assertStage(condition, stageLabel, detail) {
   if (condition) return
   console.error(`\n✖ STAGE FAILED: ${stageLabel}\n  ${detail}`)
@@ -159,7 +194,7 @@ function assertStage(condition, stageLabel, detail) {
 console.log('━'.repeat(70))
 console.log('Toolkits exerciser')
 console.log(`base: ${base}`)
-console.log(`card-id: ${cardId ?? '(none provided — slides/qualifier will be skipped)'}`)
+console.log(`card-id: ${explicitCardId ? `${cardId} (explicit override)` : '(none provided — will auto-discover via GET /api/matcher/cards)'}`)
 console.log(`platform: ${platform}`)
 console.log('━'.repeat(70))
 
@@ -175,6 +210,12 @@ console.log('━'.repeat(70))
   console.log(`  JWT shape (3 base64url parts): ${jwtShape ? 'ok' : 'NO ⚠  (does not look like a header.payload.signature JWT)'}`)
 }
 console.log('━'.repeat(70))
+
+if (!explicitCardId) {
+  console.log('card_id resolution:')
+  cardId = await discoverCardId()
+  console.log('━'.repeat(70))
+}
 
 const allIssues = []   // soft anomalies across every stage — flips final VERDICT
 let stagesRun = 0
