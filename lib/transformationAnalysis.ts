@@ -83,7 +83,8 @@ ${GENDER_NEUTRAL_INSTRUCTION}
 ${STYLE_GUIDELINES}`
 
 export async function generateTransformationAnalysis(
-  transformation: unknown
+  transformation: unknown,
+  voiceContext?: string
 ): Promise<{ zoneOfImpact: string; intersection: string[]; uniquelyEquipped: string[]; selectedProblems: TransformationCandidate[] }> {
   const userMessage = `TRANSFORMATION DATA: ${JSON.stringify(transformation)}
 Generate the transformation analysis now.`
@@ -92,7 +93,7 @@ Generate the transformation analysis now.`
     model: 'claude-sonnet-5',
     max_tokens: 6000,
     thinking: { type: 'disabled' },
-    system: TRANSFORMATION_ANALYSIS_PROMPT,
+    system: voiceContext ? `${TRANSFORMATION_ANALYSIS_PROMPT}\n\n${voiceContext}` : TRANSFORMATION_ANALYSIS_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
   })
 

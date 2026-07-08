@@ -159,7 +159,8 @@ function coerceNameOptions(raw: unknown): FrameworkNameOption[] {
 
 export async function generateFramework(
   transformation: unknown,
-  audience: unknown
+  audience: unknown,
+  voiceContext?: string
 ): Promise<GeneratedFramework> {
   const userMessage = `CONFIRMED TRANSFORMATION: ${JSON.stringify(transformation)}
 
@@ -171,7 +172,7 @@ Generate the results framework now.`
     model: 'claude-sonnet-5',
     max_tokens: 6000,
     thinking: { type: 'disabled' },
-    system: FRAMEWORK_PROMPT,
+    system: voiceContext ? `${FRAMEWORK_PROMPT}\n\n${voiceContext}` : FRAMEWORK_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
   })
 

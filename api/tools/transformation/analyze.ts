@@ -4,6 +4,7 @@ import { requireActiveUser } from '../../../lib/auth'
 import { setCors } from '../../../lib/cors'
 import { getSavedOutput, saveOutput, stripSessionHistory, isContentComplete } from '../../../lib/savedOutputs'
 import { generateTransformationAnalysis, TransformationAnalysis } from '../../../lib/transformationAnalysis'
+import { getVoiceContext } from '../../../lib/voiceGuide'
 
 // GET: return the stored transformation analysis (404 if none generated yet).
 // POST: generate a fresh analysis from the completed transformation
@@ -47,7 +48,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Strip the transcript before feeding the profile to the analyzer.
     const profile = stripSessionHistory(transformationRow!.content) as Record<string, unknown>
-    const generated = await generateTransformationAnalysis(profile)
+    const voiceContext = await getVoiceContext(userId)
+    const generated = await generateTransformationAnalysis(profile, voiceContext)
 
     if (generated.selectedProblems.length !== 3) {
       console.error('[transformation/analyze] generation returned malformed output', {

@@ -4,6 +4,7 @@ import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { getSavedOutput, saveOutput, stripSessionHistory, isContentComplete } from '../../lib/savedOutputs'
 import { generateTop10, generateSuggestedOffer, MatcherAnalysis, MatcherIntake, SuggestedOffer } from '../../lib/matcherAnalysis'
+import { getVoiceContext } from '../../lib/voiceGuide'
 
 // GET: return the stored top-10 analysis (404 if none generated yet).
 // POST: generate a fresh analysis from audience + transformation + the
@@ -55,11 +56,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Strip the transcript before using content as the profile / casting to
     // MatcherIntake, so it never bloats the generation prompts.
     const intake = stripSessionHistory(intakeRow!.content) as MatcherIntake
+    const voiceContext = await getVoiceContext(userId)
 
     const { top_10, recommended_ids, why_recommended, insights } = await generateTop10(
       stripSessionHistory(audienceRow!.content),
       stripSessionHistory(transformationRow!.content),
-      intake
+      intake,
+      voiceContext
     )
 
     if (top_10.length === 0 || recommended_ids.length !== 3) {
@@ -75,7 +78,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       recommended_ids.map(async (id): Promise<[string, SuggestedOffer] | null> => {
         const problem = byId.get(id)
         if (!problem) return null
-        const offer = await generateSuggestedOffer(problem, intake)
+        const offer = await generateSuggestedOffer(problem, intake, voiceContext)
         return [id, offer]
       })
     )
