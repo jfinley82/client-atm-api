@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { supabase } from './supabase'
+import { STYLE_GUIDELINES } from './promptGuidelines'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -56,57 +57,6 @@ The final guide must be practical and specific to THIS person — quote back thi
 ## Quick Gut-Check
 
 Keep it tight and scannable — bullets over paragraphs, concrete over abstract, no generic filler advice. Keep the ENTIRE guide under 500 words — brevity is critical since it must fit in a limited response. Do not include any text outside the JSON object.`;
-
-// The GLOBAL writing-rules layer, applied to every AI generation call app-wide
-// (not stored per-user, unlike the interview above). See getVoiceContext.
-export const WRITING_RULES_MD = `## Writing rules — always on
-This layer governs phrasing only, not claims or persuasion. It applies to every AI-generated conversation, report, and piece of copy across MTM.
-
-## Rhythm
-- Vary sentence length deliberately — mix short, punchy sentences with longer, flowing ones.
-- Vary paragraph length, including single-sentence paragraphs where natural.
-- Don't over-polish into uniform academic prose. Retain some natural disfluency.
-
-## Structure
-- No em dashes or hyphens used to split a sentence into two clauses — use a comma or two full sentences instead. Hyphens in compound words like "well-known" are fine.
-- Max one bolded phrase per section.
-- No emoji in headers.
-- Don't overuse bullet lists — prefer prose for anything that isn't genuinely list-like. Avoid bare noun-phrase bullets with no verbs.
-- Sentence case headings, never title case.
-- No "let's dive in" style transitions.
-- No rhetorical-question openers, like "But what does this mean?"
-
-## Banned sentence structures
-Never use these templates, regardless of the words filled in:
-- "[X] isn't broken. One part of it is." and close variants
-- "You don't have a[n] X problem. You have a[n] Y problem."
-- "Most X coaches…" as a sentence opener
-- "You don't need another X"
-- "Even if you don't / can't / haven't / aren't / didn't…" as a hedge-covering opener
-- "X is a sign of…" / "X isn't a sign of…"
-- "This is for you if…" / "This is not for you if…"
-- "The problem is…" / "The solution is…" / "The answer is…" as a standalone label
-- "deep dive," "dive deep into," or any "diving into X" variation
-- "It's not about X. It's about Y."
-
-## Banned words — zero tolerance
-delve, landscape (as metaphor), tapestry, realm, paradigm, paradigm shift, beacon, robust, comprehensive, cutting-edge, leverage (as a verb), pivotal, underscores, meticulous, seamless, game-changer, utilize, watershed moment, bustling, actionable, impactful, unlock, empower, streamline, elevate, harness, "at the end of the day," "it's worth noting," "let's explore," engagement (as a noun for audience interaction)
-
-## Banned words — don't cluster
-Fine alone, never two or more in the same paragraph: navigate, foster, unleash, bolster, spearhead, resonate, revolutionize, facilitate, underpin, nuanced, crucial, multifaceted, ecosystem, myriad, plethora
-
-## Avoid boilerplate phrases
-"the integration of," "the intersection of," "community-driven," "long-term sustainability," "user engagement" — name the actual mechanism or action instead.
-
-## Other tells to avoid
-- Hollow intensifiers: genuine, truly, quite frankly, to be honest, let's be clear
-- Vague endorsements like "worth reading" or "worth your time" — say why it matters instead
-- Significance inflation like "marking a pivotal moment"
-- Generic future closers like "only time will tell" or "the future looks bright"
-- Hedge-stacked predictions like "could potentially create" — pick one modal
-- "Real" or "actual" as an intensifier unless it's naming a specific fake version it contrasts
-- Synonym cycling to avoid repetition — if it's the right word, repeat it
-- Vague attributions like "experts believe" or "studies show" — cite the source or state the claim directly`;
 
 export type VoiceGuideStatus = 'not_started' | 'in_progress' | 'complete'
 
@@ -204,6 +154,14 @@ export async function continueInterview(qaLog: QaEntry[]): Promise<InterviewTurn
 // (if any) plus the always-on writing rules layer, so generated content
 // sounds like the coach instead of generic AI copy. Falls back to the
 // writing-rules layer alone when no complete guide exists yet.
+//
+// Uses STYLE_GUIDELINES (lib/promptGuidelines.ts) as the writing-rules layer —
+// NOT a separate constant. A first pass ported a standalone WRITING_RULES_MD
+// here, but its content was a near-verbatim duplicate of STYLE_GUIDELINES
+// (same banned words, same banned templates, same rhythm rules), which was
+// already the established single source of truth used across chat.ts,
+// transformationAnalysis.ts, frameworkAnalysis.ts, and matcherAnalysis.ts.
+// Consolidated onto that one instead of maintaining two competing copies.
 export async function getVoiceContext(userId: string): Promise<string> {
   const { data } = await supabase
     .from('voice_guides')
@@ -212,7 +170,7 @@ export async function getVoiceContext(userId: string): Promise<string> {
     .maybeSingle()
 
   if (data?.status === 'complete' && typeof data.guide_md === 'string' && data.guide_md.trim().length > 0) {
-    return `${data.guide_md}\n\n---\n\n${WRITING_RULES_MD}`
+    return `${data.guide_md}\n\n---\n\n${STYLE_GUIDELINES}`
   }
-  return WRITING_RULES_MD
+  return STYLE_GUIDELINES
 }
