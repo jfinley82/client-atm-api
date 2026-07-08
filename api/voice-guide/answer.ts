@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { continueInterview, QaEntry } from '../../lib/voiceGuide'
+import { GenerationParseError } from '../../lib/aiJson'
 
 // Appends the answer to the last (unanswered) qa_log entry, reconstructs the
 // full message history from qa_log, and continues the interview. On
@@ -68,6 +69,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({ status: 'in_progress', qaLog: newLog })
   } catch (err) {
+    if (err instanceof GenerationParseError) {
+      console.error('[voice-guide/answer] POST generation_truncated', err.message, { rawTextLength: err.rawText.length })
+      return res.status(502).json({ error: 'generation_truncated' })
+    }
     console.error('[voice-guide/answer] POST', err)
     return res.status(500).json({ error: 'Failed to process answer' })
   }

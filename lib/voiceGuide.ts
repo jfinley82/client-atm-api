@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { supabase } from './supabase'
 import { STYLE_GUIDELINES } from './promptGuidelines'
+import { extractJson } from './aiJson'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -70,15 +71,6 @@ export type QaEntry = {
 export type InterviewTurn =
   | { type: 'question'; category: string; progress: number; text: string }
   | { type: 'complete'; progress: number; text: string }
-
-function extractJson(text: string): any {
-  const cleaned = text
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/i, '')
-    .replace(/```\s*$/, '')
-    .trim()
-  return JSON.parse(cleaned)
-}
 
 function normalizeTurn(parsed: any): InterviewTurn {
   const progress = typeof parsed?.progress === 'number' ? parsed.progress : 0
