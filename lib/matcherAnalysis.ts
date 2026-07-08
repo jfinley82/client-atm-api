@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
+import { extractJson } from './aiJson'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -49,15 +50,6 @@ export type MatcherAnalysis = {
   why_recommended: string
   insights: string
   suggested_offers: Record<string, SuggestedOffer>
-}
-
-function extractJson(text: string): any {
-  const cleaned = text
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/i, '')
-    .replace(/```\s*$/, '')
-    .trim()
-  return JSON.parse(cleaned)
 }
 
 const TOP_10_PROMPT = `You are an expert offer strategist for coaches. You are given a coach's complete audience intelligence, their transformation data, and their current business context. Identify the 10 most monetizable problems this specific coach could build a paid offer around — grounded in THEIR audience and transformation data, not generic coaching advice.
@@ -134,7 +126,12 @@ Generate the top 10 monetizable problems now.`
 
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-5',
-    max_tokens: 4000,
+    // Was 4000 — too tight once match_factors added 4 scored sub-fields to
+    // each of the 10 entries (confirmed truncating mid-response in production
+    // on 2026-07-08). Raised to 6000 to match the other two one-shot
+    // generators (transformationAnalysis, frameworkAnalysis), which sit at
+    // 6000 for comparably-sized (or smaller-count) repeated structures.
+    max_tokens: 6000,
     thinking: { type: 'disabled' },
     system: voiceContext ? `${TOP_10_PROMPT}\n\n${voiceContext}` : TOP_10_PROMPT,
     messages: [{ role: 'user', content: userMessage }],

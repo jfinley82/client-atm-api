@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
+import { extractJson } from './aiJson'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -54,15 +55,6 @@ export function resolveFrameworkName(
     frameworkName: selected?.name ?? '',
     frameworkTagline: selected?.tagline ?? '',
   }
-}
-
-function extractJson(text: string): any {
-  const cleaned = text
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/i, '')
-    .replace(/```\s*$/, '')
-    .trim()
-  return JSON.parse(cleaned)
 }
 
 const FRAMEWORK_PROMPT = `You are an expert brand strategist and offer designer helping a coach turn the transformation they deliver into a NAMED, proprietary results framework — the signature method they will put their name on. This is Part B of their Transform step: they have already confirmed the single transformation they build their business around, and now you are turning that transformation into a memorable, ownable delivery system a client can see themselves moving through.

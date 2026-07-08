@@ -12,6 +12,7 @@ import {
   PHASE_COLORS,
 } from '../../../../lib/frameworkAnalysis'
 import { getVoiceContext } from '../../../../lib/voiceGuide'
+import { GenerationParseError } from '../../../../lib/aiJson'
 
 // Transformation Part B: Your Results Framework.
 // GET: return the stored framework (404 if none generated yet).
@@ -135,6 +136,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json(framework)
   } catch (err) {
+    if (err instanceof GenerationParseError) {
+      console.error('[transformation/framework/analyze] POST generation_truncated', err.message, { rawTextLength: err.rawText.length })
+      return res.status(502).json({ error: 'generation_truncated' })
+    }
     console.error('[transformation/framework/analyze] POST', err)
     return res.status(500).json({ error: 'Framework generation failed' })
   }

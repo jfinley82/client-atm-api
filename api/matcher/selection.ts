@@ -4,6 +4,7 @@ import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { getSavedOutput, saveOutput } from '../../lib/savedOutputs'
 import { generateSuggestedOffer, MatcherAnalysis, MatcherIntake, SuggestedOffer } from '../../lib/matcherAnalysis'
+import { GenerationParseError } from '../../lib/aiJson'
 
 // Accept the AI's 3 recommended problems as-is, or swap any of them for a
 // different one of the remaining 7. Recomputes suggested_offer only for
@@ -79,6 +80,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json(updated)
   } catch (err) {
+    if (err instanceof GenerationParseError) {
+      console.error('[matcher/selection] POST generation_truncated', err.message, { rawTextLength: err.rawText.length })
+      return res.status(502).json({ error: 'generation_truncated' })
+    }
     console.error('[matcher/selection] POST', err)
     return res.status(500).json({ error: 'Selection failed' })
   }
