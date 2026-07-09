@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
 import { extractJson } from './aiJson'
+import { logApiCost } from './apiCostLog'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -18,6 +19,8 @@ export type SlidesDeck = {
   duration_estimate: string
   slides: SlideEntry[]
   confirmed: boolean
+  // Upstream dependency timestamps as of confirmation — see lib/syncDependencies.ts.
+  sync_snapshot?: Record<string, string>
 }
 
 const SLIDES_PROMPT = `You are an expert curriculum designer helping a coach turn one of their validated Micro-Blueprints into an actual teaching deck they can record a video from.
@@ -61,6 +64,7 @@ function coerceSlide(raw: unknown, fallbackNumber: number): SlideEntry {
 }
 
 export async function generateSlides(
+  userId: string,
   framework: unknown,
   selectedBlueprint: unknown,
   audience: unknown,
@@ -81,6 +85,8 @@ Generate the training slide deck now.`
     system: voiceContext ? `${SLIDES_PROMPT}\n\n${voiceContext}` : SLIDES_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
   })
+
+  await logApiCost(userId, 'slides', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens)
 
   const textBlock = message.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined
   const text = textBlock?.text ?? ''

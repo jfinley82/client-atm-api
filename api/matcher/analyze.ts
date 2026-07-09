@@ -60,6 +60,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const voiceContext = await getVoiceContext(userId)
 
     const { top_10, recommended_ids, why_recommended, insights } = await generateTop10(
+      userId,
       stripSessionHistory(audienceRow!.content),
       stripSessionHistory(transformationRow!.content),
       intake,
@@ -79,7 +80,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       recommended_ids.map(async (id): Promise<[string, SuggestedOffer] | null> => {
         const problem = byId.get(id)
         if (!problem) return null
-        const offer = await generateSuggestedOffer(problem, intake, voiceContext)
+        const offer = await generateSuggestedOffer(userId, problem, intake, voiceContext)
         return [id, offer]
       })
     )

@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
 import { extractJson } from './aiJson'
+import { logApiCost } from './apiCostLog'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -24,6 +25,8 @@ export type CoreOffersAnalysis = {
   high_ticket: CoreOffer
   confirmed: boolean
   next_step_bridge?: string
+  // Upstream dependency timestamps as of confirmation — see lib/syncDependencies.ts.
+  sync_snapshot?: Record<string, string>
 }
 
 // Placeholder forward-bridge line shown once core_offers is confirmed. Static
@@ -83,6 +86,7 @@ function coerceOffer(raw: unknown): CoreOffer {
 }
 
 export async function generateCoreOffers(
+  userId: string,
   audience: unknown,
   confirmedTransformation: unknown,
   confirmedFramework: unknown,
@@ -109,6 +113,8 @@ Generate the two core offers now.`
     system: voiceContext ? `${CORE_OFFERS_PROMPT}\n\n${voiceContext}` : CORE_OFFERS_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
   })
+
+  await logApiCost(userId, 'core_offers', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens)
 
   // find(), not content[0] — matches the defensive pattern used across this
   // app so a future thinking-mode change doesn't silently break parsing.

@@ -3,6 +3,7 @@ import { requireActiveUser } from '../../../lib/auth'
 import { setCors } from '../../../lib/cors'
 import { SlideEntry, SlidesDeck } from '../../../lib/slidesAnalysis'
 import { getValidatedBlueprint, saveByCardIdEntry } from '../../../lib/toolkitsShared'
+import { stampSyncSnapshot } from '../../../lib/syncDependencies'
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === 'string' && v.trim().length > 0
@@ -53,11 +54,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const blueprintGate = await getValidatedBlueprint(userId, body.card_id)
     if (!blueprintGate.ok) return res.status(400).json({ error: blueprintGate.error })
 
+    const sync_snapshot = await stampSyncSnapshot(userId, 'slides', blueprintGate.card.id)
+
     const updated: SlidesDeck = {
       training_title,
       duration_estimate,
       slides: slides as SlideEntry[],
       confirmed: true,
+      sync_snapshot,
     }
 
     const saved = await saveByCardIdEntry(userId, 'slides', blueprintGate.card.id, updated)

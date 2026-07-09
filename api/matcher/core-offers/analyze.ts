@@ -125,6 +125,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const voiceContext = await getVoiceContext(userId)
 
     const { low_ticket, high_ticket } = await generateCoreOffers(
+      userId,
       stripSessionHistory(audienceRow!.content),
       confirmedTransformationContext,
       frameworkContext,

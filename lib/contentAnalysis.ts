@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
 import { extractJson } from './aiJson'
+import { logApiCost } from './apiCostLog'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -15,6 +16,8 @@ export type ContentAnalysis = {
   posts: ContentPost[]
   emails: ContentEmail[]
   confirmed: boolean
+  // Upstream dependency timestamps as of confirmation — see lib/syncDependencies.ts.
+  sync_snapshot?: Record<string, string>
 }
 
 // Skippable 2-question intake, same short-intake pattern as Matcher's
@@ -76,6 +79,7 @@ function asString(v: unknown): string {
 }
 
 export async function generateContent(
+  userId: string,
   framework: unknown,
   audience: unknown,
   coreOffers: unknown,
@@ -102,6 +106,8 @@ Generate the 15 posts and 5 emails now.`
     system: voiceContext ? `${CONTENT_PROMPT}\n\n${voiceContext}` : CONTENT_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
   })
+
+  await logApiCost(userId, 'content', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens)
 
   const textBlock = message.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined
   const text = textBlock?.text ?? ''

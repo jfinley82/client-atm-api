@@ -81,6 +81,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const { posts, emails } = await generateContent(
+      userId,
       frameworkContext,
       stripSessionHistory(audienceRow!.content),
       confirmedCoreOffers,

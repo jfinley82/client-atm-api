@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
 import { extractJson } from './aiJson'
+import { logApiCost } from './apiCostLog'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -33,6 +34,8 @@ export type TransformationAnalysis = {
   selectedProblems: TransformationCandidate[]
   selected_id: string | null
   confirmed: boolean
+  // Upstream dependency timestamps as of confirmation — see lib/syncDependencies.ts.
+  sync_snapshot?: Record<string, string>
 }
 
 
@@ -76,6 +79,7 @@ ${GENDER_NEUTRAL_INSTRUCTION}
 ${STYLE_GUIDELINES}`
 
 export async function generateTransformationAnalysis(
+  userId: string,
   transformation: unknown,
   voiceContext?: string
 ): Promise<{ zoneOfImpact: string; intersection: string[]; uniquelyEquipped: string[]; selectedProblems: TransformationCandidate[] }> {
@@ -89,6 +93,8 @@ Generate the transformation analysis now.`
     system: voiceContext ? `${TRANSFORMATION_ANALYSIS_PROMPT}\n\n${voiceContext}` : TRANSFORMATION_ANALYSIS_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
   })
+
+  await logApiCost(userId, 'transformation_analysis', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens)
 
   // find(), not content[0] — matches the defensive pattern used elsewhere in
   // this app even though thinking is disabled here, so a future thinking

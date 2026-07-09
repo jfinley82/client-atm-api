@@ -3,6 +3,7 @@ import { requireActiveUser } from '../../../lib/auth'
 import { setCors } from '../../../lib/cors'
 import { getSavedOutput, saveOutput } from '../../../lib/savedOutputs'
 import { TransformationAnalysis, TransformationCandidate } from '../../../lib/transformationAnalysis'
+import { stampSyncSnapshot } from '../../../lib/syncDependencies'
 
 function hasStringFields(v: unknown, keys: string[]): boolean {
   if (!v || typeof v !== 'object') return false
@@ -71,6 +72,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const updatedProblems = analysis.selectedProblems.map((c) => (c.id === candidate.id ? candidate : c))
+    const sync_snapshot = await stampSyncSnapshot(userId, 'transformation_analysis')
 
     const updated: TransformationAnalysis = {
       zoneOfImpact: zoneOfImpact as string,
@@ -84,6 +86,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       selectedProblems: updatedProblems,
       selected_id: candidate.id,
       confirmed: true,
+      sync_snapshot,
     }
 
     await saveOutput(userId, 'transformation_analysis', updated)

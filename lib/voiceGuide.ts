@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { supabase } from './supabase'
 import { STYLE_GUIDELINES } from './promptGuidelines'
 import { extractJson } from './aiJson'
+import { logApiCost } from './apiCostLog'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -86,7 +87,7 @@ function normalizeTurn(parsed: any): InterviewTurn {
   }
 }
 
-async function callInterview(messages: { role: 'user' | 'assistant'; content: string }[]): Promise<InterviewTurn> {
+async function callInterview(userId: string, messages: { role: 'user' | 'assistant'; content: string }[]): Promise<InterviewTurn> {
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-5',
     max_tokens: 2000,
@@ -94,6 +95,8 @@ async function callInterview(messages: { role: 'user' | 'assistant'; content: st
     system: SYSTEM_PROMPT,
     messages,
   })
+
+  await logApiCost(userId, 'voice_guide', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens)
 
   // find(), not content[0] — matches the defensive pattern used elsewhere in
   // this app so a future thinking-mode change doesn't silently break parsing.
@@ -105,13 +108,13 @@ async function callInterview(messages: { role: 'user' | 'assistant'; content: st
 // Kicks off a fresh interview. If a writing and/or talking sample was
 // provided, it's included in the opening user turn so the model can start
 // pointing out the gap between them, exactly as the system prompt instructs.
-export async function startInterview(writingSample?: string, talkingSample?: string): Promise<InterviewTurn> {
+export async function startInterview(userId: string, writingSample?: string, talkingSample?: string): Promise<InterviewTurn> {
   let kickoff = ''
   if (writingSample) kickoff += `WRITING SAMPLE: ${writingSample}\n\n`
   if (talkingSample) kickoff += `TALKING SAMPLE: ${talkingSample}\n\n`
   kickoff += 'Ask your first question.'
 
-  return callInterview([{ role: 'user', content: kickoff }])
+  return callInterview(userId, [{ role: 'user', content: kickoff }])
 }
 
 // Reconstructs the full message history from qa_log (assistant turn = JSON of
@@ -119,7 +122,7 @@ export async function startInterview(writingSample?: string, talkingSample?: str
 // must already have the latest answer filled in on its last entry. If
 // qa_log.length has reached MAX_QUESTIONS, the final-answer note is appended
 // to that last answer so the model wraps up with the completed guide.
-export async function continueInterview(qaLog: QaEntry[]): Promise<InterviewTurn> {
+export async function continueInterview(userId: string, qaLog: QaEntry[]): Promise<InterviewTurn> {
   const reachedMax = qaLog.length >= MAX_QUESTIONS
   const messages: { role: 'user' | 'assistant'; content: string }[] = []
 
@@ -138,7 +141,7 @@ export async function continueInterview(qaLog: QaEntry[]): Promise<InterviewTurn
     }
   })
 
-  return callInterview(messages)
+  return callInterview(userId, messages)
 }
 
 // Shared helper for every AI generation call app-wide (Transform, Monetize,

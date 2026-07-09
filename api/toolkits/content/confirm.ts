@@ -3,6 +3,7 @@ import { requireActiveUser } from '../../../lib/auth'
 import { setCors } from '../../../lib/cors'
 import { getSavedOutput, saveOutput } from '../../../lib/savedOutputs'
 import { ContentAnalysis, ContentPost, ContentEmail } from '../../../lib/contentAnalysis'
+import { stampSyncSnapshot } from '../../../lib/syncDependencies'
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === 'string' && v.trim().length > 0
@@ -51,10 +52,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const existing = await getSavedOutput(userId, 'content')
     if (!existing) return res.status(404).json({ error: 'No content generated yet' })
 
+    const sync_snapshot = await stampSyncSnapshot(userId, 'content')
+
     const updated: ContentAnalysis = {
       posts: posts as ContentPost[],
       emails: emails as ContentEmail[],
       confirmed: true,
+      sync_snapshot,
     }
 
     await saveOutput(userId, 'content', updated)

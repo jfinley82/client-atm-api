@@ -50,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Strip the transcript before feeding the profile to the analyzer.
     const profile = stripSessionHistory(transformationRow!.content) as Record<string, unknown>
     const voiceContext = await getVoiceContext(userId)
-    const generated = await generateTransformationAnalysis(profile, voiceContext)
+    const generated = await generateTransformationAnalysis(userId, profile, voiceContext)
 
     if (generated.selectedProblems.length !== 3) {
       console.error('[transformation/analyze] generation returned malformed output', {
