@@ -1,5 +1,16 @@
 import { supabase } from './supabase'
 
+// Persistent MTM Coach conversation history, grouped into threads. Backs
+// four endpoints: chat.ts (reads active-thread history for context, writes
+// both sides of each exchange), history.ts (reads active-thread history for
+// the widget), restart.ts (ends the active thread), threads.ts (lists and
+// reads past, ended threads).
+//
+// A member always has at most one open thread (ended_at is null). Nothing
+// is ever deleted — restart ends the current thread rather than removing
+// rows, so an ended thread becomes browsable via getThreadList/
+// getThreadMessages instead of disappearing.
+
 export type HistoryRole = 'user' | 'assistant'
 export type HistoryMessage = { role: HistoryRole; content: string }
 export type ThreadSummary = { id: string; startedAt: string; endedAt: string | null; preview: string | null }
@@ -11,10 +22,13 @@ function clip(content: string): string {
   return content.trim().slice(0, MAX_CONTENT)
 }
 
-// Returns the member's currently open thread id, creating one if they've
-// never chatted before, or if their previous thread was ended by a restart.
-async function getOrCreateActiveThreadId(userId: string): Promise<string> {
-  const { data: existing, error: findErr } = await supabase
+// The member's currently open thread id, if one exists. Does NOT create one
+// — opening the widget or checking history shouldn't leave behind an empty
+// thread row with no messages in it (that would show up as a blank entry
+// in "Past chats" the moment it's ended). Only appendMessages creates a
+// thread, and only once there's an actual message to put in it.
+async function getOpenThreadId(userId: string): Promise<string | null> {
+  const { data, error } = await supabase
     .from('assistant_threads')
     .select('id')
     .eq('user_id', userId)
@@ -22,8 +36,15 @@ async function getOrCreateActiveThreadId(userId: string): Promise<string> {
     .order('started_at', { ascending: false })
     .limit(1)
     .maybeSingle()
-  if (findErr) throw findErr
-  if (existing) return existing.id
+  if (error) throw error
+  return data?.id ?? null
+}
+
+// Same as getOpenThreadId, but creates a thread if the member doesn't have
+// one open. Used only when a message is actually about to be written.
+async function getOrCreateActiveThreadId(userId: string): Promise<string> {
+  const existing = await getOpenThreadId(userId)
+  if (existing) return existing
 
   const { data: created, error: createErr } = await supabase
     .from('assistant_threads')
@@ -35,10 +56,13 @@ async function getOrCreateActiveThreadId(userId: string): Promise<string> {
 }
 
 // Active thread's messages, oldest first, capped to the trailing
-// MAX_HISTORY_TURNS. Used both to hydrate the widget on open and to build
-// the model's context window.
+// MAX_HISTORY_TURNS. Used both to hydrate the widget and to build the
+// model's context window. Returns [] if the member has no open thread —
+// does not create one just to answer this question.
 export async function getActiveHistory(userId: string): Promise<HistoryMessage[]> {
-  const threadId = await getOrCreateActiveThreadId(userId)
+  const threadId = await getOpenThreadId(userId)
+  if (!threadId) return []
+
   const { data, error } = await supabase
     .from('assistant_messages')
     .select('role, content, created_at')
@@ -52,7 +76,7 @@ export async function getActiveHistory(userId: string): Promise<HistoryMessage[]
 }
 
 // Appends one exchange to the member's active thread, creating a thread on
-// their very first-ever message.
+// their very first-ever message (or their first message after a restart).
 export async function appendMessages(userId: string, messages: HistoryMessage[]): Promise<void> {
   if (messages.length === 0) return
   const threadId = await getOrCreateActiveThreadId(userId)
@@ -66,9 +90,9 @@ export async function appendMessages(userId: string, messages: HistoryMessage[])
   if (error) throw error
 }
 
-// Ends the member's active thread. Their next message starts a brand new
-// one. Nothing is deleted — the ended thread becomes browsable via
-// getThreadList/getThreadMessages below.
+// Ends the member's active thread, if they have one. Their next message
+// starts a brand new one. No-op (not an error) if nothing is currently
+// open — safe to call unconditionally, e.g. every time the widget opens.
 export async function archiveActiveHistory(userId: string): Promise<void> {
   const { error } = await supabase
     .from('assistant_threads')
@@ -79,8 +103,9 @@ export async function archiveActiveHistory(userId: string): Promise<void> {
 }
 
 // Past (ended) threads for the member, most recent first, each with a short
-// preview drawn from its first member message — this is what "Past chats"
-// renders as a list.
+// preview drawn from its first member message. Threads with zero messages
+// (e.g. an old empty thread from before this got fixed) are excluded so
+// "Past chats" never shows a blank entry.
 export async function getThreadList(userId: string): Promise<ThreadSummary[]> {
   const { data: threads, error } = await supabase
     .from('assistant_threads')
@@ -107,12 +132,14 @@ export async function getThreadList(userId: string): Promise<ThreadSummary[]> {
     if (!previewByThread.has(m.thread_id)) previewByThread.set(m.thread_id, m.content.slice(0, 80))
   }
 
-  return list.map((t) => ({
-    id: t.id,
-    startedAt: t.started_at,
-    endedAt: t.ended_at,
-    preview: previewByThread.get(t.id) ?? null,
-  }))
+  return list
+    .filter((t) => previewByThread.has(t.id))
+    .map((t) => ({
+      id: t.id,
+      startedAt: t.started_at,
+      endedAt: t.ended_at,
+      preview: previewByThread.get(t.id) ?? null,
+    }))
 }
 
 // Full transcript of one past (ended) thread, oldest first. Scoped to the
