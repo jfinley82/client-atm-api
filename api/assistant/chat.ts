@@ -4,6 +4,7 @@ import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { getVoiceContext } from '../../lib/voiceGuide'
 import { getMemberSnapshot } from '../../lib/assistantContext'
+import { getActiveHistory, appendMessages } from '../../lib/assistantHistory'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -15,17 +16,23 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 // member's captured voice guide plus the shared writing-style guide. That keeps
 // the coach, the tools, and the content all sounding like one product.
 //
-// Body: { messages: [{ role: 'user' | 'assistant', content: string }] }
+// Body: { message: string } — the member's new turn. Conversation history
+// lives server-side (assistant_messages, via lib/assistantHistory) so the
+// widget can restore it across reloads instead of holding it in memory.
+// Legacy body shape { messages: [{ role, content }] } is also accepted: the
+// last user-role entry is used as the new turn.
 // Returns: { message: string }
 //
-// Read-only. It never writes to saved_outputs or changes member state.
+// Not read-only: each exchange is appended to assistant_messages.
+// saved_outputs and member progress are never touched.
 
-const MAX_TURNS = 20 // trailing turns of history sent to the model
 const MAX_CONTENT = 4000 // per-message character cap, defensive
 
 const PERSONA = `You are the MTM Coach, the built-in assistant inside the Micro-Training Method app. You are an AI, not a person. If someone asks who you are, you are the app's AI coach, here to help them work through the method. Do not claim to be Jamaul or Danielle, and do not pretend to be human.
 
-Your manner is a coach's: warm, direct, plain-spoken, encouraging, never fluffy. Keep replies short. Be specific. When the member is stuck, name the exact step or screen to go to next. When the member context below includes their own work, use it and refer to it by name. If the context does not include something, it is not done yet, so guide them toward doing it and never invent their avatar, framework, offers, or Blueprints.`
+Your manner is a coach's: warm, direct, plain-spoken, encouraging, never fluffy. Be specific. When the member is stuck, name the exact step or screen to go to next. When the member context below includes their own work, use it and refer to it by name. If the context does not include something specific, like a name, a price, or a title, treat it as not visible to you: say so plainly and point to the screen where it lives, without guessing where else it might be or suggesting something is broken. Never invent their avatar, framework, offers, or Blueprints.
+
+Reply length: 2-4 sentences for most answers. Only go longer when you're walking through concrete steps the member needs to follow one by one. If a reply needs more than 2-3 sentences, break it into short paragraphs with a blank line between them instead of one dense block, since members read these in a small chat widget.`
 
 const METHOD_KNOWLEDGE = `THE MICRO-TRAINING METHOD
 The method takes a coach from a fuzzy offer to a sellable micro-training in three steps, then into assets.
@@ -37,9 +44,12 @@ The method takes a coach from a fuzzy offer to a sellable micro-training in thre
 THE APP
 - Dashboard: home base. It shows progress and the next step.
 - The MTM Method and Method Overview: the training and the map of the whole method.
-- Step 1, Step 2, Step 3 screens: where the guided AI conversations happen.
-- Micro-Blueprints and My Micro-Trainings: the member's saved outputs.
+- Step 1, Step 2, Step 3 screens: where the guided AI conversations happen. Core offers, the low-ticket and high-ticket, are set on the Step 3 screen.
+- Micro-Blueprints: the member's validated Blueprint topics.
+- My Micro-Trainings: the index of what's been built from those Blueprints, meaning the four Asset Creator outputs below. Core offers are never part of My Micro-Trainings.
 - Asset Creators: the four tools below.
+
+RULE: if asked about core offers specifically, point only to the Step 3 screen. Do not mention My Micro-Trainings in that answer, even as a second place to check.
 
 THE ASSET CREATORS, each builds from the member's validated Blueprint
 - Program Creator: turns the method into a full program outline.
@@ -61,19 +71,24 @@ ${contextText}
 ${voiceContext}`
 }
 
-type Msg = { role: 'user' | 'assistant'; content: string }
-
-function sanitize(input: unknown): Msg[] {
-  if (!Array.isArray(input)) return []
-  const out: Msg[] = []
-  for (const m of input) {
-    if (!m || typeof m !== 'object') continue
-    const role = (m as { role?: unknown }).role === 'assistant' ? 'assistant' : 'user'
-    const rawContent = (m as { content?: unknown }).content
-    const content = typeof rawContent === 'string' ? rawContent.trim().slice(0, MAX_CONTENT) : ''
-    if (content) out.push({ role, content })
+// Pulls the member's new turn out of either body shape. Preferred: { message }.
+// Legacy: { messages: [...] } — takes the last user-role entry and ignores
+// the rest, since history now comes from the DB, not the client.
+function extractNewTurn(body: Record<string, unknown>): string {
+  if (typeof body.message === 'string') return body.message.trim().slice(0, MAX_CONTENT)
+  if (Array.isArray(body.messages)) {
+    for (let i = body.messages.length - 1; i >= 0; i--) {
+      const m = body.messages[i]
+      if (!m || typeof m !== 'object') continue
+      const role = (m as { role?: unknown }).role
+      const content = (m as { content?: unknown }).content
+      if (role === 'assistant') break // most recent turn wasn't from the member; nothing to answer
+      if (role === 'user' && typeof content === 'string' && content.trim()) {
+        return content.trim().slice(0, MAX_CONTENT)
+      }
+    }
   }
-  return out.slice(-MAX_TURNS)
+  return ''
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -85,27 +100,46 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
-    const messages = sanitize(body.messages)
-    if (messages.length === 0 || messages[messages.length - 1].role !== 'user') {
-      return res.status(400).json({ error: 'messages_required' })
+    const newMessage = extractNewTurn(body)
+    if (!newMessage) {
+      return res.status(400).json({ error: 'message_required' })
     }
 
-    // Same voice layer the AI tools use, plus this member's real situation.
-    const [snapshot, voiceContext] = await Promise.all([getMemberSnapshot(userId), getVoiceContext(userId)])
+    // Same voice layer the AI tools use, plus this member's real situation,
+    // plus their persisted conversation so far.
+    const [snapshot, voiceContext, history] = await Promise.all([
+      getMemberSnapshot(userId),
+      getVoiceContext(userId),
+      getActiveHistory(userId),
+    ])
     const system = buildSystem(snapshot.contextText, voiceContext)
+    const turns = [...history, { role: 'user' as const, content: newMessage }]
 
     const completion = await anthropic.messages.create({
       model: 'claude-sonnet-5',
       max_tokens: 1200,
       thinking: { type: 'disabled' },
       system,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: turns.map((m) => ({ role: m.role, content: m.content })),
     })
 
-    const reply = completion.content[0]?.type === 'text' ? completion.content[0].text.trim() : ''
-    return res.status(200).json({
-      message: reply || "I'm here. Tell me what you're working on and I'll point you to the next move.",
-    })
+    const reply =
+      completion.content[0]?.type === 'text'
+        ? completion.content[0].text.trim()
+        : "I'm here. Tell me what you're working on and I'll point you to the next move."
+
+    // Persist both sides of the exchange. Best-effort: if this write fails,
+    // the member still gets their answer, they just lose this turn on reload.
+    try {
+      await appendMessages(userId, [
+        { role: 'user', content: newMessage },
+        { role: 'assistant', content: reply },
+      ])
+    } catch (persistErr) {
+      console.error('[assistant/chat] history persist failed', persistErr)
+    }
+
+    return res.status(200).json({ message: reply })
   } catch (err) {
     console.error('[assistant/chat] POST', err)
     return res.status(500).json({ error: 'The coach is unavailable right now' })
