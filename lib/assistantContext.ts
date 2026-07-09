@@ -102,17 +102,22 @@ export async function getMemberSnapshot(userId: string): Promise<MemberSnapshot>
   const percent = Math.round((doneCount / raw.length) * 100)
   const current = checklist.find((c) => c.status === 'current') || null
 
-  // Member-specific facts for the coach. Each is gated the same way the
-  // dashboard gates them, so a value only appears once genuinely confirmed.
+  // Member-specific facts for the coach. Gated on BOTH the row's own
+  // confirmed/completed flag AND the matching step's session-progress flag.
+  // These two signals live in different tables and can drift out of sync
+  // (e.g. a framework row confirmed in the tool while the Step 2
+  // session-progress record wasn't marked complete). Requiring both means
+  // the coach never states a step is "still open" in one line and then
+  // cites that step's specific output as settled fact in another.
   const audience = obj(audienceRow?.content)
-  const avatarName = audience && audience.completed === true ? str(audience.avatarName) : null
-  const problem = audience && audience.completed === true ? str(audience.problemStatement) : null
+  const avatarName = attractDone && audience && audience.completed === true ? str(audience.avatarName) : null
+  const problem = attractDone && audience && audience.completed === true ? str(audience.problemStatement) : null
   const analysis = obj(analysisRow?.content)
-  const zone = analysis && analysis.confirmed === true ? str(analysis.zoneOfImpact) : null
+  const zone = transformDone && analysis && analysis.confirmed === true ? str(analysis.zoneOfImpact) : null
   const framework = obj(frameworkRow?.content)
-  const frameworkName = framework && framework.confirmed === true ? str(framework.frameworkName) : null
+  const frameworkName = transformDone && framework && framework.confirmed === true ? str(framework.frameworkName) : null
   const offers = obj(offersRow?.content)
-  const offersConfirmed = !!offers && offers.confirmed === true
+  const offersConfirmed = monetizeDone && !!offers && offers.confirmed === true
   const cardNames = ((cardsRes.data || []) as Array<{ card_name: unknown }>)
     .map((c) => str(c.card_name))
     .filter((n): n is string => n !== null)
