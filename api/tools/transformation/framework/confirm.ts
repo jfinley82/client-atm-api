@@ -3,6 +3,7 @@ import { requireActiveUser } from '../../../../lib/auth'
 import { setCors } from '../../../../lib/cors'
 import { getSavedOutput, saveOutput } from '../../../../lib/savedOutputs'
 import { FrameworkAnalysis, FrameworkPhase, FrameworkStep, PHASE_COLORS } from '../../../../lib/frameworkAnalysis'
+import { stampSyncSnapshot } from '../../../../lib/syncDependencies'
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === 'string' && v.trim().length > 0
@@ -80,6 +81,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ...p,
       color: PHASE_COLORS[i],
     }))
+    const sync_snapshot = await stampSyncSnapshot(userId, 'framework')
 
     const updated: FrameworkAnalysis = {
       frameworkName: frameworkName as string,
@@ -93,6 +95,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       name_options: stored.name_options,
       selected_name_id: stored.selected_name_id,
       confirmed: true,
+      sync_snapshot,
     }
 
     await saveOutput(userId, 'framework', updated)

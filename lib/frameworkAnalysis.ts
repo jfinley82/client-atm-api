@@ -38,6 +38,8 @@ export type FrameworkAnalysis = {
   name_options: FrameworkNameOption[]
   selected_name_id: string
   confirmed: boolean
+  // Upstream dependency timestamps as of confirmation — see lib/syncDependencies.ts.
+  sync_snapshot?: Record<string, string>
 }
 
 // Fixed, deterministic phase palette — index 0 → blue, 1 → violet, 2 → emerald.

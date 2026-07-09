@@ -17,6 +17,8 @@ export type QualifierDeck = {
   system_prompt: string
   deployment_instructions: string
   confirmed: boolean
+  // Upstream dependency timestamps as of confirmation — see lib/syncDependencies.ts.
+  sync_snapshot?: Record<string, string>
 }
 
 export type QualifierPlatform = 'chatgpt' | 'claude'

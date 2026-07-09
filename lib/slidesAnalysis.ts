@@ -19,6 +19,8 @@ export type SlidesDeck = {
   duration_estimate: string
   slides: SlideEntry[]
   confirmed: boolean
+  // Upstream dependency timestamps as of confirmation — see lib/syncDependencies.ts.
+  sync_snapshot?: Record<string, string>
 }
 
 const SLIDES_PROMPT = `You are an expert curriculum designer helping a coach turn one of their validated Micro-Blueprints into an actual teaching deck they can record a video from.

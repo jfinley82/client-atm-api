@@ -25,6 +25,8 @@ export type CoreOffersAnalysis = {
   high_ticket: CoreOffer
   confirmed: boolean
   next_step_bridge?: string
+  // Upstream dependency timestamps as of confirmation — see lib/syncDependencies.ts.
+  sync_snapshot?: Record<string, string>
 }
 
 // Placeholder forward-bridge line shown once core_offers is confirmed. Static

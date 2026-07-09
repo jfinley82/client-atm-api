@@ -34,6 +34,8 @@ export type TransformationAnalysis = {
   selectedProblems: TransformationCandidate[]
   selected_id: string | null
   confirmed: boolean
+  // Upstream dependency timestamps as of confirmation — see lib/syncDependencies.ts.
+  sync_snapshot?: Record<string, string>
 }
 
 
