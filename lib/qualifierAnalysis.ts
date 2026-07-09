@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
 import { extractJson } from './aiJson'
+import { logApiCost } from './apiCostLog'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -50,6 +51,7 @@ function asString(v: unknown): string {
 }
 
 export async function generateQualifier(
+  userId: string,
   coachName: string,
   audience: unknown,
   selectedBlueprint: unknown,
@@ -76,6 +78,8 @@ Generate the system_prompt and deployment_instructions now.`
     system: voiceContext ? `${QUALIFIER_PROMPT}\n\n${voiceContext}` : QUALIFIER_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
   })
+
+  await logApiCost(userId, 'qualifier', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens)
 
   const textBlock = message.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined
   const text = textBlock?.text ?? ''

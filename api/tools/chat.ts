@@ -5,6 +5,7 @@ import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { getSavedOutput, saveOutput } from '../../lib/savedOutputs'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from '../../lib/promptGuidelines'
+import { logApiCost } from '../../lib/apiCostLog'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -640,6 +641,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         content: m.content,
       })),
     })
+
+    // Same tool_type -> saved-output key mapping used below for saveToolType
+    // (matcher's intake is logged under 'matcher_intake', not the retired
+    // bare 'matcher' key).
+    await logApiCost(
+      userId,
+      tool_type === 'matcher' ? 'matcher_intake' : tool_type,
+      'claude-sonnet-5',
+      message.usage.input_tokens,
+      message.usage.output_tokens
+    )
 
     const responseText = message.content[0]?.type === 'text' ? message.content[0].text : ''
 

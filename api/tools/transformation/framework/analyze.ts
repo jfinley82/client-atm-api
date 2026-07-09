@@ -90,6 +90,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const voiceContext = await getVoiceContext(userId)
     const generated = await generateFramework(
+      userId,
       transformationContext,
       stripSessionHistory(audienceRow!.content),
       voiceContext

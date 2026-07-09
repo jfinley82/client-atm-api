@@ -73,6 +73,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const generated = await generateSlides(
+      userId,
       frameworkContext,
       blueprintGate.card,
       audienceRow ? stripSessionHistory(audienceRow.content) : {},

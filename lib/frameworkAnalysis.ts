@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
 import { extractJson } from './aiJson'
+import { logApiCost } from './apiCostLog'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -150,6 +151,7 @@ function coerceNameOptions(raw: unknown): FrameworkNameOption[] {
 }
 
 export async function generateFramework(
+  userId: string,
   transformation: unknown,
   audience: unknown,
   voiceContext?: string
@@ -167,6 +169,8 @@ Generate the results framework now.`
     system: voiceContext ? `${FRAMEWORK_PROMPT}\n\n${voiceContext}` : FRAMEWORK_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
   })
+
+  await logApiCost(userId, 'framework', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens)
 
   // find(), not content[0] — matches the defensive pattern used across this
   // app so a future thinking-mode change doesn't silently break parsing.

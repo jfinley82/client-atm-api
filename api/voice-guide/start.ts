@@ -30,7 +30,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const talkingSample = typeof body.talkingSample === 'string' ? body.talkingSample : undefined
 
   try {
-    const turn = await startInterview(writingSample, talkingSample)
+    const turn = await startInterview(userId, writingSample, talkingSample)
     if (turn.type !== 'question') {
       console.error('[voice-guide/start] model returned type:"complete" on the opening turn')
       return res.status(502).json({ error: 'Interview failed to start' })

@@ -46,7 +46,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const qaLog = row.qa_log as QaEntry[]
     const updatedLog: QaEntry[] = qaLog.map((entry, i) => (i === qaLog.length - 1 ? { ...entry, answer } : entry))
 
-    const turn = await continueInterview(updatedLog)
+    const turn = await continueInterview(userId, updatedLog)
 
     if (turn.type === 'complete') {
       const { error } = await supabase

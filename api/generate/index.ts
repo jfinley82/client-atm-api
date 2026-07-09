@@ -5,6 +5,7 @@ import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { stripSessionHistory } from '../../lib/savedOutputs'
 import { getVoiceContext } from '../../lib/voiceGuide'
+import { logApiCost } from '../../lib/apiCostLog'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -72,6 +73,8 @@ Generate the complete micro-training system now.`
         system: `${GENERATION_PROMPT}\n\n${voiceContext}`,
         messages: [{ role: 'user', content: userMessage }],
       })
+
+      await logApiCost(userId, 'generate', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens)
 
       const text = message.content[0]?.type === 'text' ? message.content[0].text : ''
       const cleaned = text.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim()

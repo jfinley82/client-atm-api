@@ -66,7 +66,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return
         }
         const problem = byId.get(id)!
-        nextOffers[id] = await generateSuggestedOffer(problem, intake)
+        nextOffers[id] = await generateSuggestedOffer(userId, problem, intake)
       })
     )
 
