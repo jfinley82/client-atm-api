@@ -32,6 +32,19 @@
 // back with an empty array (or fails outright), the slides and qualifier
 // stages are skipped with a clear note — program/content still run either way,
 // since they don't need a card_id at all.
+//
+// core_offers auto-fulfillment: program and qualifier both gate on
+// core_offers.confirmed === true. Rather than requiring that as a separate
+// manual setup step every run, the script checks it first and — if not
+// already confirmed — automatically calls POST /api/matcher/core-offers/
+// analyze followed by POST .../confirm with the model's own generated
+// content accepted as-is, so a genuinely fresh test account can get all the
+// way through program and qualifier without hand-holding. If analyze itself
+// fails (a MORE fundamental prerequisite is missing — audience/
+// transformation/framework not confirmed, or not exactly 3 validated
+// blueprints), that's a real, deeper gap this script can't paper over —
+// program and qualifier fall back to the same graceful skip, with the
+// underlying error printed so it's clear WHY.
 
 import { readFileSync } from 'node:fs'
 
@@ -184,6 +197,98 @@ async function discoverCardId() {
   return cards[0].id
 }
 
+// Auto-fulfillment for the core_offers prerequisite (program and qualifier
+// both gate on core_offers.confirmed === true). Same philosophy as
+// discoverCardId: best-effort, not a hard pipeline stage. GETs the current
+// state first; if it's already confirmed, does nothing. Otherwise calls
+// POST /api/matcher/core-offers/analyze and immediately POSTs
+// /confirm with the model's own generated low_ticket/high_ticket accepted
+// as-is, so a truly fresh account can get all the way through program and
+// qualifier without a separate manual step. If analyze itself 400s, that
+// means a MORE fundamental prerequisite is missing (audience/transformation/
+// framework not confirmed, or not exactly 3 validated blueprints) -
+// auto-fulfillment only covers core_offers itself, so this falls back to the
+// same graceful skip rather than trying to chase the whole chain. Never
+// exits the process.
+async function ensureCoreOffersConfirmed() {
+  const analyzePath = '/api/matcher/core-offers/analyze'
+  const confirmPath = '/api/matcher/core-offers/confirm'
+
+  let checkRes
+  try {
+    checkRes = await fetch(`${base}${analyzePath}`, { headers: { Authorization: `Bearer ${token}` } })
+  } catch (e) {
+    console.log(`  check failed: network error calling GET ${analyzePath} (${e.message}) — program/qualifier will be skipped`)
+    return false
+  }
+
+  if (checkRes.ok) {
+    const text = await checkRes.text()
+    let existing
+    try { existing = JSON.parse(text) } catch { existing = null }
+    if (existing?.confirmed === true) {
+      console.log('  core_offers: already confirmed for this account — nothing to do')
+      return true
+    }
+    console.log('  core_offers: generated but not yet confirmed — auto-fulfilling now (POST analyze, then POST confirm)')
+  } else if (checkRes.status === 404) {
+    console.log('  core_offers: not yet generated for this account — auto-fulfilling now (POST analyze, then POST confirm)')
+  } else {
+    const text = await checkRes.text()
+    console.log(`  check failed: GET ${analyzePath} returned HTTP ${checkRes.status} — program/qualifier will be skipped\n    ${trunc(text, 300)}`)
+    return false
+  }
+
+  let analyzeRes
+  try {
+    analyzeRes = await fetch(`${base}${analyzePath}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({}),
+    })
+  } catch (e) {
+    console.log(`  auto-fulfill failed: network error calling POST ${analyzePath} (${e.message}) — program/qualifier will be skipped`)
+    return false
+  }
+  const analyzeText = await analyzeRes.text()
+  if (!analyzeRes.ok) {
+    console.log(
+      `  auto-fulfill failed: POST ${analyzePath} returned HTTP ${analyzeRes.status} — program/qualifier will be skipped\n` +
+      `    ${trunc(analyzeText, 300)}\n` +
+      `    (this usually means a MORE fundamental prerequisite is missing — audience/transformation/framework not\n` +
+      `    confirmed, or not exactly 3 validated blueprints — auto-fulfillment only covers core_offers itself)`
+    )
+    return false
+  }
+  let analyzed
+  try {
+    analyzed = JSON.parse(analyzeText)
+  } catch {
+    console.log(`  auto-fulfill failed: POST ${analyzePath} returned non-JSON — program/qualifier will be skipped`)
+    return false
+  }
+  console.log(`  auto-fulfill: generated low_ticket "${trunc(analyzed.low_ticket?.name, 50)}" + high_ticket "${trunc(analyzed.high_ticket?.name, 50)}"`)
+
+  let confirmRes
+  try {
+    confirmRes = await fetch(`${base}${confirmPath}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ low_ticket: analyzed.low_ticket, high_ticket: analyzed.high_ticket }),
+    })
+  } catch (e) {
+    console.log(`  auto-fulfill failed: network error calling POST ${confirmPath} (${e.message}) — program/qualifier will be skipped`)
+    return false
+  }
+  const confirmText = await confirmRes.text()
+  if (!confirmRes.ok) {
+    console.log(`  auto-fulfill failed: POST ${confirmPath} returned HTTP ${confirmRes.status} — program/qualifier will be skipped\n    ${trunc(confirmText, 300)}`)
+    return false
+  }
+  console.log('  auto-fulfill: core_offers confirmed — program/qualifier will proceed')
+  return true
+}
+
 function assertStage(condition, stageLabel, detail) {
   if (condition) return
   console.error(`\n✖ STAGE FAILED: ${stageLabel}\n  ${detail}`)
@@ -217,12 +322,16 @@ if (!explicitCardId) {
   console.log('━'.repeat(70))
 }
 
+console.log('core_offers prerequisite check (program + qualifier):')
+const coreOffersReady = await ensureCoreOffersConfirmed()
+console.log('━'.repeat(70))
+
 const allIssues = []   // soft anomalies across every stage — flips final VERDICT
 let stagesRun = 0
 
-// ── program ──
-console.log('\n[program] POST /api/toolkits/program/analyze')
-{
+// ── program (requires core_offers confirmed) ──
+if (coreOffersReady) {
+  console.log('\n[program] POST /api/toolkits/program/analyze')
   const result = await postJson('/api/toolkits/program/analyze', {}, 'program/analyze')
   stagesRun++
   assertStage(!!result.program_name, 'program/analyze', 'program_name missing/empty')
@@ -249,6 +358,8 @@ console.log('\n[program] POST /api/toolkits/program/analyze')
   allIssues.push(...checkDistinctText(result.weekly_breakdown, (w) => w.client_milestone, 'program.weekly_breakdown[].client_milestone'))
   allIssues.push(...checkDistinctText(result.deliverables.map((d) => ({ d })), (x) => x.d, 'program.deliverables'))
   reportTokenProximity('program', result, allIssues)
+} else {
+  console.log('\n[program] SKIPPED — core_offers could not be confirmed (see prerequisite check above)')
 }
 
 // ── content (twice: default/skipped intake, then explicit intake) ──
@@ -314,8 +425,8 @@ if (cardId) {
   console.log('\n[slides] SKIPPED — no --card-id provided')
 }
 
-// ── qualifier (requires --card-id) ──
-if (cardId) {
+// ── qualifier (requires --card-id AND core_offers confirmed) ──
+if (cardId && coreOffersReady) {
   console.log(`\n[qualifier] POST /api/toolkits/qualifier/analyze (platform=${platform})`)
   const result = await postJson('/api/toolkits/qualifier/analyze', { card_id: cardId, platform }, 'qualifier/analyze')
   stagesRun++
@@ -338,15 +449,20 @@ if (cardId) {
   const empties = deepEmptyFields(result)
   if (empties.length) allIssues.push(...empties.map((e) => `qualifier: empty field — ${e}`))
   reportTokenProximity('qualifier', result, allIssues)
-} else {
+} else if (!cardId) {
   console.log('\n[qualifier] SKIPPED — no --card-id provided')
+} else {
+  console.log('\n[qualifier] SKIPPED — core_offers could not be confirmed (see prerequisite check above)')
 }
 
 // ─── summary ─────────────────────────────────────────────────────────────────
 console.log('\n' + '━'.repeat(70))
 console.log('SUMMARY')
 console.log('━'.repeat(70))
-console.log(`Stages run: ${stagesRun} / 4 tool endpoints (program, content×2, slides, qualifier)${cardId ? '' : ' — slides/qualifier skipped (no --card-id)'}`)
+const skipNotes = []
+if (!coreOffersReady) skipNotes.push('program/qualifier skipped (core_offers could not be confirmed)')
+if (!cardId) skipNotes.push('slides/qualifier skipped (no validated card_id)')
+console.log(`Stages run: ${stagesRun} / 4 tool endpoints (program, content×2, slides, qualifier)${skipNotes.length ? ' — ' + skipNotes.join('; ') : ''}`)
 console.log('\nAnomaly scan:')
 console.log('  narration-leak scan: not applicable — no conversational message channel in any of these 4 tools, only direct JSON responses')
 if (allIssues.length) allIssues.forEach((i) => console.log(`  ⚠ ${i}`))

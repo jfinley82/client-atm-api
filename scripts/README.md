@@ -258,15 +258,51 @@ already have it cached: the response of `POST /api/matcher/finalize` returns
 the full inserted rows, including `id`. Grab one from there (or query
 `problem_solution_cards` directly), and pass it via `--card-id`.
 
+**As of the auto-discovery update**, you don't actually need to do any of
+this by hand anymore — see "card_id auto-discovery" below.
+
+## card_id auto-discovery
+
+If `--card-id` is omitted, the script calls `GET /api/matcher/cards` (added
+specifically to fill the gap above) and uses the first validated Blueprint
+returned. `--card-id` remains a valid override for testing one specific
+Blueprint. If discovery comes back with an empty array, a non-200 response,
+or a network error, `slides`/`qualifier` fall back to the existing graceful
+skip — `program`/`content` are unaffected either way, since neither needs a
+`card_id`.
+
+## core_offers auto-fulfillment
+
+`program` and `qualifier` both gate on `core_offers.confirmed === true`.
+Rather than requiring that as a separate manual setup step every run, the
+script checks it first (`GET /api/matcher/core-offers/analyze`) and — if not
+already confirmed — automatically calls `POST /api/matcher/core-offers/analyze`
+followed by `POST .../confirm` with the model's own generated
+`low_ticket`/`high_ticket` accepted as-is, printing each step clearly (same
+transparency as card_id discovery). This means a genuinely fresh test
+account can get all the way through `program` and `qualifier` with zero
+manual setup.
+
+If the `analyze` call itself fails, that means a **more fundamental**
+prerequisite is missing — audience/transformation/framework not confirmed,
+or not exactly 3 validated blueprints — auto-fulfillment only covers
+`core_offers` itself, not the whole upstream chain. `program`/`qualifier`
+fall back to the same graceful skip, with the underlying error printed so
+it's clear *why* (e.g. `transformation_not_confirmed`), rather than a
+confusing downstream failure.
+
 ## What it runs
 
-1. `POST /api/toolkits/program/analyze` — no body required
+1. `POST /api/toolkits/program/analyze` — no body required (skipped if
+   `core_offers` couldn't be confirmed — see above)
 2. `POST /api/toolkits/content/analyze` — run **twice**: once with no body
    (default/skipped intake) and once with an explicit
    `{ platform: 'LinkedIn', tone: 'professional' }`, to exercise both the
    default-fallback path and the explicit-intake path
-3. `POST /api/toolkits/slides/analyze` — `{ card_id }` (skipped without `--card-id`)
-4. `POST /api/toolkits/qualifier/analyze` — `{ card_id, platform }` (skipped without `--card-id`)
+3. `POST /api/toolkits/slides/analyze` — `{ card_id }` (skipped without a
+   resolved `card_id`)
+4. `POST /api/toolkits/qualifier/analyze` — `{ card_id, platform }` (skipped
+   without a resolved `card_id` OR if `core_offers` couldn't be confirmed)
 
 **Hard checks** (exit immediately with `STAGE FAILED: <exact stage>`):
 `program`'s `weekly_breakdown.length === total_weeks` and `deliverables`
@@ -311,3 +347,13 @@ templated content across all 4 tools' array fields, a response near its
 `502 generation_truncated` response (correctly a hard failure, distinguished
 from the soft "close to ceiling" warning), and running with `--card-id`
 omitted (slides/qualifier skip gracefully rather than erroring).
+
+Also verified: card_id auto-discovery (found/empty/error responses from
+`GET /api/matcher/cards`, plus confirming `--card-id` still bypasses
+discovery entirely) and core_offers auto-fulfillment (already confirmed —
+nothing to do; not yet generated — analyze+confirm both succeed;
+`analyze` itself failing with a deeper prerequisite error — graceful skip
+with the real error surfaced; `confirm` failing — graceful skip). All
+combinations exit `0` (clean) when `content` still succeeds, since
+`program`/`slides`/`qualifier` being skipped is a legitimate outcome, not a
+script failure.
