@@ -4,6 +4,7 @@ import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { getSavedOutput } from '../../lib/savedOutputs'
 import { MatcherAnalysis } from '../../lib/matcherAnalysis'
+import { stampSyncSnapshot } from '../../lib/syncDependencies'
 
 type FinalizeCard = {
   id: string
@@ -66,6 +67,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Submitted ids must exactly match the current selected_ids' })
     }
 
+    // matcher_analysis itself has no confirm step of its own — finalize IS the
+    // confirm moment for these cards, so they're stamped against
+    // matcher_analysis's OWN generation inputs (audience/transformation/
+    // matcher_intake), not against matcher_analysis directly. See
+    // lib/syncDependencies.ts.
+    const sync_snapshot = await stampSyncSnapshot(userId, 'problem_solution_cards')
+
     const rows = cards.map((c) => ({
       user_id: userId,
       card_name: c.card_name,
@@ -73,6 +81,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       reasoning: c.reasoning,
       suggested_offer: c.suggested_offer ?? null,
       validated: true,
+      sync_snapshot,
     }))
 
     const { data, error } = await supabase.from('problem_solution_cards').insert(rows).select()

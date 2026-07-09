@@ -29,6 +29,8 @@ export type ProgramAnalysis = {
   suggested_starting_price: string
   suggested_capacity_per_month: number
   confirmed: boolean
+  // Upstream dependency timestamps as of confirmation — see lib/syncDependencies.ts.
+  sync_snapshot?: Record<string, string>
 }
 
 const PROGRAM_PROMPT = `You are an expert program designer helping a coach turn their confirmed high-ticket core offer into an actual sellable program — a real session structure a client could enroll in tomorrow.

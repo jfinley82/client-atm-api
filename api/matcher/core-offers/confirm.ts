@@ -3,6 +3,7 @@ import { requireActiveUser } from '../../../lib/auth'
 import { setCors } from '../../../lib/cors'
 import { getSavedOutput, saveOutput } from '../../../lib/savedOutputs'
 import { CoreOffer, CoreOffersAnalysis, NEXT_STEP_BRIDGE } from '../../../lib/coreOffersAnalysis'
+import { stampSyncSnapshot } from '../../../lib/syncDependencies'
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === 'string' && v.trim().length > 0
@@ -48,11 +49,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const existing = await getSavedOutput(userId, 'core_offers')
     if (!existing) return res.status(404).json({ error: 'No core offers generated yet' })
 
+    const sync_snapshot = await stampSyncSnapshot(userId, 'core_offers')
+
     const updated: CoreOffersAnalysis = {
       low_ticket,
       high_ticket,
       confirmed: true,
       next_step_bridge: NEXT_STEP_BRIDGE,
+      sync_snapshot,
     }
 
     await saveOutput(userId, 'core_offers', updated)

@@ -16,6 +16,8 @@ export type ContentAnalysis = {
   posts: ContentPost[]
   emails: ContentEmail[]
   confirmed: boolean
+  // Upstream dependency timestamps as of confirmation — see lib/syncDependencies.ts.
+  sync_snapshot?: Record<string, string>
 }
 
 // Skippable 2-question intake, same short-intake pattern as Matcher's
