@@ -87,6 +87,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const coachName = typeof gateUser.name === 'string' && gateUser.name.trim().length > 0 ? gateUser.name : 'your coach'
 
     const generated = await generateQualifier(
+      userId,
       coachName,
       stripSessionHistory(audienceRow!.content),
       blueprintGate.card,

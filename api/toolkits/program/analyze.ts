@@ -74,6 +74,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const generated = await generateProgram(
+      userId,
       coreOffersGate.coreOffers.high_ticket,
       frameworkContext,
       stripSessionHistory(audienceRow!.content),

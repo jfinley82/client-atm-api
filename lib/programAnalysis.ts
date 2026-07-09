@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
 import { extractJson } from './aiJson'
+import { logApiCost } from './apiCostLog'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -78,6 +79,7 @@ function coerceWeeklyEntry(raw: unknown, fallbackWeek: number): WeeklyBreakdownE
 }
 
 export async function generateProgram(
+  userId: string,
   highTicketOffer: unknown,
   framework: unknown,
   audience: unknown,
@@ -98,6 +100,8 @@ Generate the program now.`
     system: voiceContext ? `${PROGRAM_PROMPT}\n\n${voiceContext}` : PROGRAM_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
   })
+
+  await logApiCost(userId, 'program', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens)
 
   const textBlock = message.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined
   const text = textBlock?.text ?? ''

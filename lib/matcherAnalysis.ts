@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
 import { extractJson } from './aiJson'
+import { logApiCost } from './apiCostLog'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -114,6 +115,7 @@ function computeMatchStrength(f: MatchFactors): number {
 }
 
 export async function generateTop10(
+  userId: string,
   audience: unknown,
   transformation: unknown,
   intake: MatcherIntake,
@@ -136,6 +138,8 @@ Generate the top 10 monetizable problems now.`
     system: voiceContext ? `${TOP_10_PROMPT}\n\n${voiceContext}` : TOP_10_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
   })
+
+  await logApiCost(userId, 'matcher_analysis', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens)
 
   const text = message.content[0]?.type === 'text' ? message.content[0].text : ''
   const parsed = extractJson(text)
@@ -180,6 +184,7 @@ ${GENDER_NEUTRAL_INSTRUCTION}
 ${STYLE_GUIDELINES}`
 
 export async function generateSuggestedOffer(
+  userId: string,
   problem: Top10Problem,
   intake: MatcherIntake,
   voiceContext?: string
@@ -195,6 +200,8 @@ Generate the suggested_offer now.`
     system: voiceContext ? `${SUGGESTED_OFFER_PROMPT}\n\n${voiceContext}` : SUGGESTED_OFFER_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
   })
+
+  await logApiCost(userId, 'matcher_analysis', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens)
 
   const text = message.content[0]?.type === 'text' ? message.content[0].text : ''
   const parsed = extractJson(text)
