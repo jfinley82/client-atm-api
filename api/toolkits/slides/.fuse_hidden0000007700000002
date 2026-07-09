@@ -8,7 +8,7 @@ import { checkFrameworkConfirmed, getValidatedBlueprint, getByCardIdEntry, saveB
 import { getVoiceContext } from '../../../lib/voiceGuide'
 import { GenerationParseError } from '../../../lib/aiJson'
 
-// Toolkit: Micro-Training Creator (slides). Generates a real teaching
+// Toolkit: Micro-Training Slide Creator (slides). Generates a real teaching
 // deck for ONE of the member's validated Blueprints.
 //
 // Gate: framework.confirmed AND the specific member-selected card_id is
