@@ -17,7 +17,7 @@ import { GenerationParseError } from '../../../lib/aiJson'
 
 const VALID_PLATFORMS: QualifierPlatform[] = ['chatgpt', 'claude']
 
-// Toolkit: AI Coach Builder (qualifier). Generates a copy-paste system
+// Toolkit: AI Lead Qualifier (qualifier). Generates a copy-paste system
 // prompt for a ChatGPT/Claude assistant that qualifies a prospect around ONE
 // validated Blueprint and steers toward book-a-call / low_ticket / high_ticket.
 //
@@ -87,7 +87,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const coachName = typeof gateUser.name === 'string' && gateUser.name.trim().length > 0 ? gateUser.name : 'your coach'
 
     const generated = await generateQualifier(
-      userId,
       coachName,
       stripSessionHistory(audienceRow!.content),
       blueprintGate.card,
