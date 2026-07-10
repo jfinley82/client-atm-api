@@ -35,6 +35,11 @@ function hasAsset(row: { content: unknown } | null): boolean {
   return !!map && Object.keys(map).length > 0
 }
 
+function hasConfirmedAccountAsset(row: { content: unknown } | null): boolean {
+  const c = obj(row?.content)
+  return !!c && c.confirmed === true
+}
+
 export async function getMemberSnapshot(userId: string): Promise<MemberSnapshot> {
   const [
     userRes,
@@ -76,7 +81,7 @@ export async function getMemberSnapshot(userId: string): Promise<MemberSnapshot>
   const transformDone = done.get('transformation') === true
   const monetizeDone = done.get('matcher') === true
   const blueprintDone = done.get('blueprint') === true
-  const assetsDone = hasAsset(program) || hasAsset(content) || hasAsset(slides) || hasAsset(qualifier)
+  const assetsDone = hasAsset(slides) || hasAsset(qualifier) || hasConfirmedAccountAsset(program) || hasConfirmedAccountAsset(content)
 
   const raw = [
     { key: 'watch_training', label: 'Watch the full training', done: watched },
