@@ -9,6 +9,7 @@ import { MatcherIntake } from '../../../lib/matcherAnalysis'
 import { generateCoreOffers, CoreOffersAnalysis } from '../../../lib/coreOffersAnalysis'
 import { getVoiceContext } from '../../../lib/voiceGuide'
 import { GenerationParseError } from '../../../lib/aiJson'
+import { checkSyncGate } from '../../../lib/syncGate'
 
 // Step 3 capstone: Core Offers. Runs only once everything upstream is
 // genuinely done — not merely present:
@@ -101,6 +102,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     )
     if (!confirmedCandidate) {
       return res.status(400).json({ error: 'transformation_not_confirmed' })
+    }
+
+    const syncGate = await checkSyncGate(userId, 'core_offers')
+    if (!syncGate.ok) {
+      return res.status(409).json({ error: 'out_of_sync', blocking: syncGate.blocking, stale_items: syncGate.stale_items })
     }
 
     const confirmedTransformationContext = {

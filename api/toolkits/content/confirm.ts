@@ -4,6 +4,7 @@ import { setCors } from '../../../lib/cors'
 import { getSavedOutput, saveOutput } from '../../../lib/savedOutputs'
 import { ContentAnalysis, ContentPost, ContentEmail } from '../../../lib/contentAnalysis'
 import { stampSyncSnapshot } from '../../../lib/syncDependencies'
+import { checkSyncGate } from '../../../lib/syncGate'
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === 'string' && v.trim().length > 0
@@ -51,6 +52,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const existing = await getSavedOutput(userId, 'content')
     if (!existing) return res.status(404).json({ error: 'No content generated yet' })
+
+    const syncGate = await checkSyncGate(userId, 'content')
+    if (!syncGate.ok) {
+      return res.status(409).json({ error: 'out_of_sync', blocking: syncGate.blocking, stale_items: syncGate.stale_items })
+    }
 
     const sync_snapshot = await stampSyncSnapshot(userId, 'content')
 

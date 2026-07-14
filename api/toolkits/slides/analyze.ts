@@ -7,6 +7,7 @@ import { generateSlides, SlidesDeck } from '../../../lib/slidesAnalysis'
 import { checkFrameworkConfirmed, getValidatedBlueprint, getByCardIdEntry, saveByCardIdEntry, ByCardIdContent } from '../../../lib/toolkitsShared'
 import { getVoiceContext } from '../../../lib/voiceGuide'
 import { GenerationParseError } from '../../../lib/aiJson'
+import { checkSyncGate } from '../../../lib/syncGate'
 
 // Toolkit: Micro-Training Creator (slides). Generates a real teaching
 // deck for ONE of the member's validated Blueprints.
@@ -62,6 +63,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const blueprintGate = await getValidatedBlueprint(userId, body.card_id)
     if (!blueprintGate.ok) return res.status(400).json({ error: blueprintGate.error })
+
+    const syncGate = await checkSyncGate(userId, 'slides')
+    if (!syncGate.ok) {
+      return res.status(409).json({ error: 'out_of_sync', blocking: syncGate.blocking, stale_items: syncGate.stale_items })
+    }
 
     const audienceRow = await getSavedOutput(userId, 'audience')
     const voiceContext = await getVoiceContext(userId)

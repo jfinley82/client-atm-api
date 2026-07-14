@@ -14,6 +14,7 @@ import {
 } from '../../../lib/toolkitsShared'
 import { getVoiceContext } from '../../../lib/voiceGuide'
 import { GenerationParseError } from '../../../lib/aiJson'
+import { checkSyncGate } from '../../../lib/syncGate'
 
 const VALID_PLATFORMS: QualifierPlatform[] = ['chatgpt', 'claude']
 
@@ -79,6 +80,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const coreOffersGate = await checkCoreOffersConfirmed(userId)
     if (!coreOffersGate.ok) return res.status(400).json({ error: coreOffersGate.error })
+
+    const syncGate = await checkSyncGate(userId, 'qualifier')
+    if (!syncGate.ok) {
+      return res.status(409).json({ error: 'out_of_sync', blocking: syncGate.blocking, stale_items: syncGate.stale_items })
+    }
 
     const audienceRow = await getSavedOutput(userId, 'audience')
     const voiceContext = await getVoiceContext(userId)

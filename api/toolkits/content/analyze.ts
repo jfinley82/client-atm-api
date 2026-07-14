@@ -8,6 +8,7 @@ import { checkAudienceComplete, checkFrameworkConfirmed } from '../../../lib/too
 import { CoreOffersAnalysis } from '../../../lib/coreOffersAnalysis'
 import { getVoiceContext } from '../../../lib/voiceGuide'
 import { GenerationParseError } from '../../../lib/aiJson'
+import { checkSyncGate } from '../../../lib/syncGate'
 
 // Toolkit: Content Creator (content). Generates a batch of social posts and
 // nurture emails from the coach's confirmed Framework and Audience data.
@@ -55,6 +56,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const frameworkGate = await checkFrameworkConfirmed(userId)
     if (!frameworkGate.ok) return res.status(400).json({ error: frameworkGate.error })
+
+    const syncGate = await checkSyncGate(userId, 'content')
+    if (!syncGate.ok) {
+      return res.status(409).json({ error: 'out_of_sync', blocking: syncGate.blocking, stale_items: syncGate.stale_items })
+    }
 
     const [audienceRow, coreOffersRow] = await Promise.all([
       getSavedOutput(userId, 'audience'),

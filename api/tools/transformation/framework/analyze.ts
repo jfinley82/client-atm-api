@@ -13,6 +13,7 @@ import {
 } from '../../../../lib/frameworkAnalysis'
 import { getVoiceContext } from '../../../../lib/voiceGuide'
 import { GenerationParseError } from '../../../../lib/aiJson'
+import { checkSyncGate } from '../../../../lib/syncGate'
 
 // Transformation Part B: Your Results Framework.
 // GET: return the stored framework (404 if none generated yet).
@@ -77,6 +78,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const confirmedCandidate = analysis.selectedProblems.find((c) => c.id === analysis.selected_id)
     if (!confirmedCandidate) {
       return res.status(400).json({ error: 'transformation_not_confirmed' })
+    }
+
+    const syncGate = await checkSyncGate(userId, 'framework')
+    if (!syncGate.ok) {
+      return res.status(409).json({ error: 'out_of_sync', blocking: syncGate.blocking, stale_items: syncGate.stale_items })
     }
 
     const transformationContext = {
