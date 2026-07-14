@@ -4,6 +4,7 @@ import { setCors } from '../../../lib/cors'
 import { getSavedOutput, saveOutput } from '../../../lib/savedOutputs'
 import { CoreOffer, CoreOffersAnalysis, NEXT_STEP_BRIDGE } from '../../../lib/coreOffersAnalysis'
 import { stampSyncSnapshot } from '../../../lib/syncDependencies'
+import { checkSyncGate } from '../../../lib/syncGate'
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === 'string' && v.trim().length > 0
@@ -48,6 +49,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const existing = await getSavedOutput(userId, 'core_offers')
     if (!existing) return res.status(404).json({ error: 'No core offers generated yet' })
+
+    const syncGate = await checkSyncGate(userId, 'core_offers')
+    if (!syncGate.ok) {
+      return res.status(409).json({ error: 'out_of_sync', blocking: syncGate.blocking, stale_items: syncGate.stale_items })
+    }
 
     const sync_snapshot = await stampSyncSnapshot(userId, 'core_offers')
 

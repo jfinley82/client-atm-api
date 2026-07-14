@@ -4,6 +4,7 @@ import { setCors } from '../../../../lib/cors'
 import { getSavedOutput, saveOutput } from '../../../../lib/savedOutputs'
 import { FrameworkAnalysis, FrameworkPhase, FrameworkStep, PHASE_COLORS } from '../../../../lib/frameworkAnalysis'
 import { stampSyncSnapshot } from '../../../../lib/syncDependencies'
+import { checkSyncGate } from '../../../../lib/syncGate'
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === 'string' && v.trim().length > 0
@@ -72,6 +73,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const frameworkRow = await getSavedOutput(userId, 'framework')
     if (!frameworkRow) return res.status(404).json({ error: 'No framework generated yet' })
+
+    const syncGate = await checkSyncGate(userId, 'framework')
+    if (!syncGate.ok) {
+      return res.status(409).json({ error: 'out_of_sync', blocking: syncGate.blocking, stale_items: syncGate.stale_items })
+    }
 
     const stored = frameworkRow.content as FrameworkAnalysis
 
