@@ -6,6 +6,7 @@ import { setCors } from '../../lib/cors'
 import { stripSessionHistory } from '../../lib/savedOutputs'
 import { getVoiceContext } from '../../lib/voiceGuide'
 import { logApiCost } from '../../lib/apiCostLog'
+import { requireCapability } from '../../lib/entitlements'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -26,15 +27,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'card_id required' })
     }
 
-    // Tier gate — generation requires a paid membership tier
-    const { data: gateUser } = await supabase
-      .from('users')
-      .select('membership_tier')
-      .eq('id', userId)
-      .single()
-    if (!gateUser || !['low_ticket', 'full'].includes(gateUser.membership_tier)) {
-      return res.status(403).json({ error: 'upgrade_required' })
-    }
+    // Capability gate — toolkits require beta/full (admin bypasses); see lib/entitlements.ts
+    if (!(await requireCapability(userId, 'toolkits', res))) return
 
     try {
       // Fetch the card and verify ownership

@@ -4,12 +4,12 @@ import { requireActiveUser } from '../../../lib/auth'
 import { setCors } from '../../../lib/cors'
 import { getMtmSessionProgress } from '../../../lib/progress'
 
-const VALID_TIERS = ['free', 'low_ticket', 'full']
+const VALID_TIERS = ['free', 'low_ticket', 'full', 'beta', 'workshop']
 const VALID_STATUSES = ['active', 'suspended']
 
 // Safe user columns to expose to admins (never password_hash)
 const MEMBER_COLUMNS =
-  'id, email, name, profession, has_paid, quiz_completed, quiz_score, video_watched, membership_tier, status, role, created_at'
+  'id, email, name, profession, has_paid, quiz_completed, quiz_score, video_watched, membership_tier, status, role, add_ons, created_at'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
@@ -53,12 +53,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   if (req.method === 'PATCH') {
-    const { membership_tier, status } = req.body || {}
+    const { membership_tier, status, add_ons } = req.body || {}
     const updates: Record<string, unknown> = {}
 
     if (membership_tier !== undefined) {
       if (!VALID_TIERS.includes(membership_tier)) {
-        return res.status(400).json({ error: "membership_tier must be 'free', 'low_ticket', or 'full'" })
+        return res.status(400).json({ error: `membership_tier must be one of: ${VALID_TIERS.join(', ')}` })
       }
       updates.membership_tier = membership_tier
     }
@@ -70,8 +70,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       updates.status = status
     }
 
+    // Standalone add-on grants (currently just funnel_builder) — lets admins
+    // assign the Funnel Builder without manual SQL. Only boolean values for
+    // known keys; the whole object replaces the stored one, so send the full
+    // desired state (there's one key today, so this is not a practical limit).
+    if (add_ons !== undefined) {
+      const validAddOnKeys = ['funnel_builder']
+      if (
+        !add_ons ||
+        typeof add_ons !== 'object' ||
+        Array.isArray(add_ons) ||
+        !Object.entries(add_ons).every(([k, v]) => validAddOnKeys.includes(k) && typeof v === 'boolean')
+      ) {
+        return res.status(400).json({ error: "add_ons must be an object of boolean flags; known keys: 'funnel_builder'" })
+      }
+      updates.add_ons = add_ons
+    }
+
     if (Object.keys(updates).length === 0) {
-      return res.status(400).json({ error: 'Provide membership_tier and/or status' })
+      return res.status(400).json({ error: 'Provide membership_tier, status, and/or add_ons' })
     }
 
     try {

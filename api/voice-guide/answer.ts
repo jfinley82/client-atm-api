@@ -4,6 +4,7 @@ import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { continueInterview, QaEntry } from '../../lib/voiceGuide'
 import { GenerationParseError } from '../../lib/aiJson'
+import { requireCapability } from '../../lib/entitlements'
 
 // Appends the answer to the last (unanswered) qa_log entry, reconstructs the
 // full message history from qa_log, and continues the interview. On
@@ -16,15 +17,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const userId = await requireActiveUser(req, res)
   if (!userId) return
 
-  // Tier gate — AI generation requires a paid membership tier
-  const { data: gateUser } = await supabase
-    .from('users')
-    .select('membership_tier')
-    .eq('id', userId)
-    .single()
-  if (!gateUser || !['low_ticket', 'full'].includes(gateUser.membership_tier)) {
-    return res.status(403).json({ error: 'upgrade_required' })
-  }
+  // Capability gate — toolkits require beta/full (admin bypasses); see lib/entitlements.ts
+  if (!(await requireCapability(userId, 'toolkits', res))) return
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
   const { answer } = body

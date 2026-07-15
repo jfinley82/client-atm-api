@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { sendMagicLinkEmail } from '../../lib/email'
+import { hasCapability } from '../../lib/entitlements'
 import { setCors } from '../../lib/cors'
 import crypto from 'crypto'
 
@@ -21,7 +22,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Lookup only — do not create new users from this endpoint
     const { data: user } = await supabase
       .from('users')
-      .select('id, name, has_paid, status')
+      .select('id, name, has_paid, status, membership_tier, role')
       .eq('email', normalizedEmail)
       .maybeSingle()
 
@@ -30,9 +31,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(403).json({ error: 'account_suspended' })
     }
 
-    // Silently no-op for unknown emails or unpaid users.
-    // Same response in all cases so callers can't probe membership/paid status.
-    if (!user || !user.has_paid) {
+    // Silently no-op for unknown emails or tiers without app access (free) —
+    // app_login is the same tier-based capability the password login gates on,
+    // so unpaid workshop members CAN receive a link while free cannot.
+    // Same response in all cases so callers can't probe membership status.
+    if (!user || !hasCapability(user.membership_tier, user.role, 'app_login')) {
       return res.status(200).json({ ok: true })
     }
 

@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { requireActiveUser } from '../../../lib/auth'
+import { requireCapability } from '../../../lib/entitlements'
 import { setCors } from '../../../lib/cors'
 import { getSavedOutput, saveOutput } from '../../../lib/savedOutputs'
 import { CoreOffer, CoreOffersAnalysis, NEXT_STEP_BRIDGE } from '../../../lib/coreOffersAnalysis'
@@ -35,6 +36,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const userId = await requireActiveUser(req, res)
   if (!userId) return
+
+  // Capability gate — confirm/save is part of the toolkits capability (beta/full;
+  // admin bypasses), closing the analyze-gated-but-confirm-open gap.
+  if (!(await requireCapability(userId, 'toolkits', res))) return
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
   const { low_ticket, high_ticket } = body

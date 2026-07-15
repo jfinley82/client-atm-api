@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { supabase } from '../../../lib/supabase'
 import { requireActiveUser } from '../../../lib/auth'
+import { requireCapability } from '../../../lib/entitlements'
 import { setCors } from '../../../lib/cors'
 import { getSavedOutput, stripSessionHistory } from '../../../lib/savedOutputs'
 import { generateSlides, SlidesDeck } from '../../../lib/slidesAnalysis'
@@ -46,14 +46,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method !== 'POST') return res.status(405).end()
 
-  const { data: gateUser } = await supabase
-    .from('users')
-    .select('membership_tier')
-    .eq('id', userId)
-    .single()
-  if (!gateUser || !['low_ticket', 'full'].includes(gateUser.membership_tier)) {
-    return res.status(403).json({ error: 'upgrade_required' })
-  }
+  // Capability gate — toolkits require beta/full (admin bypasses); see lib/entitlements.ts
+  if (!(await requireCapability(userId, 'toolkits', res))) return
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
 

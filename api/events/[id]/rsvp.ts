@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
 import { requireActiveUser } from '../../../lib/auth'
+import { requireCapability } from '../../../lib/entitlements'
 import { setCors } from '../../../lib/cors'
 
 // POST /api/events/{id}/rsvp — records the member's RSVP for one event.
@@ -14,6 +15,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const userId = await requireActiveUser(req, res)
   if (!userId) return
+
+  // Office hours are a beta/full capability (admin bypasses) — enforced here,
+  // not just hidden in the UI, same as the events list.
+  if (!(await requireCapability(userId, 'office_hours', res))) return
 
   const rawId = req.query.id
   const eventId = Array.isArray(rawId) ? rawId[0] : rawId
