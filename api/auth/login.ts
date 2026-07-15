@@ -20,7 +20,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { data: user } = await supabase
       .from('users')
-      .select('id, email, name, has_paid, quiz_completed, quiz_score, video_watched, password_hash, status, membership_tier, role, created_at')
+      .select('id, email, name, has_paid, quiz_completed, quiz_score, video_watched, password_hash, status, membership_tier, role, add_ons, created_at')
       .eq('email', normalizedEmail)
       .maybeSingle()
 
@@ -64,7 +64,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         name: user.name,
         has_paid: user.has_paid,
         quiz_completed: user.quiz_completed,
-        video_watched: user.video_watched
+        video_watched: user.video_watched,
+        // Same gating fields /api/auth/me returns — so the frontend can derive
+        // capabilities immediately at login, not only after the next /me fetch.
+        membership_tier: user.membership_tier,
+        role: user.role,
+        add_ons: user.add_ons
       }
     })
 
