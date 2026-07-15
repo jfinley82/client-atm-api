@@ -4,6 +4,7 @@ import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { startInterview, QaEntry } from '../../lib/voiceGuide'
 import { GenerationParseError } from '../../lib/aiJson'
+import { requireCapability } from '../../lib/entitlements'
 
 // Resets/creates the voice_guides row for this user and kicks off a fresh
 // interview — including the writing/talking samples in the opening turn if
@@ -15,15 +16,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const userId = await requireActiveUser(req, res)
   if (!userId) return
 
-  // Tier gate — AI generation requires a paid membership tier
-  const { data: gateUser } = await supabase
-    .from('users')
-    .select('membership_tier')
-    .eq('id', userId)
-    .single()
-  if (!gateUser || !['low_ticket', 'full'].includes(gateUser.membership_tier)) {
-    return res.status(403).json({ error: 'upgrade_required' })
-  }
+  // Capability gate — toolkits require beta/full (admin bypasses); see lib/entitlements.ts
+  if (!(await requireCapability(userId, 'toolkits', res))) return
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
   const writingSample = typeof body.writingSample === 'string' ? body.writingSample : undefined

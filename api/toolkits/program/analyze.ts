@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { supabase } from '../../../lib/supabase'
 import { requireActiveUser } from '../../../lib/auth'
+import { requireCapability } from '../../../lib/entitlements'
 import { setCors } from '../../../lib/cors'
 import { getSavedOutput, saveOutput, stripSessionHistory } from '../../../lib/savedOutputs'
 import { generateProgram, ProgramAnalysis } from '../../../lib/programAnalysis'
@@ -44,15 +44,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method !== 'POST') return res.status(405).end()
 
-  // Tier gate — base tier, same as Audience/Transform/Matcher (not a new add-on)
-  const { data: gateUser } = await supabase
-    .from('users')
-    .select('membership_tier')
-    .eq('id', userId)
-    .single()
-  if (!gateUser || !['low_ticket', 'full'].includes(gateUser.membership_tier)) {
-    return res.status(403).json({ error: 'upgrade_required' })
-  }
+  // Capability gate — toolkits require beta/full (admin bypasses); see lib/entitlements.ts
+  if (!(await requireCapability(userId, 'toolkits', res))) return
 
   try {
     const audienceGate = await checkAudienceComplete(userId)

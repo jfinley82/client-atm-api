@@ -10,6 +10,7 @@ import { generateCoreOffers, CoreOffersAnalysis } from '../../../lib/coreOffersA
 import { getVoiceContext } from '../../../lib/voiceGuide'
 import { GenerationParseError } from '../../../lib/aiJson'
 import { checkSyncGate } from '../../../lib/syncGate'
+import { requireCapability } from '../../../lib/entitlements'
 
 // Step 3 capstone: Core Offers. Runs only once everything upstream is
 // genuinely done — not merely present:
@@ -49,15 +50,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method !== 'POST') return res.status(405).end()
 
-  // Tier gate — AI generation requires a paid membership tier
-  const { data: gateUser } = await supabase
-    .from('users')
-    .select('membership_tier')
-    .eq('id', userId)
-    .single()
-  if (!gateUser || !['low_ticket', 'full'].includes(gateUser.membership_tier)) {
-    return res.status(403).json({ error: 'upgrade_required' })
-  }
+  // Capability gate — Steps 1-3 are the method itself, so this is method_steps
+  // (every tier but free; admin bypasses), NOT the paid asset-toolkits gate.
+  if (!(await requireCapability(userId, 'method_steps', res))) return
 
   try {
     const [audienceRow, transformationAnalysisRow, frameworkRow, intakeRow, cardsResult] = await Promise.all([

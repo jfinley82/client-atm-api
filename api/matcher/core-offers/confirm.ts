@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { requireActiveUser } from '../../../lib/auth'
+import { requireCapability } from '../../../lib/entitlements'
 import { setCors } from '../../../lib/cors'
 import { getSavedOutput, saveOutput } from '../../../lib/savedOutputs'
 import { CoreOffer, CoreOffersAnalysis, NEXT_STEP_BRIDGE } from '../../../lib/coreOffersAnalysis'
@@ -35,6 +36,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const userId = await requireActiveUser(req, res)
   if (!userId) return
+
+  // Capability gate — confirm/save of a Step 1-3 output is part of the method
+  // itself, so method_steps (every tier but free; admin bypasses), NOT the paid
+  // asset-toolkits gate. Still closes the analyze-gated-but-confirm-open gap.
+  if (!(await requireCapability(userId, 'method_steps', res))) return
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
   const { low_ticket, high_ticket } = body

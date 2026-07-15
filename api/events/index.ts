@@ -1,11 +1,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
+import { requireCapability } from '../../lib/entitlements'
 import { setCors, noStore } from '../../lib/cors'
 
-// GET /api/events — the full events list (past and upcoming together). Not
-// tier-gated: a plain read of already-existing rows, no AI generation
-// involved, same convention as matcher/cards.ts.
+// GET /api/events — the full events list (past and upcoming together).
+// Gated by the office_hours capability (beta/full; admin bypasses) — the
+// six-profile membership model makes office hours a paid-tier feature, so
+// the events list is enforced server-side, not just hidden in the UI.
 //
 // Returns both past and upcoming events rather than splitting server-side —
 // the frontend's exact "Upcoming" / "Past Events" split rule couldn't be
@@ -22,6 +24,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const userId = await requireActiveUser(req, res)
   if (!userId) return
+
+  if (!(await requireCapability(userId, 'office_hours', res))) return
 
   try {
     const [eventsRes, rsvpsRes] = await Promise.all([

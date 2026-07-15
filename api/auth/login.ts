@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import bcrypt from 'bcryptjs'
 import { supabase } from '../../lib/supabase'
 import { createSessionToken, setSessionCookie } from '../../lib/auth'
+import { hasCapability } from '../../lib/entitlements'
 import { setCors } from '../../lib/cors'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -19,7 +20,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { data: user } = await supabase
       .from('users')
-      .select('id, email, name, has_paid, quiz_completed, quiz_score, video_watched, password_hash, status, created_at')
+      .select('id, email, name, has_paid, quiz_completed, quiz_score, video_watched, password_hash, status, membership_tier, role, created_at')
       .eq('email', normalizedEmail)
       .maybeSingle()
 
@@ -32,7 +33,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(403).json({ error: 'account_suspended' })
     }
 
-    if (!user.has_paid) {
+    // App access is a capability of the membership tier, not has_paid — the
+    // workshop tier is deliberately unpaid but can log in; free cannot.
+    // has_paid stays on the row as a payment fact, it just no longer gates login.
+    if (!hasCapability(user.membership_tier, user.role, 'app_login')) {
       return res.status(403).json({ error: 'Access restricted. Please complete your purchase.' })
     }
 

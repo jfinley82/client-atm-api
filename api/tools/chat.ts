@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import Anthropic from '@anthropic-ai/sdk'
-import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
+import { requireCapability } from '../../lib/entitlements'
 import { setCors } from '../../lib/cors'
 import { getSavedOutput, saveOutput } from '../../lib/savedOutputs'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from '../../lib/promptGuidelines'
@@ -559,15 +559,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const userId = await requireActiveUser(req, res)
   if (!userId) return
 
-  // Tier gate — AI generation requires a paid membership tier
-  const { data: gateUser } = await supabase
-    .from('users')
-    .select('membership_tier')
-    .eq('id', userId)
-    .single()
-  if (!gateUser || !['low_ticket', 'full'].includes(gateUser.membership_tier)) {
-    return res.status(403).json({ error: 'upgrade_required' })
-  }
+  // Capability gate — Steps 1-3 are the method itself, so this is method_steps
+  // (every tier but free; admin bypasses), NOT the paid asset-toolkits gate.
+  if (!(await requireCapability(userId, 'method_steps', res))) return
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
   const { tool_type, current_step } = body

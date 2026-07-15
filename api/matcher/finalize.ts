@@ -5,6 +5,7 @@ import { setCors } from '../../lib/cors'
 import { getSavedOutput } from '../../lib/savedOutputs'
 import { MatcherAnalysis } from '../../lib/matcherAnalysis'
 import { stampSyncSnapshot } from '../../lib/syncDependencies'
+import { requireCapability } from '../../lib/entitlements'
 
 type FinalizeCard = {
   id: string
@@ -36,14 +37,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const userId = await requireActiveUser(req, res)
   if (!userId) return
 
-  const { data: gateUser } = await supabase
-    .from('users')
-    .select('membership_tier')
-    .eq('id', userId)
-    .single()
-  if (!gateUser || !['low_ticket', 'full'].includes(gateUser.membership_tier)) {
-    return res.status(403).json({ error: 'upgrade_required' })
-  }
+  // Capability gate — Steps 1-3 are the method itself, so this is method_steps
+  // (every tier but free; admin bypasses), NOT the paid asset-toolkits gate.
+  if (!(await requireCapability(userId, 'method_steps', res))) return
 
   const cards = req.body
 

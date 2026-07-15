@@ -15,6 +15,7 @@ import {
 import { getVoiceContext } from '../../../lib/voiceGuide'
 import { GenerationParseError } from '../../../lib/aiJson'
 import { checkSyncGate } from '../../../lib/syncGate'
+import { requireCapability } from '../../../lib/entitlements'
 
 const VALID_PLATFORMS: QualifierPlatform[] = ['chatgpt', 'claude']
 
@@ -56,14 +57,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method !== 'POST') return res.status(405).end()
 
+  // Capability gate — toolkits require beta/full (admin bypasses); see lib/entitlements.ts
+  if (!(await requireCapability(userId, 'toolkits', res))) return
+
+  // The coach's real account name is still needed below (injected into the
+  // generated qualifier as a real fact) — fetched separately now that the
+  // capability gate no longer pulls a user row here.
   const { data: gateUser } = await supabase
     .from('users')
-    .select('membership_tier, name')
+    .select('name')
     .eq('id', userId)
     .single()
-  if (!gateUser || !['low_ticket', 'full'].includes(gateUser.membership_tier)) {
-    return res.status(403).json({ error: 'upgrade_required' })
-  }
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
   const platform = typeof body.platform === 'string' ? body.platform : ''
@@ -90,7 +94,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const voiceContext = await getVoiceContext(userId)
     // Real account fact, not model-generated — see lib/qualifierAnalysis.ts's
     // QualifierDeck comment for why this is injected rather than asked for.
-    const coachName = typeof gateUser.name === 'string' && gateUser.name.trim().length > 0 ? gateUser.name : 'your coach'
+    const coachName = typeof gateUser?.name === 'string' && gateUser.name.trim().length > 0 ? gateUser.name : 'your coach'
 
     const generated = await generateQualifier(
       userId,
