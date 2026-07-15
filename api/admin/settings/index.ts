@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
 import { requireActiveUser } from '../../../lib/auth'
 import { setCors } from '../../../lib/cors'
+import { ALLOWED_SETTING_KEYS } from '../../../lib/appSettings'
 
 // app_settings is a key/value table (key text PK, value text, updated_at). GET
 // returns the settings as a flat object; PATCH accepts a flat object of
@@ -46,6 +47,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Provide at least one setting to update' })
     }
     for (const key of keys) {
+      // Fail loudly on a key nothing consumes — otherwise a stray form field
+      // silently upserts an orphan row and the admin believes it saved.
+      if (!ALLOWED_SETTING_KEYS.has(key)) {
+        return res.status(400).json({ error: `unknown setting '${key}'` })
+      }
       if (typeof body[key] !== 'string') {
         return res.status(400).json({ error: `value for '${key}' must be a string` })
       }

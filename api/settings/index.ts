@@ -15,6 +15,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
+import { ALLOWED_SETTING_KEYS } from '../../lib/appSettings'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
@@ -59,6 +60,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (!key || typeof key !== 'string') {
       return res.status(400).json({ error: 'key required' })
+    }
+    // Same allowlist as PATCH /api/admin/settings — a stray form field must
+    // fail loudly, not silently upsert an orphan key nothing reads.
+    if (!ALLOWED_SETTING_KEYS.has(key)) {
+      return res.status(400).json({ error: `unknown setting '${key}'` })
     }
     if (typeof value !== 'string') {
       return res.status(400).json({ error: 'value must be a string' })
