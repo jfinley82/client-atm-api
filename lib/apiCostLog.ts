@@ -85,22 +85,26 @@ export async function logApiCost(
 // it needs its own pricing table and resolver rather than reusing PRICING/
 // computeCostUsd above — same api_cost_log sink, different unit.
 //
-// NOT YET CONFIRMED: attempted to pull the current rate directly from Groq's
-// own docs/blog (console.groq.com/docs, groq.com/blog) but those fetches were
-// blocked, and a web search returned two mutually contradictory figures for
-// whisper-large-v3 — not reliable enough to hardcode as fact. Get the real
-// rate from the Groq console's Billing/Pricing page once the account exists
-// and add a tier below (same effectiveFrom-tier-list shape as PRICING). Until
-// then this deliberately resolves to null -> $0 logged, same "don't fabricate
-// a plausible number" rule PRICING above follows for an unknown model.
+// Rates are Groq's PUBLIC LIST prices (confirmed by Jamaul from Groq's
+// published pricing, 2026-07-15) — the account's own console tier is the
+// authoritative number and a free tier may actually bill $0, so treat these
+// logged costs as a list-price ceiling, not an invoice. Groq bills a
+// 10-second minimum per request regardless of actual audio length
+// (BILLING_MIN_SECONDS below).
+//
+// If cost ever matters: whisper-large-v3-turbo is $0.04/hr (~2.8x cheaper,
+// marginal quality difference) — but that's a model switch in
+// api/transcribe.ts's GROQ_MODEL plus a new entry here, not just a price edit.
 type AudioPricingTier = {
   effectiveFrom: string // ISO date the tier starts applying (inclusive)
   ratePerHourUsd: number
 }
 
 const AUDIO_PRICING: Record<string, AudioPricingTier[]> = {
-  // 'whisper-large-v3': [{ effectiveFrom: '2026-07-01', ratePerHourUsd: 0 }], // <- confirm from Groq console, then uncomment
+  'whisper-large-v3': [{ effectiveFrom: '2026-07-15', ratePerHourUsd: 0.111 }],
 }
+
+const BILLING_MIN_SECONDS = 10
 
 function resolveAudioPricing(model: string, at: Date): number | null {
   const tiers = AUDIO_PRICING[model]
@@ -113,10 +117,14 @@ function resolveAudioPricing(model: string, at: Date): number | null {
 export function computeAudioCostUsd(model: string, durationSeconds: number, at: Date = new Date()): number {
   const ratePerHour = resolveAudioPricing(model, at)
   if (ratePerHour === null) {
-    console.error(`[apiCostLog] no pricing entry for audio model "${model}" — logging cost as $0, add it to AUDIO_PRICING in lib/apiCostLog.ts once confirmed from the Groq console`)
+    console.error(`[apiCostLog] no pricing entry for audio model "${model}" — logging cost as $0, add it to AUDIO_PRICING in lib/apiCostLog.ts`)
     return 0
   }
-  const cost = (durationSeconds / 3600) * ratePerHour
+  // Groq bills max(actual, 10s) per request — a 3-second clip costs the same
+  // as a 10-second one, so the log reflects that rather than undercounting
+  // short recordings.
+  const billedSeconds = Math.max(BILLING_MIN_SECONDS, durationSeconds)
+  const cost = (billedSeconds / 3600) * ratePerHour
   return Math.round(cost * 1_000_000) / 1_000_000
 }
 
