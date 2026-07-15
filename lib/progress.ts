@@ -63,10 +63,34 @@ export async function getMtmSessionProgress(userId: string): Promise<SessionProg
 
   const generation = (gens || [])[0] || null
 
-  return [
+  const sessions: SessionProgress[] = [
     { key: 'audience', label: 'Audience', completed: isComplete(audience), completed_at: isComplete(audience) ? tsOf(audience) : null },
     { key: 'transformation', label: 'Transformation', completed: isComplete(transformation), completed_at: isComplete(transformation) ? tsOf(transformation) : null },
     { key: 'matcher', label: 'Matcher', completed: matcherCompleted, completed_at: matcherAt },
     { key: 'blueprint', label: 'Blueprint Generation', completed: !!generation, completed_at: generation ? generation.created_at : null },
   ]
+
+  // Backfill: the funnel makes it structurally impossible to have reached a
+  // later step without finishing every earlier one, so a later step being
+  // complete means every earlier step must display as complete too — even if
+  // its own saved_outputs row was since cleared by a Restart. Without this, a
+  // step that's genuinely done (proven by real downstream artifacts) can
+  // render locked behind an earlier step that only LOOKS incomplete because
+  // its row was deleted, not because the work was undone.
+  //
+  // This is a display-only correction for step-unlock/checklist reads. It does
+  // NOT relax the analyze endpoints' own prerequisite checks (checkAudienceComplete
+  // etc. in lib/toolkitsShared.ts) — those read the real saved_outputs rows
+  // directly, independently of this function, and correctly keep requiring the
+  // actual content because generation consumes it, not just a boolean.
+  let laterComplete = false
+  for (let i = sessions.length - 1; i >= 0; i--) {
+    if (sessions[i].completed) {
+      laterComplete = true
+    } else if (laterComplete) {
+      sessions[i] = { ...sessions[i], completed: true }
+    }
+  }
+
+  return sessions
 }
