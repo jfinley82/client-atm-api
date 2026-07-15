@@ -18,8 +18,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!userId) return
 
   // Capability gate — a swap may trigger a new suggested_offer generation
-  // call, so this gates as toolkits like every generation endpoint.
-  if (!(await requireCapability(userId, 'toolkits', res))) return
+  // call, but it's part of Step 3 of the method, so method_steps.
+  if (!(await requireCapability(userId, 'method_steps', res))) return
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
   const selectedIds = body.selected_ids

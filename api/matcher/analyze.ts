@@ -29,8 +29,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method !== 'POST') return res.status(405).end()
 
-  // Capability gate — toolkits require beta/full (admin bypasses); see lib/entitlements.ts
-  if (!(await requireCapability(userId, 'toolkits', res))) return
+  // Capability gate — Steps 1-3 are the method itself, so this is method_steps
+  // (every tier but free; admin bypasses), NOT the paid asset-toolkits gate.
+  if (!(await requireCapability(userId, 'method_steps', res))) return
 
   try {
     const [audienceRow, transformationRow, intakeRow] = await Promise.all([
