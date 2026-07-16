@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import Stripe from 'stripe'
 import { supabase } from '../../lib/supabase'
-import { sendPurchaseWelcomeEmail } from '../../lib/email'
+import { sendTierWelcomeEmail } from '../../lib/email'
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)
 
@@ -164,10 +164,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq('id', resolvedUserId)
         .single()
       if (member?.email) {
-        await sendPurchaseWelcomeEmail(
+        // Template variable is the first name; users only stores a full name.
+        const firstName = typeof member.name === 'string' && member.name.trim() ? member.name.trim().split(/\s+/)[0] : null
+        await sendTierWelcomeEmail(
           resolvedUserId,
           member.email,
-          member.name,
+          firstName,
           membershipTier,
           `purchase-welcome-${pi.id}`
         )

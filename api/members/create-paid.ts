@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
-import { sendPurchaseWelcomeEmail } from '../../lib/email'
+import { sendTierWelcomeEmail } from '../../lib/email'
 
 // Explicit product_type -> membership_tier map, no default. This is the GHL
 // onboarding webhook, so an unknown label must fail loudly (400) rather than
@@ -48,21 +48,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const name = [first_name, last_name].filter(Boolean).join(' ').trim() || null
 
   try {
-    // Downgrade guard: a workshop (non-paid) signup must never clobber an
-    // existing member with a paid/beta tier — the upsert below would silently
-    // set has_paid=false and tier=workshop on them (e.g. a full member added
-    // to a GHL workshop automation). Leave such accounts untouched and
-    // report success so the GHL automation doesn't retry.
+    // Downgrade guard: a non-paid signup (workshop/beta) only applies when
+    // the member is new, currently 'free', or already on that same non-paid
+    // tier. Any OTHER existing tier is left untouched — otherwise the upsert
+    // below would silently set has_paid=false and retier a paying member the
+    // moment their email lands in a GHL workshop/beta automation. Returns
+    // success so the automation doesn't retry.
     if (!isPaid) {
       const { data: existing } = await supabase
         .from('users')
         .select('id, email, membership_tier, status')
         .eq('email', normalizedEmail)
         .maybeSingle()
-      if (existing && existing.membership_tier !== 'free' && existing.membership_tier !== 'workshop') {
-        console.warn('[members/create-paid] workshop signup for existing higher-tier member — account left unchanged', {
+      if (existing && existing.membership_tier !== 'free' && existing.membership_tier !== membershipTier) {
+        console.warn('[members/create-paid] non-paid signup for existing member on a different tier — account left unchanged', {
           email: normalizedEmail,
-          membership_tier: existing.membership_tier,
+          existing_tier: existing.membership_tier,
+          incoming_tier: membershipTier,
         })
         return res.status(200).json({
           success: true,
@@ -92,9 +94,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (error) throw error
 
-    // Purchases row + welcome email are for actual purchases only — a
-    // workshop signup is not a sale, and a $0 row would inflate the revenue
-    // dashboard's sales count.
+    // Purchases row is for actual purchases only — a workshop/beta signup is
+    // not a sale, and a $0 row would inflate the revenue dashboard's count.
     if (isPaid) {
       const { error: purchaseError } = await supabase
         .from('purchases')
@@ -113,12 +114,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         })
         throw purchaseError
       }
-
-      // Purchase welcome email (entry vs accelerator template picked by the
-      // granted tier) with a one-click login link. Best-effort by contract —
-      // never fails the grant.
-      await sendPurchaseWelcomeEmail(user.id, normalizedEmail, name, membershipTier)
     }
+
+    // Welcome email keyed on the GRANTED TIER, deliberately decoupled from
+    // has_paid: non-paid beta still gets mtm-beta-welcome, while workshop has
+    // no template (its own date-driven flow) and is a no-op inside the
+    // helper. Best-effort by contract — never fails the grant.
+    await sendTierWelcomeEmail(user.id, normalizedEmail, typeof first_name === 'string' ? first_name : null, membershipTier)
 
     const { data: member, error: fetchError } = await supabase
       .from('users')
