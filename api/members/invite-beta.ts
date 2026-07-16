@@ -3,7 +3,11 @@ import crypto from 'crypto'
 import { supabase } from '../../lib/supabase'
 import { sendBetaWelcomeEmail } from '../../lib/email'
 
-const APP_URL = process.env.APP_URL || 'https://app.clientatmbuilder.com'
+// The API's own public base URL — the invite email's login link must hit the
+// BACKEND magic-token processor (GET /api/auth/callback), same as
+// sendMagicLinkEmail in lib/email.ts. The frontend has no /auth/callback
+// route, so an APP_URL-based link 404s.
+const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end()
@@ -54,7 +58,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (tokenError) throw tokenError
 
-    const login_url = `${APP_URL}/auth/callback?token=${encodeURIComponent(token)}`
+    const login_url = `${API_URL}/api/auth/callback?token=${encodeURIComponent(token)}`
 
     await sendBetaWelcomeEmail(normalizedEmail, user.name || '', login_url)
 
