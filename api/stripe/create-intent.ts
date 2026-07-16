@@ -6,10 +6,17 @@ import { setCors } from '../../lib/cors'
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)
 
-// Amount in cents per product tier.
+// Amount in cents per product. Explicit map, no default — an unknown or
+// missing product_type is a 400, never a silently-priced charge. 'full' is
+// deliberately ABSENT: under the six-profile model nothing sells as 'full'
+// directly ($27 entry = low_ticket, $1497 Accelerator grants the full tier),
+// and repointing the old full=$27 key to $1497 would overcharge any stale
+// caller 55x. The native embedded checkout isn't in use today (the
+// Accelerator sells via a GHL link-out), but this endpoint stays consistent
+// with the model in case it's revived.
 const PRODUCT_AMOUNTS: Record<string, number> = {
-  full: 2700,
-  low_ticket: 1200,
+  low_ticket: 2700,
+  accelerator: 149700,
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -24,6 +31,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const { email, name, product_type } = req.body || {}
   if (!email) return res.status(400).json({ error: 'Email required' })
+
+  // Validate the product BEFORE any side effects (Stripe customer creation) —
+  // unknown/missing product_type is rejected outright; the old `|| 'full'` +
+  // `?? PRODUCT_AMOUNTS.full` fallbacks could price a charge the caller never
+  // asked for.
+  const productType = typeof product_type === 'string' ? product_type : ''
+  const amount = PRODUCT_AMOUNTS[productType]
+  if (!amount) {
+    return res.status(400).json({ error: "product_type must be 'low_ticket' or 'accelerator'" })
+  }
 
   try {
     // Find or create Stripe customer
@@ -44,12 +61,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq('id', payload.userId)
     }
 
-    // product_type is recorded in the intent metadata so downstream automation
-    // can branch on it (e.g. GHL watches Stripe and routes by product_type or
-    // by the charge amount: $27 full vs $12 low_ticket).
-    const productType = product_type || 'full'
-    const amount = PRODUCT_AMOUNTS[productType] ?? PRODUCT_AMOUNTS.full
-
+    // product_type rides in the intent metadata; the webhook maps it to the
+    // granted tier.
     const paymentIntent = await stripe.paymentIntents.create({
       amount,
       currency: 'usd',

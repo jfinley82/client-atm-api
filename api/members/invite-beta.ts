@@ -30,7 +30,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         {
           email: normalizedEmail,
           name,
-          membership_tier: 'full',
+          // 'beta' since the six-profile model — same capabilities as full
+          // today, but beta invitees stay distinguishable from $1497 buyers.
+          // (Was hardcoded 'full' from before the beta tier existed.)
+          membership_tier: 'beta',
           invited_as_beta: true,
           status: 'active',
         },

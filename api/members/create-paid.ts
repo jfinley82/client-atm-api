@@ -1,6 +1,16 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 
+// Explicit product_type -> membership_tier map, no default. This is the GHL
+// purchase webhook, so an unknown label must fail loudly (400) rather than
+// silently granting a tier — 'accelerator' ($1497) and legacy 'full' both
+// grant the full tier; 'low_ticket' ($27 entry) grants the method-only tier.
+const TIER_BY_PRODUCT: Record<string, string> = {
+  low_ticket: 'low_ticket',
+  accelerator: 'full',
+  full: 'full',
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end()
 
@@ -18,13 +28,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!email || typeof email !== 'string') {
     return res.status(400).json({ error: 'email required' })
   }
-  if (product_type !== 'low_ticket' && product_type !== 'full') {
-    return res.status(400).json({ error: "product_type must be 'low_ticket' or 'full'" })
+  const membershipTier = typeof product_type === 'string' ? TIER_BY_PRODUCT[product_type] : undefined
+  if (!membershipTier) {
+    return res.status(400).json({ error: "product_type must be 'low_ticket', 'full', or 'accelerator'" })
   }
 
   const normalizedEmail = email.toLowerCase().trim()
   const name = [first_name, last_name].filter(Boolean).join(' ').trim() || null
-  const membershipTier = product_type === 'low_ticket' ? 'low_ticket' : 'full'
 
   try {
     const { data: user, error } = await supabase
