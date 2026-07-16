@@ -2,10 +2,15 @@ import { Resend } from 'resend'
 
 const resend = new Resend(process.env.RESEND_API_KEY!)
 const FROM = 'Client ATM Builder <noreply@clientatmbuilder.com>'
-const APP_URL = process.env.APP_URL || 'https://app.clientatmbuilder.com'
+// The API's own public base URL — NOT the frontend (that's APP_URL). The
+// magic-link email must point at the BACKEND token processor
+// (GET /api/auth/callback), which validates the magic token and then
+// 302-redirects to the frontend's /auth-callback route with a session token.
+// Pointing the email at the frontend 404s: the SPA has no /auth/callback.
+const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
 
 export async function sendMagicLinkEmail(email: string, name: string, token: string) {
-  const link = `${APP_URL}/auth/callback?token=${encodeURIComponent(token)}`
+  const link = `${API_URL}/api/auth/callback?token=${encodeURIComponent(token)}`
 
   await resend.emails.send({
     from: FROM,
