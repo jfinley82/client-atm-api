@@ -4,6 +4,18 @@ import { supabase } from '../../lib/supabase'
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)
 
+// Explicit product_type -> membership_tier map, no default. 'full' is kept as
+// a legacy alias (older intents / the pre-accelerator GHL funnel may still
+// send it). A payment with an unknown or missing product_type grants NO tier:
+// it's logged loudly and the purchase row is still recorded for manual
+// reconciliation — silently granting 'full' (everything) to an unlabeled
+// charge is the failure mode this replaces.
+const TIER_BY_PRODUCT: Record<string, string> = {
+  low_ticket: 'low_ticket',
+  accelerator: 'full',
+  full: 'full',
+}
+
 export const config = {
   api: { bodyParser: false } // Required: Stripe needs raw body for signature verification
 }
@@ -36,8 +48,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (event.type === 'payment_intent.succeeded') {
     const pi = event.data.object as Stripe.PaymentIntent
     const userId = pi.metadata?.user_id
-    const productType = pi.metadata?.product_type || 'full'
-    const membershipTier = productType === 'low_ticket' ? 'low_ticket' : 'full'
+    const productType = pi.metadata?.product_type
+    const membershipTier = productType ? TIER_BY_PRODUCT[productType] : undefined
 
     // Fetch customer email from Stripe as a fallback identifier
     const customer = pi.customer
@@ -49,7 +61,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     let resolvedUserId: string | null = null
 
-    if (userId) {
+    if (!membershipTier) {
+      // Unknown/missing product_type: grant NOTHING. Log everything needed for
+      // manual reconciliation and still try to attach the purchase row to an
+      // existing account below (lookup only — never create/upgrade a user off
+      // an unlabeled charge).
+      console.error('[stripe/webhook] UNKNOWN product_type — no tier granted, needs manual reconciliation', {
+        payment_intent: pi.id,
+        product_type: productType ?? null,
+        amount: pi.amount_received ?? pi.amount ?? null,
+        user_id: userId ?? null,
+        customer_email: customerEmail ?? null,
+      })
+      if (userId) {
+        resolvedUserId = userId
+      } else if (customerEmail) {
+        const { data } = await supabase
+          .from('users')
+          .select('id')
+          .eq('email', customerEmail.toLowerCase().trim())
+          .maybeSingle()
+        resolvedUserId = data?.id ?? null
+      }
+    } else if (userId) {
       // User row already exists — just update
       const { error } = await supabase
         .from('users')
@@ -92,14 +126,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.error('[stripe/webhook] no userId or email — cannot process', pi.id)
     }
 
-    // Record the purchase (idempotent on the Stripe payment intent id)
+    // Record the purchase (idempotent on the Stripe payment intent id). For an
+    // unknown product_type this insert may be rejected by the purchases product
+    // check constraint — the loud UNKNOWN log above (pi id, amount, email) is
+    // the reconciliation record in that case; this is attempted best-effort.
     if (resolvedUserId) {
       const { error: purchaseError } = await supabase
         .from('purchases')
         .upsert(
           {
             user_id: resolvedUserId,
-            product: productType,
+            product: productType ?? 'unknown',
             stripe_payment_intent: pi.id,
             amount_cents: pi.amount_received ?? pi.amount ?? null,
             status: 'active'
