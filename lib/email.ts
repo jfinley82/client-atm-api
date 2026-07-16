@@ -35,33 +35,35 @@ export async function sendMagicLinkEmail(email: string, name: string, token: str
   if (error) throw new Error(`[email] magic-link send failed: ${error.message}`)
 }
 
-// Published purchase-welcome templates, keyed by the membership tier GRANTED
-// (not the product label — accelerator and legacy 'full' both grant 'full'
-// and both get the Accelerator welcome).
-const PURCHASE_TEMPLATE_BY_TIER: Record<string, string> = {
+// Published welcome templates, keyed by the membership tier GRANTED — not by
+// the product label (accelerator and legacy 'full' both grant 'full' and get
+// the Accelerator welcome) and not by has_paid (non-paid beta still gets its
+// welcome). workshop and free deliberately have NO template: workshop has its
+// own date-driven flow, free has no app access.
+const WELCOME_TEMPLATE_BY_TIER: Record<string, string> = {
   low_ticket: 'mtm-welcome-entry',
   full: 'mtm-accelerator-welcome',
+  beta: 'mtm-beta-welcome',
 }
 
-// Purchase welcome email with a one-click login button. Mints a fresh
+// Tier welcome email with a one-click login button. Mints a fresh
 // single-use magic-link token (same shape as api/auth/send-magic-link — 15
 // minute expiry; opened later, the callback degrades cleanly to /login) and
-// sends the tier's template with NAME + LOGIN_LINK.
+// sends the tier's template with NAME (first name) + LOGIN_LINK.
 //
 // Best-effort BY CONTRACT: this function never throws. It runs inside the
-// purchase/grant paths (Stripe webhook, GHL create-paid), and a failed email
-// must never fail the purchase it celebrates — failures are logged loudly
-// instead. Tiers without a welcome template (beta/workshop/free are never
-// granted by purchase paths anyway) are a silent no-op.
-export async function sendPurchaseWelcomeEmail(
+// grant paths (Stripe webhook, GHL create-paid), and a failed email must
+// never fail the grant it celebrates — failures are logged loudly instead.
+// Tiers without a welcome template are a silent no-op.
+export async function sendTierWelcomeEmail(
   userId: string,
   email: string,
-  name: string | null,
+  firstName: string | null,
   grantedTier: string,
   idempotencyKey?: string
 ): Promise<void> {
   try {
-    const templateId = PURCHASE_TEMPLATE_BY_TIER[grantedTier]
+    const templateId = WELCOME_TEMPLATE_BY_TIER[grantedTier]
     if (!templateId) return
 
     const token = crypto.randomBytes(32).toString('hex')
@@ -78,7 +80,7 @@ export async function sendPurchaseWelcomeEmail(
         template: {
           id: templateId,
           variables: {
-            NAME: name || 'there',
+            NAME: firstName || 'there',
             LOGIN_LINK: `${API_URL}/api/auth/callback?token=${encodeURIComponent(token)}`,
           },
         },
@@ -87,7 +89,7 @@ export async function sendPurchaseWelcomeEmail(
     )
     if (error) throw new Error(error.message)
   } catch (err) {
-    console.error(`[email] purchase welcome send failed (tier=${grantedTier}, user=${userId})`, err)
+    console.error(`[email] tier welcome send failed (tier=${grantedTier}, user=${userId})`, err)
   }
 }
 
