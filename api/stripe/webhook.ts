@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import Stripe from 'stripe'
 import { supabase } from '../../lib/supabase'
+import { sendPurchaseWelcomeEmail } from '../../lib/email'
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)
 
@@ -146,6 +147,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       if (purchaseError) {
         console.error('[stripe/webhook] purchase insert failed', purchaseError)
+      }
+    }
+
+    // Purchase welcome email — ONLY when a tier was actually granted (the
+    // unknown-product branch leaves membershipTier undefined, so it can never
+    // send). The grant branches don't reliably hold the member's email/name
+    // (metadata-userId grants may have no Stripe customer email), so both are
+    // fetched fresh from the row the grant just wrote. Best-effort by
+    // contract; idempotency-keyed on the payment intent so a Stripe webhook
+    // retry can't double-send.
+    if (resolvedUserId && membershipTier) {
+      const { data: member } = await supabase
+        .from('users')
+        .select('email, name')
+        .eq('id', resolvedUserId)
+        .single()
+      if (member?.email) {
+        await sendPurchaseWelcomeEmail(
+          resolvedUserId,
+          member.email,
+          member.name,
+          membershipTier,
+          `purchase-welcome-${pi.id}`
+        )
       }
     }
   }
