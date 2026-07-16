@@ -6,14 +6,15 @@ import { sendPurchaseWelcomeEmail } from '../../lib/email'
 // onboarding webhook, so an unknown label must fail loudly (400) rather than
 // silently granting a tier — 'accelerator' ($1497) and legacy 'full' both
 // grant the full tier; 'low_ticket' ($27 entry) grants the method-only tier;
-// 'workshop' onboards a NON-PAID member (deliberately no 'free' — not
-// supported here). Paid vs non-paid drives has_paid and whether a purchases
-// row is recorded.
+// 'workshop' and 'beta' onboard NON-PAID members (beta = full access, no
+// admin panel, no drip; deliberately no 'free' — not supported here). Paid
+// vs non-paid drives has_paid and whether a purchases row is recorded.
 const TIER_BY_PRODUCT: Record<string, string> = {
   low_ticket: 'low_ticket',
   accelerator: 'full',
   full: 'full',
   workshop: 'workshop',
+  beta: 'beta',
 }
 const PAID_PRODUCTS = new Set(['low_ticket', 'accelerator', 'full'])
 
@@ -30,13 +31,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const email = body.customData?.email || body.email
   const first_name = body.customData?.first_name || body.first_name
   const last_name = body.customData?.last_name || body.last_name
-  const product_type = body.customData?.product_type || body.product_type
+  const rawProductType = body.customData?.product_type || body.product_type
+  // GHL workflows send inconsistent casing ("Beta" vs "beta") — normalize
+  // before the map lookup so every product_type is case-insensitive.
+  const product_type = typeof rawProductType === 'string' ? rawProductType.toLowerCase().trim() : undefined
   if (!email || typeof email !== 'string') {
     return res.status(400).json({ error: 'email required' })
   }
-  const membershipTier = typeof product_type === 'string' ? TIER_BY_PRODUCT[product_type] : undefined
-  if (!membershipTier) {
-    return res.status(400).json({ error: "product_type must be 'low_ticket', 'full', 'accelerator', or 'workshop'" })
+  const membershipTier = product_type ? TIER_BY_PRODUCT[product_type] : undefined
+  if (!product_type || !membershipTier) {
+    return res.status(400).json({ error: "product_type must be 'low_ticket', 'full', 'accelerator', 'workshop', or 'beta'" })
   }
   const isPaid = PAID_PRODUCTS.has(product_type)
 
