@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
+import { sendPurchaseWelcomeEmail } from '../../lib/email'
 
 // Explicit product_type -> membership_tier map, no default. This is the GHL
 // purchase webhook, so an unknown label must fail loudly (400) rather than
@@ -71,6 +72,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
       throw purchaseError
     }
+
+    // Purchase welcome email (entry vs accelerator template picked by the
+    // granted tier) with a one-click login link. Best-effort by contract —
+    // never fails the grant.
+    await sendPurchaseWelcomeEmail(user.id, normalizedEmail, name, membershipTier)
 
     const { data: member, error: fetchError } = await supabase
       .from('users')
