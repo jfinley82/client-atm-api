@@ -22,4 +22,5 @@ export const ALLOWED_SETTING_KEYS = new Set([
   'secondary_color',
   'button_color',
   'sidebar_unlock_date',
+  'book_a_call_url',
 ])
