@@ -63,13 +63,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // product_type rides in the intent metadata; the webhook maps it to the
     // granted tier.
-    const paymentIntent = await stripe.paymentIntents.create({
+    const intentParams = (customer: string): Stripe.PaymentIntentCreateParams => ({
       amount,
       currency: 'usd',
-      customer: customerId,
+      customer,
       metadata: { user_id: payload.userId, product_type: productType },
       automatic_payment_methods: { enabled: true }
     })
+
+    let paymentIntent: Stripe.PaymentIntent
+    try {
+      paymentIntent = await stripe.paymentIntents.create(intentParams(customerId))
+    } catch (err) {
+      // Self-heal a stale saved customer: IDs saved under a previous Stripe
+      // account (the old Client-ATM account) don't exist in this one, and
+      // Stripe rejects them with resource_missing on the customer param —
+      // which used to 500 checkout for every pre-existing buyer. Treat it as
+      // "no customer yet": mint a fresh customer, persist it, retry ONCE.
+      const isMissingCustomer =
+        err instanceof Stripe.errors.StripeInvalidRequestError &&
+        err.code === 'resource_missing' &&
+        err.param === 'customer'
+      if (!isMissingCustomer) throw err
+
+      console.warn('[stripe/create-intent] stale stripe_customer_id — creating a fresh customer', {
+        user_id: payload.userId,
+        stale_customer_id: customerId,
+      })
+      const customer = await stripe.customers.create({ email, name: name || undefined })
+      customerId = customer.id
+      await supabase
+        .from('users')
+        .update({ stripe_customer_id: customerId })
+        .eq('id', payload.userId)
+
+      paymentIntent = await stripe.paymentIntents.create(intentParams(customerId))
+    }
 
     return res.status(200).json({ clientSecret: paymentIntent.client_secret })
 
