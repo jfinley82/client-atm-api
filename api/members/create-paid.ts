@@ -3,14 +3,19 @@ import { supabase } from '../../lib/supabase'
 import { sendPurchaseWelcomeEmail } from '../../lib/email'
 
 // Explicit product_type -> membership_tier map, no default. This is the GHL
-// purchase webhook, so an unknown label must fail loudly (400) rather than
+// onboarding webhook, so an unknown label must fail loudly (400) rather than
 // silently granting a tier — 'accelerator' ($1497) and legacy 'full' both
-// grant the full tier; 'low_ticket' ($27 entry) grants the method-only tier.
+// grant the full tier; 'low_ticket' ($27 entry) grants the method-only tier;
+// 'workshop' onboards a NON-PAID member (deliberately no 'free' — not
+// supported here). Paid vs non-paid drives has_paid and whether a purchases
+// row is recorded.
 const TIER_BY_PRODUCT: Record<string, string> = {
   low_ticket: 'low_ticket',
   accelerator: 'full',
   full: 'full',
+  workshop: 'workshop',
 }
+const PAID_PRODUCTS = new Set(['low_ticket', 'accelerator', 'full'])
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end()
@@ -31,20 +36,48 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
   const membershipTier = typeof product_type === 'string' ? TIER_BY_PRODUCT[product_type] : undefined
   if (!membershipTier) {
-    return res.status(400).json({ error: "product_type must be 'low_ticket', 'full', or 'accelerator'" })
+    return res.status(400).json({ error: "product_type must be 'low_ticket', 'full', 'accelerator', or 'workshop'" })
   }
+  const isPaid = PAID_PRODUCTS.has(product_type)
 
   const normalizedEmail = email.toLowerCase().trim()
   const name = [first_name, last_name].filter(Boolean).join(' ').trim() || null
 
   try {
+    // Downgrade guard: a workshop (non-paid) signup must never clobber an
+    // existing member with a paid/beta tier — the upsert below would silently
+    // set has_paid=false and tier=workshop on them (e.g. a full member added
+    // to a GHL workshop automation). Leave such accounts untouched and
+    // report success so the GHL automation doesn't retry.
+    if (!isPaid) {
+      const { data: existing } = await supabase
+        .from('users')
+        .select('id, email, membership_tier, status')
+        .eq('email', normalizedEmail)
+        .maybeSingle()
+      if (existing && existing.membership_tier !== 'free' && existing.membership_tier !== 'workshop') {
+        console.warn('[members/create-paid] workshop signup for existing higher-tier member — account left unchanged', {
+          email: normalizedEmail,
+          membership_tier: existing.membership_tier,
+        })
+        return res.status(200).json({
+          success: true,
+          user_id: existing.id,
+          email: existing.email,
+          membership_tier: existing.membership_tier,
+          status: existing.status,
+          note: 'existing_member_unchanged',
+        })
+      }
+    }
+
     const { data: user, error } = await supabase
       .from('users')
       .upsert(
         {
           email: normalizedEmail,
           name,
-          has_paid: true,
+          has_paid: isPaid,
           membership_tier: membershipTier,
           status: 'active',
         },
@@ -55,28 +88,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (error) throw error
 
-    const { error: purchaseError } = await supabase
-      .from('purchases')
-      .insert({
-        user_id: user.id,
-        product: product_type,
-        status: 'active',
-      })
+    // Purchases row + welcome email are for actual purchases only — a
+    // workshop signup is not a sale, and a $0 row would inflate the revenue
+    // dashboard's sales count.
+    if (isPaid) {
+      const { error: purchaseError } = await supabase
+        .from('purchases')
+        .insert({
+          user_id: user.id,
+          product: product_type,
+          status: 'active',
+        })
 
-    if (purchaseError) {
-      console.error('[members/create-paid] purchases insert failed:', {
-        message: purchaseError.message,
-        code: purchaseError.code,
-        details: purchaseError.details,
-        hint: purchaseError.hint,
-      })
-      throw purchaseError
+      if (purchaseError) {
+        console.error('[members/create-paid] purchases insert failed:', {
+          message: purchaseError.message,
+          code: purchaseError.code,
+          details: purchaseError.details,
+          hint: purchaseError.hint,
+        })
+        throw purchaseError
+      }
+
+      // Purchase welcome email (entry vs accelerator template picked by the
+      // granted tier) with a one-click login link. Best-effort by contract —
+      // never fails the grant.
+      await sendPurchaseWelcomeEmail(user.id, normalizedEmail, name, membershipTier)
     }
-
-    // Purchase welcome email (entry vs accelerator template picked by the
-    // granted tier) with a one-click login link. Best-effort by contract —
-    // never fails the grant.
-    await sendPurchaseWelcomeEmail(user.id, normalizedEmail, name, membershipTier)
 
     const { data: member, error: fetchError } = await supabase
       .from('users')
