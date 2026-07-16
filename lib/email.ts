@@ -12,26 +12,25 @@ const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-40
 export async function sendMagicLinkEmail(email: string, name: string, token: string) {
   const link = `${API_URL}/api/auth/callback?token=${encodeURIComponent(token)}`
 
-  await resend.emails.send({
-    from: FROM,
+  // Sends via the published Resend template (alias mtm-login-link) so the
+  // email carries the MTM branding managed in Resend, not inline HTML here.
+  // The template defines the subject and body; NAME and LOGIN_LINK are its
+  // variables. Requires resend >= 6 for template sends.
+  const { error } = await resend.emails.send({
+    from: 'Micro-Training Method <noreply@mail.microtrainingmethod.com>',
     to: email,
-    subject: 'Your Client ATM Builder Login Link',
-    html: `
-      <!DOCTYPE html>
-      <html>
-      <body style="font-family: 'Inter', sans-serif; background: #0a0e1a; color: #f1f5f9; padding: 40px 20px; margin: 0;">
-        <div style="max-width: 560px; margin: 0 auto; background: #0f172a; border: 1px solid rgba(148,163,184,0.15); border-radius: 16px; padding: 40px;">
-          <h2 style="color: #a855f7; font-size: 24px; margin: 0 0 8px;">Client ATM Builder</h2>
-          <p style="color: rgba(241,245,249,0.6); margin: 0 0 32px; font-size: 14px;">The A.T.M. Method for Coaches &amp; Consultants</p>
-          <p style="font-size: 16px; margin: 0 0 8px;">Hey ${name || 'there'},</p>
-          <p style="color: rgba(241,245,249,0.7); margin: 0 0 32px;">Click the button below to log in. This link expires in 15 minutes and can only be used once.</p>
-          <a href="${link}" style="display: inline-block; background: linear-gradient(to right, #9333ea, #7c3aed); color: white; text-decoration: none; padding: 14px 32px; border-radius: 10px; font-weight: 700; font-size: 16px;">Log In to Your Dashboard →</a>
-          <p style="color: rgba(241,245,249,0.3); font-size: 12px; margin: 32px 0 0;">If you didn't request this, you can safely ignore it. This link will expire on its own.</p>
-        </div>
-      </body>
-      </html>
-    `
+    template: {
+      id: 'mtm-login-link',
+      variables: {
+        NAME: name || 'there',
+        LOGIN_LINK: link,
+      },
+    },
   })
+
+  // resend's send() returns errors rather than throwing — surface them so a
+  // failed send doesn't silently look like success to the caller.
+  if (error) throw new Error(`[email] magic-link send failed: ${error.message}`)
 }
 
 export async function sendBetaWelcomeEmail(email: string, name: string, loginUrl: string) {
