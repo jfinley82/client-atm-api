@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { setCors, noStore } from '../../lib/cors'
-import { isZoomConfigured, getSchedulerAvailability, getSchedulerAvailabilityRaw } from '../../lib/zoom'
+import { isZoomConfigured, getSchedulerAvailability } from '../../lib/zoom'
 
 // GET /api/calendar/availability?from=<ISO date>&to=<ISO date>
 // Public (booking a call doesn't require an account). Returns open slots in
@@ -28,17 +28,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     rawTo && !Number.isNaN(new Date(rawTo).getTime())
       ? new Date(rawTo)
       : new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
-
-  // TEMPORARY: surface the raw Scheduler availability payload (schedule_id,
-  // duration, days[...]) so we can read the exact slot field names, then write
-  // the real parse and restore the normalized/booking-filtered response below.
-  try {
-    const raw = await getSchedulerAvailabilityRaw(from.toISOString(), to.toISOString())
-    return res.status(200).json({ debug_raw: raw })
-  } catch (err) {
-    console.error('[calendar/availability] GET debug', err)
-    return res.status(502).json({ error: 'Failed to load availability' })
-  }
 
   try {
     const slots = await getSchedulerAvailability(from.toISOString(), to.toISOString())

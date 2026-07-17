@@ -56,13 +56,13 @@ async function zoomFetch(path: string, init?: RequestInit): Promise<Response> {
 export type Slot = { start: string; end: string } // both UTC ISO
 
 // Reads open slots from the host's Scheduler schedule for [from, to] (ISO
-// dates/datetimes). The available_times endpoint is new (released 2026-07-13)
-// and its exact response shape couldn't be confirmed from the docs (Zoom's
-// dev-docs 403 automated fetches), so parsing is defensive: it accepts the
-// documented key plus a couple of likely field-name variants and logs the raw
-// keys if none match, so the first live response reveals any needed tweak
-// rather than silently returning empty. end is computed from SLOT_MINUTES when
-// the response doesn't carry one.
+// dates/datetimes). Confirmed response shape (available_times, released
+// 2026-07-13): { schedule_id, duration, days: [ { spots: [ { start_time,
+// status, available_number } ] } ] }. Only spots with status === 'available'
+// are returned (the payload mixes in 'unavailable' spots). start_time carries
+// a local offset (e.g. -05:00); new Date() normalizes it to UTC. Slot length
+// is the schedule's own top-level duration (SLOT_MINUTES only as a fallback if
+// duration is missing).
 export async function getSchedulerAvailability(fromISO: string, toISO: string): Promise<Slot[]> {
   const scheduleId = process.env.ZOOM_SCHEDULE_ID
   if (!scheduleId) throw new Error('ZOOM_SCHEDULE_ID not set')
@@ -73,35 +73,24 @@ export async function getSchedulerAvailability(fromISO: string, toISO: string): 
     const body = await res.text().catch(() => '')
     throw new Error(`zoom availability failed ${res.status}: ${body}`)
   }
-  const data = (await res.json()) as Record<string, unknown>
-
-  const rawList =
-    (Array.isArray(data.items) && data.items) ||
-    (Array.isArray(data.available_times) && data.available_times) ||
-    (Array.isArray(data.availableTimes) && data.availableTimes) ||
-    (Array.isArray(data.slots) && data.slots) ||
-    (Array.isArray(data.available_slots) && data.available_slots) ||
-    null
-
-  if (!rawList) {
-    console.error('[zoom] availability response shape unrecognized — keys:', Object.keys(data))
-    return []
+  const data = (await res.json()) as {
+    duration?: number
+    days?: Array<{ spots?: Array<{ start_time?: unknown; status?: unknown }> }>
   }
 
+  const durationMin = Number(data.duration) || SLOT_MINUTES
   const slots: Slot[] = []
-  for (const item of rawList as Array<Record<string, unknown>>) {
-    const start =
-      (typeof item.start_time === 'string' && item.start_time) ||
-      (typeof item.start === 'string' && item.start) ||
-      (typeof item === 'string' && item) ||
-      null
-    if (!start) continue
-    const startMs = new Date(start).getTime()
-    if (Number.isNaN(startMs)) continue
-    const endRaw =
-      (typeof item.end_time === 'string' && item.end_time) || (typeof item.end === 'string' && item.end) || null
-    const end = endRaw ?? new Date(startMs + SLOT_MINUTES * 60_000).toISOString()
-    slots.push({ start: new Date(startMs).toISOString(), end: new Date(end).toISOString() })
+  for (const day of Array.isArray(data.days) ? data.days : []) {
+    for (const spot of Array.isArray(day.spots) ? day.spots : []) {
+      if (spot.status !== 'available') continue
+      if (typeof spot.start_time !== 'string') continue
+      const ms = new Date(spot.start_time).getTime()
+      if (Number.isNaN(ms)) continue
+      slots.push({
+        start: new Date(ms).toISOString(),
+        end: new Date(ms + durationMin * 60_000).toISOString(),
+      })
+    }
   }
   return slots
 }
@@ -134,24 +123,6 @@ export async function listSchedules(): Promise<Array<Record<string, unknown>>> {
     return []
   }
   return rawList as Array<Record<string, unknown>>
-}
-
-// TEMPORARY debug helper — returns the full raw Scheduler available_times
-// payload ({ schedule_id, duration, days: [...] }) and logs days[0] so we can
-// read the exact per-day / per-slot field names, then write the real parse in
-// getSchedulerAvailability. Remove once the mapping is confirmed.
-export async function getSchedulerAvailabilityRaw(fromISO: string, toISO: string): Promise<unknown> {
-  const scheduleId = process.env.ZOOM_SCHEDULE_ID
-  if (!scheduleId) throw new Error('ZOOM_SCHEDULE_ID not set')
-  const qs = new URLSearchParams({ from: fromISO, to: toISO }).toString()
-  const res = await zoomFetch(`/scheduler/schedules/${encodeURIComponent(scheduleId)}/available_times?${qs}`)
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`zoom availability failed ${res.status}: ${body}`)
-  }
-  const data = (await res.json()) as Record<string, unknown>
-  console.log('[zoom] availability raw days[0]:', JSON.stringify((data.days as unknown[] | undefined)?.[0]))
-  return data
 }
 
 // Creates a scheduled Zoom meeting at the chosen UTC start. Host defaults to
