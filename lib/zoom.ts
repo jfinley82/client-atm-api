@@ -105,6 +105,33 @@ export async function getSchedulerAvailability(fromISO: string, toISO: string): 
   return slots
 }
 
+// Lists the account's Zoom Scheduler schedules (id + name) so an admin can
+// find the scheduleId to configure ZOOM_SCHEDULE_ID with. Needs the
+// scheduler:read:list_schedules:admin scope on the app. Response shape is
+// parsed defensively — this Scheduler endpoint's exact fields couldn't be
+// confirmed from the docs (they 403 automated fetches), so it accepts the
+// likely key/field variants and logs raw keys if none match.
+export async function listSchedules(): Promise<Array<{ id: string; name: string }>> {
+  const res = await zoomFetch('/scheduler/schedules')
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`zoom list schedules failed ${res.status}: ${body}`)
+  }
+  const data = (await res.json()) as Record<string, unknown>
+  const rawList =
+    (Array.isArray(data.schedules) && data.schedules) ||
+    (Array.isArray(data.data) && data.data) ||
+    null
+  if (!rawList) {
+    console.error('[zoom] list schedules response shape unrecognized — keys:', Object.keys(data))
+    return []
+  }
+  return (rawList as Array<Record<string, unknown>>).map((s) => ({
+    id: String(s.id ?? s.schedule_id ?? s.scheduleId ?? ''),
+    name: String(s.name ?? s.title ?? ''),
+  }))
+}
+
 // Creates a scheduled Zoom meeting at the chosen UTC start. Host defaults to
 // the account owner ('me' resolves to the S2S app owner); override with
 // ZOOM_HOST_EMAIL to book on a specific user. Returns the fields the booking
