@@ -112,7 +112,12 @@ export async function getSchedulerAvailability(fromISO: string, toISO: string): 
 // parsed defensively — this Scheduler endpoint's exact fields couldn't be
 // confirmed from the docs (they 403 automated fetches), so it accepts the
 // likely key/field variants and logs raw keys if none match.
-export async function listSchedules(): Promise<Array<{ id: string; name: string }>> {
+// TEMPORARY: returns the raw schedule objects (all fields) instead of mapping
+// to {id, name} — the name/title mapping came back empty, so this exposes the
+// real field names (likely slug/topic/duration/etc.) to identify the right
+// schedule and the correct id field. Revert to the {id, name} mapping once the
+// field names are confirmed.
+export async function listSchedules(): Promise<Array<Record<string, unknown>>> {
   const res = await zoomFetch('/scheduler/schedules')
   if (!res.ok) {
     const body = await res.text().catch(() => '')
@@ -128,10 +133,7 @@ export async function listSchedules(): Promise<Array<{ id: string; name: string 
     console.error('[zoom] list schedules response shape unrecognized — keys:', Object.keys(data))
     return []
   }
-  return (rawList as Array<Record<string, unknown>>).map((s) => ({
-    id: String(s.id ?? s.schedule_id ?? s.scheduleId ?? ''),
-    name: String(s.name ?? s.title ?? ''),
-  }))
+  return rawList as Array<Record<string, unknown>>
 }
 
 // Creates a scheduled Zoom meeting at the chosen UTC start. Host defaults to
