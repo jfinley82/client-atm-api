@@ -136,6 +136,24 @@ export async function listSchedules(): Promise<Array<Record<string, unknown>>> {
   return rawList as Array<Record<string, unknown>>
 }
 
+// TEMPORARY debug helper — returns the full raw Scheduler available_times
+// payload ({ schedule_id, duration, days: [...] }) and logs days[0] so we can
+// read the exact per-day / per-slot field names, then write the real parse in
+// getSchedulerAvailability. Remove once the mapping is confirmed.
+export async function getSchedulerAvailabilityRaw(fromISO: string, toISO: string): Promise<unknown> {
+  const scheduleId = process.env.ZOOM_SCHEDULE_ID
+  if (!scheduleId) throw new Error('ZOOM_SCHEDULE_ID not set')
+  const qs = new URLSearchParams({ from: fromISO, to: toISO }).toString()
+  const res = await zoomFetch(`/scheduler/schedules/${encodeURIComponent(scheduleId)}/available_times?${qs}`)
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`zoom availability failed ${res.status}: ${body}`)
+  }
+  const data = (await res.json()) as Record<string, unknown>
+  console.log('[zoom] availability raw days[0]:', JSON.stringify((data.days as unknown[] | undefined)?.[0]))
+  return data
+}
+
 // Creates a scheduled Zoom meeting at the chosen UTC start. Host defaults to
 // the account owner ('me' resolves to the S2S app owner); override with
 // ZOOM_HOST_EMAIL to book on a specific user. Returns the fields the booking
