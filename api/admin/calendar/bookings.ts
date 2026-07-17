@@ -26,7 +26,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { data, error } = await supabase
       .from('bookings')
-      .select('id, user_id, name, email, zoom_meeting_id, zoom_join_url, start_time, end_time, status, created_at')
+      .select('id, user_id, name, email, zoom_meeting_id, zoom_join_url, start_time, end_time, status, custom_answers, created_at')
       .order('start_time', { ascending: false })
       .limit(500)
 
