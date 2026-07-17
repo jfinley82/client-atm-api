@@ -76,6 +76,7 @@ export async function getSchedulerAvailability(fromISO: string, toISO: string): 
   const data = (await res.json()) as Record<string, unknown>
 
   const rawList =
+    (Array.isArray(data.items) && data.items) ||
     (Array.isArray(data.available_times) && data.available_times) ||
     (Array.isArray(data.availableTimes) && data.availableTimes) ||
     (Array.isArray(data.slots) && data.slots) ||
@@ -119,6 +120,7 @@ export async function listSchedules(): Promise<Array<{ id: string; name: string 
   }
   const data = (await res.json()) as Record<string, unknown>
   const rawList =
+    (Array.isArray(data.items) && data.items) ||
     (Array.isArray(data.schedules) && data.schedules) ||
     (Array.isArray(data.data) && data.data) ||
     null
