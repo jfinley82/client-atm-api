@@ -5,11 +5,15 @@ import { setCors } from '../../lib/cors'
 import { isZoomConfigured, getSchedulerAvailability, createZoomMeeting, slotMinutes } from '../../lib/zoom'
 import { buildBookingIcs } from '../../lib/ics'
 import { sendBookingConfirmationEmail } from '../../lib/email'
+import { loadBookingQuestions } from '../../lib/bookingQuestions'
 
-// POST /api/calendar/book  { slot_start, name, email, notes? }
+// POST /api/calendar/book
+// Body: { slot_start, first_name, last_name, email, answers?, notes? }
+//   - answers is a MAP keyed by question id: { [questionId]: value }.
+//   - legacy { name } (split on first space) is still accepted for back-compat.
 // Public (optional session decode attaches user_id). Reserves the slot, creates
-// the Zoom meeting, stores the booking, best-effort emails the confirmation +
-// .ics, and returns { booking_id, join_url, start_time }.
+// the Zoom meeting, stores the booking + a custom_answers snapshot, best-effort
+// emails the confirmation + .ics, and returns { booking_id, join_url, start_time }.
 //
 // Ordering matters for no-double-booking: RESERVE the row first (a partial
 // unique index on active start_time makes a concurrent second reservation fail
@@ -25,15 +29,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
   const slotStart = typeof body.slot_start === 'string' ? body.slot_start : ''
-  const name = typeof body.name === 'string' ? body.name.trim() : ''
   const email = typeof body.email === 'string' ? body.email.trim() : ''
+
+  // Name: prefer first_name + last_name; fall back to a legacy { name }.
+  const firstName = typeof body.first_name === 'string' ? body.first_name.trim() : ''
+  const lastName = typeof body.last_name === 'string' ? body.last_name.trim() : ''
+  const legacyName = typeof body.name === 'string' ? body.name.trim() : ''
+  const name = [firstName, lastName].filter(Boolean).join(' ').trim() || legacyName
 
   if (!slotStart || Number.isNaN(new Date(slotStart).getTime())) {
     return res.status(400).json({ error: 'slot_start (ISO datetime) required' })
   }
-  if (!name) return res.status(400).json({ error: 'name required' })
+  if (!name) return res.status(400).json({ error: 'first_name and last_name required' })
   if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
     return res.status(400).json({ error: 'valid email required' })
+  }
+
+  // Custom-question answers: a map { [questionId]: value }. Validate against
+  // the current definitions and build a self-contained snapshot to store, so
+  // the booking keeps its context even if questions are later edited/deleted.
+  const answersMap = (body.answers && typeof body.answers === 'object' && !Array.isArray(body.answers)
+    ? body.answers
+    : {}) as Record<string, unknown>
+  const questions = await loadBookingQuestions()
+  const customAnswers: Array<{ id: string; label: string; type: string; answer: string }> = []
+  for (const q of questions) {
+    const raw = answersMap[q.id]
+    const answer = typeof raw === 'string' ? raw.trim() : raw != null ? String(raw).trim() : ''
+    if (q.required && !answer) {
+      return res.status(400).json({ error: 'question_required', question: q.label })
+    }
+    if (q.type === 'dropdown' && answer && !(q.options || []).includes(answer)) {
+      return res.status(400).json({ error: 'invalid_option', question: q.label })
+    }
+    customAnswers.push({ id: q.id, label: q.label, type: q.type, answer })
   }
 
   const startMs = new Date(slotStart).getTime()
@@ -71,6 +100,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         start_time: startIso,
         end_time: endIso,
         status: 'active',
+        custom_answers: customAnswers,
       })
       .select('id')
       .single()
