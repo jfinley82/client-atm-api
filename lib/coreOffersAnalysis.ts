@@ -59,6 +59,7 @@ Output ONLY valid JSON, no preamble, no markdown, no code fences. Double quotes 
 Rules:
 - low_ticket must be built from the 3 finalized blueprints provided (FINALIZED BLUEPRINTS below) — a specific, monetizable entry point drawn from that problem/solution work, not a generic "starter offer."
 - high_ticket must be built from the CONFIRMED TRANSFORMATION and RESULTS FRAMEWORK provided — their signature, named delivery method, positioned as the premium program.
+- high_ticket price_point MUST be at least $3,000 — a genuine premium price for their signature coaching program. It may be a single figure or a range, but the low end must be $3,000 or higher. low_ticket has NO such floor — it is the low-risk entry offer, priced accordingly.
 - CURRENT BUSINESS CONTEXT tells you whether this coach already sells something (has_existing_offer), and if so its price/format/delivery. Decide which of the two offers (if either) that existing offer maps to — compare its price/format against what a real top-of-funnel entry offer looks like versus a real core program. Set is_refinement: true on THAT ONE offer only; the other stays is_refinement: false. If they have no existing offer, both are is_refinement: false.
 - For whichever offer has is_refinement: true, why_this_price and why_it_fits must be framed as SHARPENING the coach's existing offer — keep its price/format/delivery unless there is a specific, grounded reason from their data to adjust it, and never invent a competing new offer to sit alongside what they already sell. This is the same non-competing-offer principle already used for the per-blueprint suggested offers.
 - why_this_price must cite a specific signal from THIS member's own data — a price-sensitivity or willingness-to-pay signal from their audience (e.g. a sales objection about cost, a stated budget reality, language about what they can afford), not a generic "market rate for this niche" statement.
@@ -70,6 +71,24 @@ ${STYLE_GUIDELINES}`
 
 function asString(v: unknown): string {
   return typeof v === 'string' ? v : ''
+}
+
+// The high_ticket is the premium program the whole model sells, so it has a
+// hard $3,000 floor. The prompt asks for >= $3,000, but a model can still come
+// in low (a live account generated ~$2,000), so this is a defensive backstop:
+// parse the first number out of the price_point (handling a "k" suffix and
+// commas); if it's below the floor or unparseable, clamp the displayed figure
+// up rather than ship a sub-floor number. Never throws — the member can still
+// edit the price at the confirm step.
+const HIGH_TICKET_FLOOR = 3000
+
+function enforceHighTicketFloor(offer: CoreOffer): CoreOffer {
+  const cleaned = offer.price_point.replace(/,/g, '')
+  const m = cleaned.match(/(\d+(?:\.\d+)?)\s*([kK])?/)
+  let first = m ? parseFloat(m[1]) : NaN
+  if (m && m[2]) first *= 1000 // "$3.5k" -> 3500
+  if (Number.isFinite(first) && first >= HIGH_TICKET_FLOOR) return offer
+  return { ...offer, price_point: '$3,000' }
 }
 
 function coerceOffer(raw: unknown): CoreOffer {
@@ -124,6 +143,6 @@ Generate the two core offers now.`
 
   return {
     low_ticket: coerceOffer(parsed.low_ticket),
-    high_ticket: coerceOffer(parsed.high_ticket),
+    high_ticket: enforceHighTicketFloor(coerceOffer(parsed.high_ticket)),
   }
 }
