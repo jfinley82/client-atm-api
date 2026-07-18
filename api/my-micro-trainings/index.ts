@@ -32,6 +32,10 @@ import {
 // existing per-toolkit GET endpoints when the member opens an item, so this
 // payload stays small.
 
+// 60s headroom: this also lazily regenerates null blueprint synopses on first
+// read (~8s cold for up to 3), so keep the ceiling clear of a timeout.
+export const config = { maxDuration: 60 }
+
 type AssetStatus = 'none' | 'draft' | 'ready'
 
 function statusOf(entry: { confirmed?: boolean } | null | undefined): AssetStatus {

@@ -19,6 +19,12 @@ import {
 // Each blueprint also carries match_strength / match_factors (joined from
 // matcher_analysis.top_10 via the card's source_problem_id, with a problem_text
 // fallback) and its synopsis (regenerated + persisted lazily if null).
+//
+// 60s headroom: the FIRST load for a member with null synopses regenerates up
+// to 3 of them inline (~8s), under the frontend's loading state; every load
+// after that is ~0.5s. The ceiling keeps that first cold call clear of a timeout.
+export const config = { maxDuration: 60 }
+
 type SectionStatus = 'ready' | 'none'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
