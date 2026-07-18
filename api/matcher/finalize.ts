@@ -6,6 +6,8 @@ import { getSavedOutput } from '../../lib/savedOutputs'
 import { MatcherAnalysis } from '../../lib/matcherAnalysis'
 import { stampSyncSnapshot } from '../../lib/syncDependencies'
 import { requireCapability } from '../../lib/entitlements'
+import { loadSynopsisInputs } from '../../lib/blueprintEnrichment'
+import { generateBlueprintSynopsis } from '../../lib/blueprintSynopsis'
 
 type FinalizeCard = {
   id: string
@@ -76,6 +78,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       problem_text: c.problem_text,
       reasoning: c.reasoning,
       suggested_offer: c.suggested_offer ?? null,
+      // The matcher top_10 id this card came from, so results pages can join
+      // back to its match scoring (migration 033).
+      source_problem_id: c.id,
       validated: true,
       sync_snapshot,
     }))
@@ -83,6 +88,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { data, error } = await supabase.from('problem_solution_cards').insert(rows).select()
 
     if (error) throw error
+
+    // Generate each card's synopsis now so the results page is instant. Strictly
+    // best-effort: a failure here (or a missing framework) must never fail the
+    // finalize — the row already exists, and any card left with synopsis null
+    // is regenerated lazily on the next results read (lib/blueprintEnrichment).
+    const inserted = (data ?? []) as Array<{ id: string; card_name: string; problem_text: string; reasoning: string | null; suggested_offer: unknown }>
+    try {
+      const inputs = await loadSynopsisInputs(userId)
+      await Promise.all(
+        inserted.map(async (card) => {
+          try {
+            const synopsis = await generateBlueprintSynopsis({
+              userId,
+              audience: inputs.audience,
+              transformation: inputs.transformation,
+              framework: inputs.framework,
+              card: {
+                card_name: card.card_name,
+                problem_text: card.problem_text,
+                reasoning: card.reasoning ?? '',
+                suggested_offer: card.suggested_offer,
+              },
+            })
+            await supabase.from('problem_solution_cards').update({ synopsis }).eq('id', card.id)
+            ;(card as { synopsis?: unknown }).synopsis = synopsis
+          } catch (cardErr) {
+            console.error('[matcher/finalize] synopsis generation failed for card', card.id, cardErr)
+          }
+        })
+      )
+    } catch (synErr) {
+      console.error('[matcher/finalize] synopsis batch failed — cards saved, synopses will regenerate lazily', synErr)
+    }
 
     return res.status(200).json(data)
   } catch (err) {
