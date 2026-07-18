@@ -43,12 +43,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!(await requireCapability(userId, 'method_steps', res))) return
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
-  const { low_ticket, high_ticket } = body
+  const { low_ticket, mid_ticket, high_ticket } = body
 
-  if (!isValidOffer(low_ticket) || !isValidOffer(high_ticket)) {
+  if (!isValidOffer(low_ticket) || !isValidOffer(mid_ticket) || !isValidOffer(high_ticket)) {
     return res.status(400).json({
       error:
-        'Invalid confirm payload — expects low_ticket and high_ticket, each with name/price_point (non-empty strings), why_this_price/whats_included/delivery_format/why_it_fits (strings), and is_refinement (boolean)',
+        'Invalid confirm payload — expects low_ticket, mid_ticket, and high_ticket, each with name/price_point (non-empty strings), why_this_price/whats_included/delivery_format/why_it_fits (strings), and is_refinement (boolean)',
     })
   }
 
@@ -65,6 +65,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const updated: CoreOffersAnalysis = {
       low_ticket,
+      mid_ticket,
       high_ticket,
       confirmed: true,
       next_step_bridge: NEXT_STEP_BRIDGE,
