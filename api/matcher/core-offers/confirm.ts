@@ -43,13 +43,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!(await requireCapability(userId, 'method_steps', res))) return
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
-  const { low_ticket, high_ticket } = body
+  const { low_ticket, mid_ticket, high_ticket } = body
 
+  // low_ticket + high_ticket are required; mid_ticket is optional (null when
+  // absent) so this stays deploy-order-independent from the frontend — an old
+  // two-tier confirm form still works, and mid_ticket is validated only when
+  // provided.
   if (!isValidOffer(low_ticket) || !isValidOffer(high_ticket)) {
     return res.status(400).json({
       error:
         'Invalid confirm payload — expects low_ticket and high_ticket, each with name/price_point (non-empty strings), why_this_price/whats_included/delivery_format/why_it_fits (strings), and is_refinement (boolean)',
     })
+  }
+  const midTicket = isValidOffer(mid_ticket) ? mid_ticket : null
+  if (mid_ticket != null && midTicket === null) {
+    return res.status(400).json({ error: 'Invalid mid_ticket — same offer fields as low_ticket/high_ticket' })
   }
 
   try {
@@ -65,6 +73,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const updated: CoreOffersAnalysis = {
       low_ticket,
+      mid_ticket: midTicket,
       high_ticket,
       confirmed: true,
       next_step_bridge: NEXT_STEP_BRIDGE,

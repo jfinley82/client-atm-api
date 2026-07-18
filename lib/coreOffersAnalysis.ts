@@ -20,8 +20,12 @@ export type CoreOffer = {
 // api/matcher/core-offers/confirm.ts), and is a backend-computed constant,
 // never model-generated (there is nothing dynamic to point to yet — My
 // Micro-Trainings' actual assembly isn't built).
+// Three-tier ladder: low_ticket = the AI Coach entry, mid_ticket = group
+// coaching, high_ticket = 1:1 premium. mid_ticket is CoreOffer | null so older
+// two-tier stored values (no mid_ticket) still read without error.
 export type CoreOffersAnalysis = {
   low_ticket: CoreOffer
+  mid_ticket: CoreOffer | null
   high_ticket: CoreOffer
   confirmed: boolean
   next_step_bridge?: string
@@ -34,34 +38,38 @@ export type CoreOffersAnalysis = {
 // content once My Micro-Trainings' assembly exists.
 export const NEXT_STEP_BRIDGE = 'Your full Micro-Training Blueprint is ready.'
 
-const CORE_OFFERS_PROMPT = `You are an expert offer strategist and pricing consultant helping a coach design the two core offers their entire business runs on. This is the capstone of their process — you are given everything already established: their audience, their confirmed core transformation, their named results framework, their 3 finalized monetizable problem/solution blueprints, and their current business context (whether they already sell something).
+const CORE_OFFERS_PROMPT = `You are an expert offer strategist and pricing consultant helping a coach design the three-tier offer ladder their entire business runs on. This is the capstone of their process — you are given everything already established: their audience, their confirmed core transformation, their named results framework, their 3 finalized monetizable problem/solution blueprints, and their current business context (whether they already sell something).
 
-Design exactly two offers:
-- low_ticket: an entry-point offer that monetizes top-of-funnel traffic — built from the 3 finalized blueprints (a specific problem/solution pairing a prospect can say yes to quickly, low friction, low price).
-- high_ticket: their main coaching program — built from the core CONFIRMED TRANSFORMATION and RESULTS FRAMEWORK (the full, named delivery method, the premium offer this coach is really known for).
+Design exactly three offers, an ascending ladder:
+- low_ticket = THE AI COACH (entry). This is the coach's own AI assistant — the AI qualifier the platform builds from their blueprint, trained on THEIR method. It answers and qualifies their leads around the clock and routes ready buyers up to the higher tiers. Frame the entry offer AS this AI Coach — do NOT invent a separate low-ticket product (no template kit, no mini-course). Price it as a low, low-friction entry point.
+- mid_ticket = GROUP COACHING. Their confirmed transformation and named results framework delivered in a group / cohort format. Priced between the entry and the high-ticket.
+- high_ticket = 1:1 (premium). Their signature 1:1 coaching program, built from the CONFIRMED TRANSFORMATION and RESULTS FRAMEWORK — the premium offer they are really known for.
 
 Output ONLY valid JSON, no preamble, no markdown, no code fences. Double quotes only.
 
 {
   "low_ticket": {
-    "name": "a specific, sellable name for this offer",
-    "price_point": "a specific price or price range",
+    "name": "a specific, sellable name for their AI Coach offer",
+    "price_point": "a low entry price or range",
     "why_this_price": "grounded, specific reasoning for this price — cite an actual signal from this coach's data, not generic market-rate language",
-    "whats_included": "what the buyer actually gets — concrete and specific",
-    "delivery_format": "how it's delivered (self-paced, live cohort, 1:1, async, etc.)",
-    "why_it_fits": "why this specific offer fits this specific coach and audience, grounded in their data",
+    "whats_included": "describe the AI Coach: trained on their specific method/framework, qualifies and answers leads 24/7, routes ready buyers to the group and 1:1 tiers",
+    "delivery_format": "AI assistant / chat-based, always-on",
+    "why_it_fits": "why an AI Coach entry fits this specific coach and audience, grounded in their data",
     "is_refinement": true or false
   },
-  "high_ticket": { same 7 fields, describing the main coaching program },
+  "mid_ticket": { same 7 fields, describing the group coaching program },
+  "high_ticket": { same 7 fields, describing the 1:1 premium program },
   "confirmed": false
 }
 
 Rules:
-- low_ticket must be built from the 3 finalized blueprints provided (FINALIZED BLUEPRINTS below) — a specific, monetizable entry point drawn from that problem/solution work, not a generic "starter offer."
-- high_ticket must be built from the CONFIRMED TRANSFORMATION and RESULTS FRAMEWORK provided — their signature, named delivery method, positioned as the premium program.
-- high_ticket price_point MUST be at least $3,000 — a genuine premium price for their signature coaching program. It may be a single figure or a range, but the low end must be $3,000 or higher. low_ticket has NO such floor — it is the low-risk entry offer, priced accordingly.
-- CURRENT BUSINESS CONTEXT tells you whether this coach already sells something (has_existing_offer), and if so its price/format/delivery. Decide which of the two offers (if either) that existing offer maps to — compare its price/format against what a real top-of-funnel entry offer looks like versus a real core program. Set is_refinement: true on THAT ONE offer only; the other stays is_refinement: false. If they have no existing offer, both are is_refinement: false.
-- For whichever offer has is_refinement: true, why_this_price and why_it_fits must be framed as SHARPENING the coach's existing offer — keep its price/format/delivery unless there is a specific, grounded reason from their data to adjust it, and never invent a competing new offer to sit alongside what they already sell. This is the same non-competing-offer principle already used for the per-blueprint suggested offers.
+- low_ticket IS the AI Coach — its whats_included must describe that AI assistant (trained on their method, qualifies/answers leads around the clock, routes ready buyers up). Do NOT generate any other kind of low-ticket product.
+- mid_ticket = group coaching: the same confirmed transformation + results framework as the high-ticket, delivered in a group/cohort format, priced between the entry and the 1:1.
+- high_ticket = the 1:1 program, built from the CONFIRMED TRANSFORMATION and RESULTS FRAMEWORK.
+- high_ticket price_point MUST be at least $3,000 — a genuine premium price for their signature 1:1 program. It may be a single figure or a range, but the low end must be $3,000 or higher.
+- The ladder MUST be monotonic by price: low_ticket (entry) < mid_ticket (group) < high_ticket (1:1).
+- CURRENT BUSINESS CONTEXT tells you whether this coach already sells something (has_existing_offer), and if so its price/format/delivery. Decide which ONE of the three tiers that existing offer best maps to (by price and format) and set is_refinement: true on THAT ONE tier only; the other two stay is_refinement: false. If they have no existing offer, all three are is_refinement: false.
+- For whichever tier has is_refinement: true, why_this_price and why_it_fits must be framed as SHARPENING the coach's existing offer — keep its price/format/delivery unless there is a specific, grounded reason from their data to adjust it, and never invent a competing new offer to sit alongside what they already sell.
 - why_this_price must cite a specific signal from THIS member's own data — a price-sensitivity or willingness-to-pay signal from their audience (e.g. a sales objection about cost, a stated budget reality, language about what they can afford), not a generic "market rate for this niche" statement.
 - why_it_fits must cite the specific proven weight of their transformation or blueprint work (e.g. a proof point, a specific result, a specific problem/outcome pairing) — not abstract positioning advice.
 - Do not invent data not present in what you were given. Ground every field in specifics from the audience, transformation, framework, blueprints, or business context provided.
@@ -112,7 +120,7 @@ export async function generateCoreOffers(
   finalizedBlueprints: unknown,
   intake: unknown,
   voiceContext?: string
-): Promise<{ low_ticket: CoreOffer; high_ticket: CoreOffer }> {
+): Promise<{ low_ticket: CoreOffer; mid_ticket: CoreOffer; high_ticket: CoreOffer }> {
   const userMessage = `AUDIENCE DATA: ${JSON.stringify(audience)}
 
 CONFIRMED TRANSFORMATION: ${JSON.stringify(confirmedTransformation)}
@@ -143,6 +151,7 @@ Generate the two core offers now.`
 
   return {
     low_ticket: coerceOffer(parsed.low_ticket),
+    mid_ticket: coerceOffer(parsed.mid_ticket),
     high_ticket: enforceHighTicketFloor(coerceOffer(parsed.high_ticket)),
   }
 }

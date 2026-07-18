@@ -125,7 +125,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const intake = intakeRow ? (stripSessionHistory(intakeRow.content) as MatcherIntake) : { has_existing_offer: false }
     const voiceContext = await getVoiceContext(userId)
 
-    const { low_ticket, high_ticket } = await generateCoreOffers(
+    const { low_ticket, mid_ticket, high_ticket } = await generateCoreOffers(
       userId,
       stripSessionHistory(audienceRow!.content),
       confirmedTransformationContext,
@@ -135,9 +135,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       voiceContext
     )
 
-    if (!low_ticket.name || !high_ticket.name) {
+    if (!low_ticket.name || !mid_ticket.name || !high_ticket.name) {
       console.error('[matcher/core-offers/analyze] generation returned malformed output', {
         low_ticket_name: low_ticket.name,
+        mid_ticket_name: mid_ticket.name,
         high_ticket_name: high_ticket.name,
       })
       return res.status(502).json({ error: 'Core offers generation failed' })
@@ -145,6 +146,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const analysis: CoreOffersAnalysis = {
       low_ticket,
+      mid_ticket,
       high_ticket,
       confirmed: false,
     }
