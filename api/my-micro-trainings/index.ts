@@ -8,6 +8,13 @@ import type { SlidesDeck } from '../../lib/slidesAnalysis'
 import type { QualifierDeck } from '../../lib/qualifierAnalysis'
 import type { ProgramAnalysis } from '../../lib/programAnalysis'
 import type { ContentAnalysis } from '../../lib/contentAnalysis'
+import { MatcherAnalysis } from '../../lib/matcherAnalysis'
+import {
+  loadSynopsisInputs,
+  resolveScoring,
+  resolveSynopsis,
+  BlueprintCardRow,
+} from '../../lib/blueprintEnrichment'
 
 // GET /api/my-micro-trainings
 // Read-only assembly view. For each validated Blueprint, reports the status of
@@ -46,10 +53,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!userId) return
 
   try {
-    const [cardsRes, slidesRow, qualifierRow, programRow, contentRow] = await Promise.all([
+    const [cardsRes, slidesRow, qualifierRow, programRow, contentRow, matcherRow, synopsisInputs] = await Promise.all([
       supabase
         .from('problem_solution_cards')
-        .select('id, card_name, problem_text')
+        .select('id, card_name, problem_text, reasoning, suggested_offer, source_problem_id, synopsis')
         .eq('user_id', userId)
         .eq('validated', true)
         .order('created_at', { ascending: true }),
@@ -57,32 +64,45 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       getSavedOutput(userId, 'qualifier'),
       getSavedOutput(userId, 'program'),
       getSavedOutput(userId, 'content'),
+      getSavedOutput(userId, 'matcher_analysis'),
+      loadSynopsisInputs(userId),
     ])
     if (cardsRes.error) throw cardsRes.error
 
     const slidesByCard = byCardId<SlidesDeck>(slidesRow?.content)
     const qualByCard = byCardId<QualifierDeck>(qualifierRow?.content)
+    const matcher = (matcherRow?.content ?? null) as MatcherAnalysis | null
 
-    const cards = (cardsRes.data || []) as Array<{ id: string; card_name: string; problem_text: string }>
-    const blueprints = cards.map((card) => {
-      const slides = slidesByCard[card.id] ?? null
-      const coach = qualByCard[card.id] ?? null
-      return {
-        card_id: card.id,
-        card_name: card.card_name,
-        problem_text: card.problem_text,
-        micro_training: {
-          status: statusOf(slides),
-          training_title: slides?.training_title ?? null,
-          slide_count: Array.isArray(slides?.slides) ? slides!.slides.length : 0,
-          duration_estimate: slides?.duration_estimate ?? null,
-        },
-        ai_coach: {
-          status: statusOf(coach),
-          has_prompt: !!coach?.system_prompt,
-        },
-      }
-    })
+    const cards = (cardsRes.data || []) as BlueprintCardRow[]
+    const blueprints = await Promise.all(
+      cards.map(async (card) => {
+        const slides = slidesByCard[card.id] ?? null
+        const coach = qualByCard[card.id] ?? null
+        const scoring = resolveScoring(card, matcher)
+        const synopsis = await resolveSynopsis(userId, card, synopsisInputs)
+        return {
+          card_id: card.id,
+          card_name: card.card_name,
+          problem_text: card.problem_text,
+          // Full Blueprint-card fields so the shared card can render its synopsis.
+          reasoning: card.reasoning,
+          suggested_offer: card.suggested_offer,
+          match_strength: scoring.match_strength,
+          match_factors: scoring.match_factors,
+          synopsis,
+          micro_training: {
+            status: statusOf(slides),
+            training_title: slides?.training_title ?? null,
+            slide_count: Array.isArray(slides?.slides) ? slides!.slides.length : 0,
+            duration_estimate: slides?.duration_estimate ?? null,
+          },
+          ai_coach: {
+            status: statusOf(coach),
+            has_prompt: !!coach?.system_prompt,
+          },
+        }
+      })
+    )
 
     const program = programRow?.content as ProgramAnalysis | undefined
     const content = contentRow?.content as ContentAnalysis | undefined
