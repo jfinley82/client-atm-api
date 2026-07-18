@@ -65,12 +65,12 @@ export async function resolveSynopsis(
   inputs: SynopsisInputs
 ): Promise<BlueprintSynopsis | null> {
   // Regenerate when the synopsis is missing entirely OR predates the newest
-  // synopsis field (currently training_title — added after high_ticket_pitch).
-  // Keying on the latest field backfills every field added since a card's
-  // synopsis was last generated, exactly once: after regen the field is
+  // synopsis field (currently objection_dissolved — the last conviction field
+  // added). Keying on the latest field backfills every field added since a
+  // card's synopsis was last generated, exactly once: after regen the field is
   // present, so it won't regenerate again. Bump this sentinel whenever a new
   // synopsis field is added.
-  const existingSentinel = card.synopsis ? (card.synopsis as Record<string, unknown>).training_title : undefined
+  const existingSentinel = card.synopsis ? (card.synopsis as Record<string, unknown>).objection_dissolved : undefined
   if (card.synopsis && existingSentinel !== undefined) return card.synopsis
   try {
     const synopsis = await generateBlueprintSynopsis({

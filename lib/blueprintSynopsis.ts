@@ -20,6 +20,11 @@ export type BlueprintSynopsis = {
   // the seed the full micro-training generation builds from.
   training_title: string
   teaching_outline: { point: string; detail: string }[]
+  // Conviction layer — proof the problem is real, painful, and clears the path
+  // to a sale. All '' when missing/ungenerated.
+  audience_quote: string       // the problem in the audience's own words
+  cost_of_inaction: string     // what this problem costs them left unsolved
+  objection_dissolved: string  // the buyer objection this overcomes, + how
 }
 
 // The card fields the synopsis is grounded in — the validated blueprint's own
@@ -42,11 +47,17 @@ Output ONLY valid JSON, no preamble, no markdown, no code fences. Double quotes 
   "framework_fit": { "phase_index": <integer>, "phase_name": "<exact name of that phase>", "note": "one line on how this problem is advanced in that phase" },
   "high_ticket_pitch": "one line: how THIS micro-training drives the viewer to the coach's HIGH-TICKET OFFER below",
   "training_title": "a specific, hooky working title for this micro-training video",
-  "teaching_outline": [ { "point": "the teaching beat", "detail": "one-line detail of what's taught in it" } ]
+  "teaching_outline": [ { "point": "the teaching beat", "detail": "one-line detail of what's taught in it" } ],
+  "audience_quote": "the problem in the audience's OWN words, as they'd actually say it",
+  "cost_of_inaction": "one line: what THIS problem costs them the longer it goes unsolved",
+  "objection_dissolved": "the specific buyer objection this overcomes + one line on how the training answers it"
 }
 
 Hard rules — follow exactly:
 - Use ONLY the audience, transformation, framework, this blueprint's problem_text / reasoning / suggested_offer, and the HIGH-TICKET OFFER provided below. Introduce NO outside facts.
+- audience_quote: write it the way THIS audience would actually say it, drawn from the captured audience language (their language about the problem, their before-state wording, their internal dialogue / pain points). It must read like a real quote from their people — a sentence or two — never invented sentiment or marketing copy.
+- cost_of_inaction: one line on what this SPECIFIC problem costs them the longer it stays unsolved — ground it in the transformation's stakes / cost-of-inaction data applied to this exact problem, not a generic "you'll fall behind" line.
+- objection_dissolved: name a SPECIFIC buyer objection this problem/solution overcomes, drawn from the audience's stated sales objections, then one line on how this training answers it before it's even raised.
 - training_title: a concrete, compelling working title/hook for THIS specific micro-training — grounded in this exact problem/solution, never a generic label. It should make the coach want to teach it.
 - teaching_outline: 3 to 5 beats a coach could actually deliver on camera, ORDERED as they would be taught. Each has a short "point" (the beat) and a one-line "detail" of what's taught in it. Real teaching content specific to this problem/solution — no filler, no restating the title.
 - high_ticket_pitch: ONE natural line on how this specific micro-training moves the viewer toward the high-ticket offer. Present BOTH paths — booking a coaching call from the video, or buying the offer directly — and lean toward whichever better fits the high-ticket offer's price point and delivery format. Ground it in the offer's actual name/price/format; invent no specifics. If NO high-ticket offer is provided below, return an empty string.
@@ -108,9 +119,9 @@ Generate the synopsis now.`
 
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-5',
-    // Raised from 900 to fit the added training_title + teaching_outline
-    // (3-5 beats) alongside the existing fields.
-    max_tokens: 1500,
+    // Sized for the full synopsis object — solution/transformation/offer/
+    // framework fields, title + 3-5 outline beats, and the 3 conviction fields.
+    max_tokens: 2000,
     thinking: { type: 'disabled' },
     system: SYNOPSIS_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
@@ -149,5 +160,8 @@ Generate the synopsis now.`
     high_ticket_pitch: typeof parsed?.high_ticket_pitch === 'string' ? parsed.high_ticket_pitch : '',
     training_title: typeof parsed?.training_title === 'string' ? parsed.training_title : '',
     teaching_outline: normalizeTeachingOutline(parsed?.teaching_outline),
+    audience_quote: typeof parsed?.audience_quote === 'string' ? parsed.audience_quote : '',
+    cost_of_inaction: typeof parsed?.cost_of_inaction === 'string' ? parsed.cost_of_inaction : '',
+    objection_dissolved: typeof parsed?.objection_dissolved === 'string' ? parsed.objection_dissolved : '',
   }
 }
