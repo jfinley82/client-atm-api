@@ -15,6 +15,11 @@ export type BlueprintSynopsis = {
   // offer (call-or-direct). Empty string when no high-ticket offer is available
   // or it can't be generated.
   high_ticket_pitch: string
+  // A specific, hooky working title for the micro-training video ('' if not
+  // generated), and 3-5 teaching beats the coach could deliver on camera —
+  // the seed the full micro-training generation builds from.
+  training_title: string
+  teaching_outline: { point: string; detail: string }[]
 }
 
 // The card fields the synopsis is grounded in — the validated blueprint's own
@@ -35,11 +40,15 @@ Output ONLY valid JSON, no preamble, no markdown, no code fences. Double quotes 
   "transformation": { "before": "one line — where the client is before", "after": "one line — where the client is after" },
   "offer_includes": ["2-4 concrete components of the suggested offer, in plain terms"],
   "framework_fit": { "phase_index": <integer>, "phase_name": "<exact name of that phase>", "note": "one line on how this problem is advanced in that phase" },
-  "high_ticket_pitch": "one line: how THIS micro-training drives the viewer to the coach's HIGH-TICKET OFFER below"
+  "high_ticket_pitch": "one line: how THIS micro-training drives the viewer to the coach's HIGH-TICKET OFFER below",
+  "training_title": "a specific, hooky working title for this micro-training video",
+  "teaching_outline": [ { "point": "the teaching beat", "detail": "one-line detail of what's taught in it" } ]
 }
 
 Hard rules — follow exactly:
 - Use ONLY the audience, transformation, framework, this blueprint's problem_text / reasoning / suggested_offer, and the HIGH-TICKET OFFER provided below. Introduce NO outside facts.
+- training_title: a concrete, compelling working title/hook for THIS specific micro-training — grounded in this exact problem/solution, never a generic label. It should make the coach want to teach it.
+- teaching_outline: 3 to 5 beats a coach could actually deliver on camera, ORDERED as they would be taught. Each has a short "point" (the beat) and a one-line "detail" of what's taught in it. Real teaching content specific to this problem/solution — no filler, no restating the title.
 - high_ticket_pitch: ONE natural line on how this specific micro-training moves the viewer toward the high-ticket offer. Present BOTH paths — booking a coaching call from the video, or buying the offer directly — and lean toward whichever better fits the high-ticket offer's price point and delivery format. Ground it in the offer's actual name/price/format; invent no specifics. If NO high-ticket offer is provided below, return an empty string.
 - offer_includes describes what is actually inside the suggested_offer (its name, format, price_point, angle_note) in plain terms. Do NOT invent components beyond what the suggested_offer and its angle_note imply. If the offer is thin, return FEWER items rather than padding to reach a count.
 - framework_fit.phase_index MUST be one of the numbered framework phases listed below (the integer index). phase_name MUST be that phase's exact name as listed. Pick the phase this problem most directly advances.
@@ -50,6 +59,15 @@ ${STYLE_GUIDELINES}`
 function normalizeStringArray(raw: unknown): string[] {
   if (!Array.isArray(raw)) return []
   return raw.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).slice(0, 4)
+}
+
+function normalizeTeachingOutline(raw: unknown): { point: string; detail: string }[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((it) => (it && typeof it === 'object' ? (it as Record<string, unknown>) : {}))
+    .filter((it) => typeof it.point === 'string' && (it.point as string).trim().length > 0)
+    .map((it) => ({ point: it.point as string, detail: typeof it.detail === 'string' ? it.detail : '' }))
+    .slice(0, 5)
 }
 
 // Generates a per-blueprint synopsis grounded only in the passed data. Defensive
@@ -90,7 +108,9 @@ Generate the synopsis now.`
 
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-5',
-    max_tokens: 900,
+    // Raised from 900 to fit the added training_title + teaching_outline
+    // (3-5 beats) alongside the existing fields.
+    max_tokens: 1500,
     thinking: { type: 'disabled' },
     system: SYNOPSIS_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
@@ -127,5 +147,7 @@ Generate the synopsis now.`
     offer_includes: normalizeStringArray(parsed?.offer_includes),
     framework_fit,
     high_ticket_pitch: typeof parsed?.high_ticket_pitch === 'string' ? parsed.high_ticket_pitch : '',
+    training_title: typeof parsed?.training_title === 'string' ? parsed.training_title : '',
+    teaching_outline: normalizeTeachingOutline(parsed?.teaching_outline),
   }
 }

@@ -64,13 +64,14 @@ export async function resolveSynopsis(
   card: BlueprintCardRow,
   inputs: SynopsisInputs
 ): Promise<BlueprintSynopsis | null> {
-  // Regenerate when the synopsis is missing entirely OR was persisted before
-  // high_ticket_pitch existed (field absent -> undefined, distinct from a
-  // legitimate empty '' when there's no high-ticket offer). This backfills the
-  // new field on existing cards exactly once — after regen the field is a
-  // string, so it won't regenerate again.
-  const existingPitch = card.synopsis ? (card.synopsis as Record<string, unknown>).high_ticket_pitch : undefined
-  if (card.synopsis && existingPitch !== undefined) return card.synopsis
+  // Regenerate when the synopsis is missing entirely OR predates the newest
+  // synopsis field (currently training_title — added after high_ticket_pitch).
+  // Keying on the latest field backfills every field added since a card's
+  // synopsis was last generated, exactly once: after regen the field is
+  // present, so it won't regenerate again. Bump this sentinel whenever a new
+  // synopsis field is added.
+  const existingSentinel = card.synopsis ? (card.synopsis as Record<string, unknown>).training_title : undefined
+  if (card.synopsis && existingSentinel !== undefined) return card.synopsis
   try {
     const synopsis = await generateBlueprintSynopsis({
       userId,
