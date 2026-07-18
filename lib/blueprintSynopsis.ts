@@ -11,6 +11,10 @@ export type BlueprintSynopsis = {
   offer_includes: string[]
   // null when the framework has no phases to fit against.
   framework_fit: { phase_index: number; phase_name: string; note: string } | null
+  // One line on how this micro-training drives to the member's high-ticket
+  // offer (call-or-direct). Empty string when no high-ticket offer is available
+  // or it can't be generated.
+  high_ticket_pitch: string
 }
 
 // The card fields the synopsis is grounded in — the validated blueprint's own
@@ -30,11 +34,13 @@ Output ONLY valid JSON, no preamble, no markdown, no code fences. Double quotes 
   "solution_summary": "2-3 sentences: how the micro-training solves this problem, grounded in this coach's specific data",
   "transformation": { "before": "one line — where the client is before", "after": "one line — where the client is after" },
   "offer_includes": ["2-4 concrete components of the suggested offer, in plain terms"],
-  "framework_fit": { "phase_index": <integer>, "phase_name": "<exact name of that phase>", "note": "one line on how this problem is advanced in that phase" }
+  "framework_fit": { "phase_index": <integer>, "phase_name": "<exact name of that phase>", "note": "one line on how this problem is advanced in that phase" },
+  "high_ticket_pitch": "one line: how THIS micro-training drives the viewer to the coach's HIGH-TICKET OFFER below"
 }
 
 Hard rules — follow exactly:
-- Use ONLY the audience, transformation, framework, and this blueprint's problem_text / reasoning / suggested_offer provided below. Introduce NO outside facts.
+- Use ONLY the audience, transformation, framework, this blueprint's problem_text / reasoning / suggested_offer, and the HIGH-TICKET OFFER provided below. Introduce NO outside facts.
+- high_ticket_pitch: ONE natural line on how this specific micro-training moves the viewer toward the high-ticket offer. Present BOTH paths — booking a coaching call from the video, or buying the offer directly — and lean toward whichever better fits the high-ticket offer's price point and delivery format. Ground it in the offer's actual name/price/format; invent no specifics. If NO high-ticket offer is provided below, return an empty string.
 - offer_includes describes what is actually inside the suggested_offer (its name, format, price_point, angle_note) in plain terms. Do NOT invent components beyond what the suggested_offer and its angle_note imply. If the offer is thin, return FEWER items rather than padding to reach a count.
 - framework_fit.phase_index MUST be one of the numbered framework phases listed below (the integer index). phase_name MUST be that phase's exact name as listed. Pick the phase this problem most directly advances.
 - Every line must be specific to THIS coach's data — no generic coaching filler.
@@ -58,6 +64,10 @@ export async function generateBlueprintSynopsis(opts: {
   transformation: unknown
   framework: unknown
   card: SynopsisCard
+  // The member's high-ticket core offer (at least name + price_point), so the
+  // synopsis can pitch how this micro-training sells it. null/absent -> the
+  // high_ticket_pitch degrades to an empty string.
+  highTicket?: unknown
 }): Promise<BlueprintSynopsis> {
   const phases = Array.isArray((opts.framework as { phases?: unknown })?.phases)
     ? ((opts.framework as { phases: Array<{ name?: unknown }> }).phases)
@@ -75,6 +85,7 @@ BLUEPRINT:
 - problem_text: ${JSON.stringify(opts.card.problem_text)}
 - reasoning: ${JSON.stringify(opts.card.reasoning)}
 - suggested_offer: ${JSON.stringify(opts.card.suggested_offer)}
+HIGH-TICKET OFFER: ${opts.highTicket ? JSON.stringify(opts.highTicket) : '(none — return high_ticket_pitch as an empty string)'}
 Generate the synopsis now.`
 
   const message = await anthropic.messages.create({
@@ -115,5 +126,6 @@ Generate the synopsis now.`
     },
     offer_includes: normalizeStringArray(parsed?.offer_includes),
     framework_fit,
+    high_ticket_pitch: typeof parsed?.high_ticket_pitch === 'string' ? parsed.high_ticket_pitch : '',
   }
 }

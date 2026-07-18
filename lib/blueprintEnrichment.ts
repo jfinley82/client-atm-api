@@ -22,22 +22,26 @@ export type BlueprintCardRow = {
 
 export type BlueprintScoring = { match_strength: number | null; match_factors: MatchFactors | null }
 
-// The audience/transformation/framework the synopsis generator is grounded in.
+// The audience/transformation/framework the synopsis generator is grounded in,
+// plus the member's high-ticket offer for the high_ticket_pitch line.
 // transformation prefers the confirmed transformation_analysis (it carries
 // explicit before/after) and falls back to the raw transformation session.
-export type SynopsisInputs = { audience: unknown; transformation: unknown; framework: unknown }
+export type SynopsisInputs = { audience: unknown; transformation: unknown; framework: unknown; highTicket: unknown }
 
 export async function loadSynopsisInputs(userId: string): Promise<SynopsisInputs> {
-  const [aud, tAnalysis, tRaw, fw] = await Promise.all([
+  const [aud, tAnalysis, tRaw, fw, coreOffers] = await Promise.all([
     getSavedOutput(userId, 'audience'),
     getSavedOutput(userId, 'transformation_analysis'),
     getSavedOutput(userId, 'transformation'),
     getSavedOutput(userId, 'framework'),
+    getSavedOutput(userId, 'core_offers'),
   ])
+  const highTicket = (coreOffers?.content as { high_ticket?: unknown } | undefined)?.high_ticket ?? null
   return {
     audience: aud ? stripSessionHistory(aud.content) : null,
     transformation: tAnalysis?.content ?? (tRaw ? stripSessionHistory(tRaw.content) : null),
     framework: fw?.content ?? null,
+    highTicket,
   }
 }
 
@@ -60,13 +64,20 @@ export async function resolveSynopsis(
   card: BlueprintCardRow,
   inputs: SynopsisInputs
 ): Promise<BlueprintSynopsis | null> {
-  if (card.synopsis) return card.synopsis
+  // Regenerate when the synopsis is missing entirely OR was persisted before
+  // high_ticket_pitch existed (field absent -> undefined, distinct from a
+  // legitimate empty '' when there's no high-ticket offer). This backfills the
+  // new field on existing cards exactly once — after regen the field is a
+  // string, so it won't regenerate again.
+  const existingPitch = card.synopsis ? (card.synopsis as Record<string, unknown>).high_ticket_pitch : undefined
+  if (card.synopsis && existingPitch !== undefined) return card.synopsis
   try {
     const synopsis = await generateBlueprintSynopsis({
       userId,
       audience: inputs.audience,
       transformation: inputs.transformation,
       framework: inputs.framework,
+      highTicket: inputs.highTicket,
       card: {
         card_name: card.card_name,
         problem_text: card.problem_text,
