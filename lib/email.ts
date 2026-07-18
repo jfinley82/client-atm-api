@@ -3,7 +3,6 @@ import crypto from 'crypto'
 import { supabase } from './supabase'
 
 const resend = new Resend(process.env.RESEND_API_KEY!)
-const FROM = 'Client ATM Builder <noreply@clientatmbuilder.com>'
 // The API's own public base URL — NOT the frontend (that's APP_URL). The
 // magic-link email must point at the BACKEND token processor
 // (GET /api/auth/callback), which validates the magic token and then
@@ -154,49 +153,19 @@ export async function sendBookingConfirmationEmail(opts: {
   }
 }
 
+// Beta invite welcome. Sends the published MTM beta template. The link is the
+// caller's own token URL (invite-beta mints a 7-day token — intentionally
+// long-lived for a cold invite), NOT sendTierWelcomeEmail's 15-minute token.
+// Signature unchanged so api/members/invite-beta.ts needs no change.
 export async function sendBetaWelcomeEmail(email: string, name: string, loginUrl: string) {
-  await resend.emails.send({
-    from: FROM,
+  const firstName = name && name.trim() ? name.trim().split(/\s+/)[0] : 'there'
+  const { error } = await resend.emails.send({
+    from: 'Micro-Training Method <noreply@mail.microtrainingmethod.com>',
     to: email,
-    subject: "You're in — welcome to the beta 🎯",
-    html: `
-      <!DOCTYPE html>
-      <html>
-      <body style="font-family: 'Inter', sans-serif; background: #0a0e1a; color: #f1f5f9; padding: 40px 20px; margin: 0;">
-        <div style="max-width: 560px; margin: 0 auto; background: #0f172a; border: 1px solid rgba(148,163,184,0.15); border-radius: 16px; padding: 40px;">
-          <h2 style="color: #a855f7; font-size: 24px; margin: 0 0 8px;">Welcome to the beta, ${name || 'Coach'}! 🎯</h2>
-          <p style="color: rgba(241,245,249,0.7); margin: 0 0 32px;">You've been given full access. Click below to log in and get started — no password needed.</p>
-          <a href="${loginUrl}" style="display: inline-block; background: linear-gradient(to right, #9333ea, #7c3aed); color: white; text-decoration: none; padding: 14px 32px; border-radius: 10px; font-weight: 700; font-size: 16px;">Log In to Your Dashboard →</a>
-          <p style="color: rgba(241,245,249,0.3); font-size: 12px; margin: 32px 0 0;">If the button doesn't work, copy and paste this link:<br>${loginUrl}</p>
-        </div>
-      </body>
-      </html>
-    `
+    template: {
+      id: 'mtm-beta-welcome',
+      variables: { NAME: firstName, LOGIN_LINK: loginUrl },
+    },
   })
-}
-
-export async function sendWelcomeEmail(email: string, name: string) {
-  await resend.emails.send({
-    from: FROM,
-    to: email,
-    subject: 'Welcome to Client ATM Builder 🎯',
-    html: `
-      <!DOCTYPE html>
-      <html>
-      <body style="font-family: 'Inter', sans-serif; background: #0a0e1a; color: #f1f5f9; padding: 40px 20px; margin: 0;">
-        <div style="max-width: 560px; margin: 0 auto; background: #0f172a; border: 1px solid rgba(148,163,184,0.15); border-radius: 16px; padding: 40px;">
-          <h2 style="color: #a855f7;">Welcome, ${name || 'Coach'}! 🎯</h2>
-          <p>You're in. The Client ATM Builder is ready for you.</p>
-          <p style="color: rgba(241,245,249,0.7);">Here's what to do next:</p>
-          <ol style="color: rgba(241,245,249,0.7); padding-left: 20px; line-height: 2;">
-            <li>Take the A.T.M. Quiz to set your baseline</li>
-            <li>Run through the 3 AI tools (Audience → Transformation → Monetization)</li>
-            <li>Download your complete Client ATM Blueprint</li>
-          </ol>
-          <p style="color: rgba(241,245,249,0.3); font-size: 12px; margin-top: 32px;">© 2026 Clarity &amp; Clients · support@clarityandclients.com</p>
-        </div>
-      </body>
-      </html>
-    `
-  })
+  if (error) throw new Error(`[email] beta welcome send failed: ${error.message}`)
 }
