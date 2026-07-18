@@ -6,8 +6,11 @@ import { getSavedOutput } from '../../lib/savedOutputs'
 import { MatcherAnalysis } from '../../lib/matcherAnalysis'
 import { stampSyncSnapshot } from '../../lib/syncDependencies'
 import { requireCapability } from '../../lib/entitlements'
-import { loadSynopsisInputs } from '../../lib/blueprintEnrichment'
-import { generateBlueprintSynopsis } from '../../lib/blueprintSynopsis'
+
+// 60s headroom in case a future path here does slow work. Synopsis generation
+// is deliberately NOT done here anymore (it's lazy — see below), so finalize is
+// fast today, but this keeps the ceiling well clear of any Anthropic latency.
+export const config = { maxDuration: 60 }
 
 type FinalizeCard = {
   id: string
@@ -89,39 +92,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (error) throw error
 
-    // Generate each card's synopsis now so the results page is instant. Strictly
-    // best-effort: a failure here (or a missing framework) must never fail the
-    // finalize — the row already exists, and any card left with synopsis null
-    // is regenerated lazily on the next results read (lib/blueprintEnrichment).
-    const inserted = (data ?? []) as Array<{ id: string; card_name: string; problem_text: string; reasoning: string | null; suggested_offer: unknown }>
-    try {
-      const inputs = await loadSynopsisInputs(userId)
-      await Promise.all(
-        inserted.map(async (card) => {
-          try {
-            const synopsis = await generateBlueprintSynopsis({
-              userId,
-              audience: inputs.audience,
-              transformation: inputs.transformation,
-              framework: inputs.framework,
-              card: {
-                card_name: card.card_name,
-                problem_text: card.problem_text,
-                reasoning: card.reasoning ?? '',
-                suggested_offer: card.suggested_offer,
-              },
-            })
-            await supabase.from('problem_solution_cards').update({ synopsis }).eq('id', card.id)
-            ;(card as { synopsis?: unknown }).synopsis = synopsis
-          } catch (cardErr) {
-            console.error('[matcher/finalize] synopsis generation failed for card', card.id, cardErr)
-          }
-        })
-      )
-    } catch (synErr) {
-      console.error('[matcher/finalize] synopsis batch failed — cards saved, synopses will regenerate lazily', synErr)
-    }
-
+    // Synopsis generation is intentionally NOT done here — it's ~3 Sonnet calls
+    // (~8s) and would make the Step 3 finalize slow and risk a timeout. Each
+    // card's synopsis is generated lazily on the first results/my-micro-trainings
+    // read (resolveSynopsis in lib/blueprintEnrichment), where a loading state
+    // absorbs the one-time cost. source_problem_id is persisted above so that
+    // lazy pass can still join back to the match scoring.
     return res.status(200).json(data)
   } catch (err) {
     console.error('[matcher/finalize] POST', err)
