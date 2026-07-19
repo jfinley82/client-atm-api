@@ -33,10 +33,11 @@ export type CoreOffersAnalysis = {
   sync_snapshot?: Record<string, string>
 }
 
-// Placeholder forward-bridge line shown once core_offers is confirmed. Static
-// today since there's nothing dynamic yet to reference; replace with real
-// content once My Micro-Trainings' assembly exists.
-export const NEXT_STEP_BRIDGE = 'Your full Micro-Training Blueprint is ready.'
+// Forward-bridge line shown once core_offers is confirmed. Points at the actual
+// next move in the method — turning the confirmed program into the one video
+// training that fills it (book-a-call-to-fill-the-program motion), not a
+// generic "your blueprint is ready" placeholder. Backend-computed constant.
+export const NEXT_STEP_BRIDGE = 'Next, turn this into the one video training that fills your program.'
 
 const CORE_OFFERS_PROMPT = `You are an expert offer strategist and pricing consultant helping a coach design the three-tier offer ladder their entire business runs on. This is the capstone of their process — you are given everything already established: their audience, their confirmed core transformation, their named results framework, their 3 finalized monetizable problem/solution blueprints, and their current business context (whether they already sell something).
 

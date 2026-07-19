@@ -33,6 +33,37 @@ export type ProgramAnalysis = {
   sync_snapshot?: Record<string, string>
 }
 
+// Optional coach decisions from the Step 3 (Monetize) flow. Each, when
+// provided, is applied as a DETERMINISTIC override after generation — the same
+// principle as suggested_starting_price being pinned to the real high-ticket
+// price rather than trusted to the model's paraphrasing. Omitted inputs keep
+// today's model/derived default.
+export type ProgramCoachInputs = {
+  delivery_model?: '1:1' | 'group' | 'both'
+  preferred_weeks?: number
+  capacity_per_month?: number
+}
+
+const TOTAL_WEEKS_MIN = 4
+const TOTAL_WEEKS_MAX = 16
+
+// delivery_model -> the exact session_type label (one of the three the prompt
+// itself allows), set deterministically rather than paraphrased by the model.
+const SESSION_TYPE_BY_DELIVERY_MODEL: Record<NonNullable<ProgramCoachInputs['delivery_model']>, string> = {
+  '1:1': '1:1 Coaching',
+  group: 'Group Program',
+  both: 'Hybrid',
+}
+
+// The steer we add to the prompt so the generated weekly_breakdown / deliverables
+// actually fit the chosen delivery format (the session_type value is still
+// overridden deterministically afterwards — this only shapes the content).
+const DELIVERY_MODEL_PROMPT_NOTE: Record<NonNullable<ProgramCoachInputs['delivery_model']>, string> = {
+  '1:1': 'This is a 1:1 Coaching program — design the weekly sessions and deliverables for one-on-one delivery.',
+  group: 'This is a Group Program — design the weekly sessions and deliverables for a group / cohort format.',
+  both: 'This is a Hybrid program combining 1:1 and group delivery — design the weekly sessions and deliverables accordingly.',
+}
+
 const PROGRAM_PROMPT = `You are an expert program designer helping a coach turn their confirmed high-ticket core offer into an actual sellable program — a real session structure a client could enroll in tomorrow.
 
 You are given: the coach's CONFIRMED high-ticket core offer (name, price, what's included, delivery format), their named results FRAMEWORK (the phases and steps their method actually walks a client through), and their audience data. Ground everything in this specific data — the weekly breakdown must be a real mapping of the framework's actual phases and steps onto a calendar, not a generic coaching-program template.
@@ -85,13 +116,43 @@ export async function generateProgram(
   highTicketOffer: unknown,
   framework: unknown,
   audience: unknown,
-  voiceContext?: string
+  voiceContext?: string,
+  coachInputs?: ProgramCoachInputs
 ): Promise<Omit<ProgramAnalysis, 'confirmed'>> {
+  // Sanitize the coach inputs up front — an invalid value is treated as absent
+  // (keep today's default) rather than trusted. preferred_weeks is clamped into
+  // the same 4-16 bound the prompt already enforces.
+  const dm = coachInputs?.delivery_model
+  const deliveryModel = dm === '1:1' || dm === 'group' || dm === 'both' ? dm : undefined
+  const rawWeeks = Number(coachInputs?.preferred_weeks)
+  const preferredWeeks =
+    Number.isFinite(rawWeeks) && rawWeeks > 0
+      ? Math.min(TOTAL_WEEKS_MAX, Math.max(TOTAL_WEEKS_MIN, Math.round(rawWeeks)))
+      : undefined
+  const rawCapacity = Number(coachInputs?.capacity_per_month)
+  const capacityPerMonth = Number.isFinite(rawCapacity) && rawCapacity > 0 ? Math.round(rawCapacity) : undefined
+
+  // Steer the generation for the inputs that shape CONTENT (delivery format and
+  // week count). session_type and capacity are also overridden deterministically
+  // below, but the week count must be reflected in the weekly_breakdown itself,
+  // so it has to reach the model too.
+  const decisionLines: string[] = []
+  if (deliveryModel) decisionLines.push(`- ${DELIVERY_MODEL_PROMPT_NOTE[deliveryModel]}`)
+  if (preferredWeeks)
+    decisionLines.push(
+      `- Program length: EXACTLY ${preferredWeeks} weeks. weekly_breakdown MUST contain exactly ${preferredWeeks} entries, weeks 1 through ${preferredWeeks} in order, each mapped to a real framework phase in phase order.`
+    )
+  if (capacityPerMonth)
+    decisionLines.push(`- The coach will take on ${capacityPerMonth} clients per month at this offer — reflect that capacity.`)
+  const coachDecisions = decisionLines.length
+    ? `\n\nCOACH DECISIONS — honor these EXACTLY, do not paraphrase or change them:\n${decisionLines.join('\n')}`
+    : ''
+
   const userMessage = `CONFIRMED HIGH-TICKET CORE OFFER: ${JSON.stringify(highTicketOffer)}
 
 RESULTS FRAMEWORK: ${JSON.stringify(framework)}
 
-AUDIENCE DATA: ${JSON.stringify(audience)}
+AUDIENCE DATA: ${JSON.stringify(audience)}${coachDecisions}
 
 Generate the program now.`
 
@@ -119,8 +180,11 @@ Generate the program now.`
 
   return {
     program_name: asString(parsed.program_name),
-    session_type: asString(parsed.session_type),
-    total_weeks: Number.isFinite(totalWeeksRaw) && totalWeeksRaw > 0 ? Math.round(totalWeeksRaw) : weekly_breakdown.length,
+    // Deterministic overrides win when the coach supplied the input; otherwise
+    // fall back to today's model/derived default.
+    session_type: deliveryModel ? SESSION_TYPE_BY_DELIVERY_MODEL[deliveryModel] : asString(parsed.session_type),
+    total_weeks:
+      preferredWeeks ?? (Number.isFinite(totalWeeksRaw) && totalWeeksRaw > 0 ? Math.round(totalWeeksRaw) : weekly_breakdown.length),
     total_sessions: Number.isFinite(totalSessionsRaw) && totalSessionsRaw > 0 ? Math.round(totalSessionsRaw) : weekly_breakdown.length,
     session_length_minutes: Number.isFinite(sessionLengthRaw) && sessionLengthRaw > 0 ? Math.round(sessionLengthRaw) : 60,
     timeline_reasoning: asString(parsed.timeline_reasoning),
@@ -129,6 +193,7 @@ Generate the program now.`
       ? parsed.deliverables.filter((d: unknown): d is string => typeof d === 'string')
       : [],
     suggested_starting_price: asString(parsed.suggested_starting_price),
-    suggested_capacity_per_month: Number.isFinite(capacityRaw) && capacityRaw > 0 ? Math.round(capacityRaw) : 6,
+    suggested_capacity_per_month:
+      capacityPerMonth ?? (Number.isFinite(capacityRaw) && capacityRaw > 0 ? Math.round(capacityRaw) : 6),
   }
 }
