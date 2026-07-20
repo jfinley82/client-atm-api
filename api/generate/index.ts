@@ -9,8 +9,11 @@ import { checkFrameworkConfirmed, getValidatedBlueprint } from '../../lib/toolki
 import { GenerationParseError } from '../../lib/aiJson'
 import {
   generateMicroTraining,
+  regenerateAsset,
+  regenerateScript,
   DeliveryInput,
   GeneratorInputs,
+  MtSlide,
 } from '../../lib/microTrainingGenerator'
 
 // POST /api/generate — the unified Micro-Training generator. From ONE validated
@@ -27,6 +30,16 @@ export const config = { maxDuration: 60 }
 
 const DURATIONS = new Set(['60', '90', '120'])
 const FORMATS = new Set(['virtual', 'in-person', 'hybrid'])
+const REGEN_TARGETS = new Set([
+  'slides',
+  'emails',
+  'book_a_call',
+  'workbook',
+  'facilitator_tips',
+  'script',
+  'topics',
+  'outline',
+])
 
 function parseDelivery(raw: unknown): DeliveryInput | null {
   if (!raw || typeof raw !== 'object') return null
@@ -55,15 +68,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const card_id = typeof body.card_id === 'string' ? body.card_id : ''
     if (!card_id) return res.status(400).json({ error: 'card_id required' })
 
-    const delivery = parseDelivery(body.delivery)
-    if (!delivery) {
-      return res.status(400).json({
-        error:
-          "delivery required — { duration: '60'|'90'|'120', format: 'virtual'|'in-person'|'hybrid', facilitator_name (non-empty), soft_cta?, call_page_url? }",
-      })
-    }
-    // Preserve an existing coach-chosen title only when the caller opts in.
+    // A regenerate request rebuilds ONE asset conditioned on the current
+    // chosen_topic and reuses the stored delivery, so no delivery in the body.
+    // A full generate requires delivery up front.
+    const regenerate = typeof body.regenerate === 'string' ? body.regenerate : null
     const keepTitle = body.keep_title === true
+
+    let delivery: DeliveryInput | null = null
+    if (regenerate) {
+      if (!REGEN_TARGETS.has(regenerate)) {
+        return res.status(400).json({
+          error: 'regenerate must be one of: slides, emails, book_a_call, workbook, facilitator_tips, script, topics, outline',
+        })
+      }
+    } else {
+      delivery = parseDelivery(body.delivery)
+      if (!delivery) {
+        return res.status(400).json({
+          error:
+            "delivery required — { duration: '60'|'90'|'120', format: 'virtual'|'in-person'|'hybrid', facilitator_name (non-empty), soft_cta?, call_page_url? }",
+        })
+      }
+    }
 
     // Capability gate — toolkits require beta/full (admin bypasses).
     if (!(await requireCapability(userId, 'toolkits', res))) return
@@ -78,11 +104,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const [audienceRow, transformationRow, existingRow, voiceContext] = await Promise.all([
         getSavedOutput(userId, 'audience'),
         getSavedOutput(userId, 'transformation'),
-        supabase.from('mtm_generations').select('chosen_topic').eq('user_id', userId).eq('card_id', card_id).maybeSingle(),
+        supabase
+          .from('mtm_generations')
+          .select('chosen_topic, delivery, slides')
+          .eq('user_id', userId)
+          .eq('card_id', card_id)
+          .maybeSingle(),
         getVoiceContext(userId),
       ])
+      const existing = existingRow.data
 
-      const inputs: GeneratorInputs = {
+      const baseInputs: Omit<GeneratorInputs, 'delivery'> = {
         audience: audienceRow ? stripSessionHistory(audienceRow.content) : null,
         transformation: transformationRow ? stripSessionHistory(transformationRow.content) : null,
         framework: {
@@ -97,15 +129,68 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           reasoning: blueprintGate.card.reasoning,
           suggested_offer: blueprintGate.card.suggested_offer,
         },
-        delivery,
         voiceContext,
       }
 
+      // ── Regenerate one asset ── conditioned on the stored chosen_topic +
+      // delivery, writing back only that asset's column(s).
+      if (regenerate) {
+        if (!existing) return res.status(404).json({ error: 'No generation to regenerate — run a full generate first' })
+        const storedDelivery = parseDelivery(existing.delivery)
+        if (!storedDelivery) {
+          return res.status(400).json({ error: 'This generation has no delivery on file — run a full generate first' })
+        }
+        const inputs: GeneratorInputs = { ...baseInputs, delivery: storedDelivery }
+        const chosenTopic = typeof existing.chosen_topic === 'string' ? existing.chosen_topic : ''
+
+        const update: Record<string, unknown> = { updated_at: new Date().toISOString() }
+        switch (regenerate) {
+          case 'slides':
+            update.slides = (await regenerateAsset(userId, 'slides', inputs, chosenTopic)).slides
+            break
+          case 'emails':
+            update.emails = (await regenerateAsset(userId, 'emails', inputs, chosenTopic)).emails
+            break
+          case 'book_a_call':
+            update.book_a_call_emails = (await regenerateAsset(userId, 'book_a_call', inputs, chosenTopic)).book_a_call_emails
+            break
+          case 'workbook':
+            update.workbook = (await regenerateAsset(userId, 'workbook', inputs, chosenTopic)).workbook
+            break
+          case 'facilitator_tips':
+            update.facilitator_tips = (await regenerateAsset(userId, 'facilitator_tips', inputs, chosenTopic)).facilitator_tips
+            break
+          case 'topics':
+            update.topics = (await regenerateAsset(userId, 'meta', inputs, chosenTopic)).topics
+            break
+          case 'outline':
+            update.outline = (await regenerateAsset(userId, 'meta', inputs, chosenTopic)).outline
+            break
+          case 'script': {
+            const cur = Array.isArray(existing.slides) ? (existing.slides as MtSlide[]) : []
+            update.slides = await regenerateScript(userId, inputs, cur, chosenTopic)
+            break
+          }
+        }
+
+        const { data, error } = await supabase
+          .from('mtm_generations')
+          .update(update)
+          .eq('user_id', userId)
+          .eq('card_id', card_id)
+          .select()
+          .single()
+        if (error) throw error
+        return res.status(200).json(data)
+      }
+
+      // ── Full generate ──
+      const inputs: GeneratorInputs = { ...baseInputs, delivery: delivery! }
       const generated = await generateMicroTraining(userId, inputs)
 
       // chosen_topic is never null on success. Keep the coach's existing title
       // only when keep_title was passed and a non-empty one is already stored.
-      const existingChosen = (existingRow.data?.chosen_topic ?? '') as string
+      const existingChosen = (existing?.chosen_topic ?? '') as string
       const chosen_topic = keepTitle && existingChosen.trim().length > 0 ? existingChosen : generated.chosen_topic
 
       const { data, error } = await supabase

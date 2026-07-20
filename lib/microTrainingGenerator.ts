@@ -400,10 +400,67 @@ export async function regenerateAsset(
   inputs: GeneratorInputs,
   chosenTopic: string
 ): Promise<Partial<MicroTraining>> {
-  const grounding = chosenTopic.trim().length > 0
-    ? `${buildGrounding(inputs)}\nCURRENT TRAINING TITLE (align this asset to it): ${JSON.stringify(chosenTopic)}`
-    : buildGrounding(inputs)
-  return runUnit(userId, unit, grounding, inputs.voiceContext)
+  return runUnit(userId, unit, withTitle(buildGrounding(inputs), chosenTopic), inputs.voiceContext)
+}
+
+function withTitle(grounding: string, chosenTopic: string): string {
+  return chosenTopic.trim().length > 0
+    ? `${grounding}\nCURRENT TRAINING TITLE (align this asset to it): ${JSON.stringify(chosenTopic)}`
+    : grounding
+}
+
+const SCRIPT_PROMPT = `You rewrite ONLY the spoken script for each slide of an existing micro-training deck. Keep every slide's title, timing, and section exactly as given — you are refreshing the words the facilitator speaks, not restructuring the deck.
+
+You are given the existing deck (each slide's number, title, section, and timing) plus the coach's grounding data. Return new spoken script for every slide, matched by slideNumber.
+
+{
+  "slides": [ { "slideNumber": 1, "script": "the new spoken script for this slide, grounded in this blueprint and the audience's language" } ]
+}
+
+Rules:
+- Return one entry per slide given, same slideNumber values, in order.
+- script is what the facilitator says on camera — specific teaching grounded in this blueprint's problem/solution and this audience, not vague restatements of the slide title.
+- The final slide's script keeps its soft, teaching-first next-step framing referencing the blueprint's suggested_offer.
+${SHARED_RULES}`
+
+// Regenerate the spoken script of each existing slide in place, preserving every
+// slide's slideTitle / speakerNote / timing / sectionName. Slides whose script
+// the model doesn't return keep their current script.
+export async function regenerateScript(
+  userId: string,
+  inputs: GeneratorInputs,
+  currentSlides: MtSlide[],
+  chosenTopic: string
+): Promise<MtSlide[]> {
+  const deck = currentSlides.map((s) => ({
+    slideNumber: s.slideNumber,
+    slideTitle: s.slideTitle,
+    sectionName: s.sectionName,
+    timing: s.timing,
+  }))
+  const grounding = `${withTitle(buildGrounding(inputs), chosenTopic)}
+EXISTING DECK (rewrite the script for each, keep everything else): ${JSON.stringify(deck)}`
+
+  const message = await anthropic.messages.create({
+    model: 'claude-sonnet-5',
+    max_tokens: 6000,
+    thinking: { type: 'disabled' },
+    system: inputs.voiceContext ? `${SCRIPT_PROMPT}\n\n${inputs.voiceContext}` : SCRIPT_PROMPT,
+    messages: [{ role: 'user', content: `${grounding}\n\nRewrite the scripts now.` }],
+  })
+  await logApiCost(userId, 'generate', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens)
+
+  const textBlock = message.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined
+  const parsed = extractJson(textBlock?.text ?? '')
+  const rawScripts = Array.isArray(parsed.slides) ? parsed.slides : []
+  const byNumber = new Map<number, string>()
+  for (const r of rawScripts) {
+    const o = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>
+    if (typeof o.slideNumber === 'number' && typeof o.script === 'string' && o.script.trim().length > 0) {
+      byNumber.set(o.slideNumber, o.script)
+    }
+  }
+  return currentSlides.map((s) => ({ ...s, script: byNumber.get(s.slideNumber) ?? s.script }))
 }
 
 export { GenerationParseError }
