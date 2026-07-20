@@ -6,6 +6,7 @@ import { getSavedOutput, stripSessionHistory } from '../../lib/savedOutputs'
 import { getVoiceContext } from '../../lib/voiceGuide'
 import { requireCapability } from '../../lib/entitlements'
 import { checkFrameworkConfirmed, getValidatedBlueprint } from '../../lib/toolkitsShared'
+import { stampSyncSnapshot } from '../../lib/syncDependencies'
 import { GenerationParseError } from '../../lib/aiJson'
 import {
   generateMicroTraining,
@@ -196,6 +197,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             break
           }
         }
+        // Rebuilding the slides re-stamps the 'slides' staleness snapshot.
+        if (regenerate === 'slides' || regenerate === 'script') {
+          update.sync_snapshot = await stampSyncSnapshot(userId, 'slides', card_id)
+        }
 
         const { data, error } = await supabase
           .from('mtm_generations')
@@ -217,6 +222,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const existingChosen = (existing?.chosen_topic ?? '') as string
       const chosen_topic = keepTitle && existingChosen.trim().length > 0 ? existingChosen : generated.chosen_topic
 
+      // A full generate builds the slides, so it stamps the 'slides' staleness snapshot.
+      const sync_snapshot = await stampSyncSnapshot(userId, 'slides', card_id)
+
       const { data, error } = await supabase
         .from('mtm_generations')
         .upsert(
@@ -234,6 +242,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             book_a_call_emails: generated.book_a_call_emails,
             facilitator_tips: generated.facilitator_tips,
             delivery,
+            sync_snapshot,
             updated_at: new Date().toISOString(),
           },
           { onConflict: 'user_id,card_id' }
