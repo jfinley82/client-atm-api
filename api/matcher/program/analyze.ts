@@ -76,6 +76,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       preferred_weeks: typeof body.preferred_weeks === 'number' ? body.preferred_weeks : undefined,
       capacity_per_month: typeof body.capacity_per_month === 'number' ? body.capacity_per_month : undefined,
     }
+    // Optional coach-edited price for this regenerate. A regenerate is only a
+    // draft preview, so this pins the draft's displayed price without writing to
+    // core_offers (that propagation happens at confirm). Absent -> keep pinning
+    // to the confirmed high-ticket price.
+    const editedPrice =
+      typeof body.starting_price === 'string' && body.starting_price.trim().length > 0 ? body.starting_price.trim() : null
 
     const audienceRow = await getSavedOutput(userId, 'audience')
     const voiceContext = await getVoiceContext(userId)
@@ -106,10 +112,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const program: ProgramAnalysis = {
       ...generated,
-      // Deterministic override — price is always pinned to the confirmed
-      // high-ticket price, never the model's paraphrase (same principle as the
-      // coach-input overrides applied inside generateProgram).
-      suggested_starting_price: coreOffersGate.coreOffers.high_ticket.price_point,
+      // Deterministic override — price is pinned to the coach's edited price
+      // when supplied, otherwise the confirmed high-ticket price. Never the
+      // model's paraphrase (same principle as the coach-input overrides applied
+      // inside generateProgram).
+      suggested_starting_price: editedPrice ?? coreOffersGate.coreOffers.high_ticket.price_point,
       confirmed: false,
     }
 
