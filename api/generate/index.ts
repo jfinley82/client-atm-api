@@ -15,6 +15,8 @@ import {
   DeliveryInput,
   GeneratorInputs,
   MtSlide,
+  PersonalHook,
+  CtaType,
 } from '../../lib/microTrainingGenerator'
 
 // POST /api/generate — the unified Micro-Training generator. From ONE validated
@@ -41,15 +43,34 @@ const REGEN_TARGETS = new Set([
   'outline',
 ])
 
-// Recording details are all optional (no duration/format — the video is a fixed
-// 15-20 minutes). Always returns an object; presenter_name defaults to the
-// coach's account name later.
+function parsePersonalHook(raw: unknown): PersonalHook | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const h = raw as Record<string, unknown>
+  const hook: PersonalHook = {}
+  if (typeof h.opening_story === 'string' && h.opening_story.trim().length > 0) hook.opening_story = h.opening_story.trim()
+  if (typeof h.signature_example === 'string' && h.signature_example.trim().length > 0) hook.signature_example = h.signature_example.trim()
+  return hook.opening_story || hook.signature_example ? hook : undefined
+}
+
+function parseCtaType(raw: unknown): CtaType | undefined {
+  return raw === 'book_call' || raw === 'sell_program' ? raw : undefined
+}
+
+// Recording + authorship inputs are all optional (no duration/format — the video
+// is a fixed 15-20 minutes). Always returns an object; presenter_name defaults to
+// the coach's account name later. Reads personal_hook/cta_type from ITS input's
+// keys, so reading a stored delivery blob (which nests them) reconstructs them —
+// the request carries them at the top level and folds them in (see the handler).
 function parseDelivery(raw: unknown): DeliveryInput {
   const d = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
   const delivery: DeliveryInput = {}
   if (typeof d.presenter_name === 'string' && d.presenter_name.trim().length > 0) delivery.presenter_name = d.presenter_name.trim()
   if (typeof d.soft_cta === 'string' && d.soft_cta.trim().length > 0) delivery.soft_cta = d.soft_cta.trim()
   if (typeof d.call_page_url === 'string' && d.call_page_url.trim().length > 0) delivery.call_page_url = d.call_page_url.trim()
+  const hook = parsePersonalHook(d.personal_hook)
+  if (hook) delivery.personal_hook = hook
+  const cta = parseCtaType(d.cta_type)
+  if (cta) delivery.cta_type = cta
   return delivery
 }
 
@@ -205,7 +226,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       // ── Full generate ──
-      const resolvedDelivery = withPresenter(delivery!)
+      // Authorship inputs (personal_hook, cta_type) arrive at the top level of
+      // the request. Fold them into the delivery blob so they persist and the
+      // studio reloads them; when omitted, fall back to the stored values.
+      const stored = parseDelivery(existing?.delivery)
+      const reqHook = parsePersonalHook(body.personal_hook)
+      const reqCta = parseCtaType(body.cta_type)
+      const resolvedDelivery = withPresenter({
+        ...delivery!,
+        personal_hook: reqHook ?? stored.personal_hook,
+        cta_type: reqCta ?? stored.cta_type ?? 'book_call',
+      })
       const inputs: GeneratorInputs = { ...baseInputs, delivery: resolvedDelivery }
       const generated = await generateMicroTraining(userId, inputs)
 
