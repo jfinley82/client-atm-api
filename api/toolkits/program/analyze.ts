@@ -62,6 +62,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(409).json({ error: 'out_of_sync', blocking: syncGate.blocking, stale_items: syncGate.stale_items })
     }
 
+    // Optional coach-edited price for this regenerate. A regenerate is only a
+    // draft preview, so this pins the draft's displayed price without writing to
+    // core_offers (that propagation happens at confirm). Absent -> keep pinning
+    // to the confirmed high-ticket price.
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
+    const editedPrice =
+      typeof body.starting_price === 'string' && body.starting_price.trim().length > 0 ? body.starting_price.trim() : null
+
     const audienceRow = await getSavedOutput(userId, 'audience')
     const voiceContext = await getVoiceContext(userId)
 
@@ -90,10 +98,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const program: ProgramAnalysis = {
       ...generated,
-      // Deterministic override — never trust the model's own paraphrasing of
-      // an exact price string (same principle as PHASE_COLORS/
+      // Deterministic override — the coach's edited price when supplied,
+      // otherwise the confirmed high-ticket price. Never the model's own
+      // paraphrasing of an exact price string (same principle as PHASE_COLORS/
       // resolveFrameworkName/match_strength being backend-computed).
-      suggested_starting_price: coreOffersGate.coreOffers.high_ticket.price_point,
+      suggested_starting_price: editedPrice ?? coreOffersGate.coreOffers.high_ticket.price_point,
       confirmed: false,
     }
 

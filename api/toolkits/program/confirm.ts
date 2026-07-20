@@ -4,6 +4,7 @@ import { requireCapability } from '../../../lib/entitlements'
 import { setCors } from '../../../lib/cors'
 import { getSavedOutput, saveOutput } from '../../../lib/savedOutputs'
 import { ProgramAnalysis, WeeklyBreakdownEntry } from '../../../lib/programAnalysis'
+import { CoreOffersAnalysis } from '../../../lib/coreOffersAnalysis'
 import { stampSyncSnapshot } from '../../../lib/syncDependencies'
 import { checkSyncGate } from '../../../lib/syncGate'
 
@@ -78,6 +79,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const syncGate = await checkSyncGate(userId, 'program')
     if (!syncGate.ok) {
       return res.status(409).json({ error: 'out_of_sync', blocking: syncGate.blocking, stale_items: syncGate.stale_items })
+    }
+
+    // The program IS the confirmed high-ticket core offer, so its price is the
+    // single source of truth shared with core_offers.high_ticket.price_point. If
+    // the coach edited the price here, propagate it back into core_offers — ONLY
+    // high_ticket.price_point changes; every other field (low_ticket/mid_ticket,
+    // confirmed, next_step_bridge, its own sync_snapshot) is preserved. This runs
+    // BEFORE the stamp below so the program's fresh sync snapshot captures the
+    // just-updated core_offers timestamp and isn't flagged stale against its own
+    // edit. No-op when the price is unchanged. (content/qualifier depend on
+    // core_offers and will correctly show stale after a price change.)
+    const coreOffersRow = await getSavedOutput(userId, 'core_offers')
+    const coreOffers = coreOffersRow?.content as CoreOffersAnalysis | undefined
+    if (
+      coreOffers &&
+      coreOffers.confirmed === true &&
+      coreOffers.high_ticket &&
+      coreOffers.high_ticket.price_point !== suggested_starting_price
+    ) {
+      const updatedCoreOffers: CoreOffersAnalysis = {
+        ...coreOffers,
+        high_ticket: { ...coreOffers.high_ticket, price_point: suggested_starting_price as string },
+      }
+      await saveOutput(userId, 'core_offers', updatedCoreOffers)
     }
 
     const sync_snapshot = await stampSyncSnapshot(userId, 'program')
