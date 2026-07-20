@@ -121,7 +121,7 @@ type UnitSpec = { key: AssetUnit; maxTokens: number; prompt: string }
 const UNIT_SPECS: Record<AssetUnit, UnitSpec> = {
   meta: {
     key: 'meta',
-    maxTokens: 1500,
+    maxTokens: 2500,
     prompt: `You design the framing for a coach's pre-recorded micro-training video. Produce the title options, the recommended primary title, a subtitle, the run time, and a section outline.
 
 {
@@ -141,7 +141,7 @@ ${SHARED_RULES}`,
   },
   slides: {
     key: 'slides',
-    maxTokens: 6000,
+    maxTokens: 8000,
     prompt: `You build the slide deck the coach records the micro-training video from. Each slide has the script the coach speaks on camera, a short speaker note/cue, its timing, and the framework section it belongs to.
 
 {
@@ -161,7 +161,7 @@ ${SHARED_RULES}`,
   },
   workbook: {
     key: 'workbook',
-    maxTokens: 3500,
+    maxTokens: 5000,
     prompt: `You build the companion worksheet a viewer downloads AFTER watching the recorded micro-training, to apply the teaching on their own. It follows the same arc as the video and gives the viewer prompts and reflection space.
 
 {
@@ -185,7 +185,7 @@ ${SHARED_RULES}`,
   },
   recording_tips: {
     key: 'recording_tips',
-    maxTokens: 1500,
+    maxTokens: 2200,
     prompt: `You write recording tips for the coach filming this micro-training solo on camera — pacing, energy on camera, and simple setup — tuned to THIS specific video.
 
 {
@@ -199,7 +199,7 @@ ${SHARED_RULES}`,
   },
   emails: {
     key: 'emails',
-    maxTokens: 2500,
+    maxTokens: 4000,
     prompt: `You write the registration email sequence (3 emails) that gets a registrant to actually watch the recorded micro-training video.
 
 {
@@ -217,7 +217,7 @@ ${SHARED_RULES}`,
   },
   book_a_call: {
     key: 'book_a_call',
-    maxTokens: 2500,
+    maxTokens: 4000,
     prompt: `You write the post-video booking email sequence (3 emails) that invites a viewer who watched the recorded training to book a call, softly.
 
 {
@@ -328,10 +328,50 @@ function coerceRecordingTips(v: unknown): MtRecordingTip[] {
     .filter((t) => t.tip.trim().length > 0)
 }
 
+// One Anthropic call for a unit: logs cost and returns its text + whether the
+// model stopped at max_tokens (a genuine truncation, distinct from control-char
+// parse issues which extractJson repairs).
+async function callUnitOnce(
+  userId: string,
+  system: string,
+  userMessage: string,
+  maxTokens: number
+): Promise<{ text: string; truncated: boolean }> {
+  const message = await anthropic.messages.create({
+    model: 'claude-sonnet-5',
+    max_tokens: maxTokens,
+    thinking: { type: 'disabled' },
+    system,
+    messages: [{ role: 'user', content: userMessage }],
+  })
+  await logApiCost(userId, 'generate', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens)
+  const textBlock = message.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined
+  return { text: textBlock?.text ?? '', truncated: message.stop_reason === 'max_tokens' }
+}
+
+// Calls a unit and parses its JSON, with a SINGLE automatic retry (more
+// max_tokens headroom) when the first attempt is truncated (stop_reason
+// max_tokens) or won't parse. A still-bad retry throws GenerationParseError,
+// which the endpoint maps to 502 generation_truncated.
+async function callAndParse(userId: string, system: string, userMessage: string, maxTokens: number): Promise<any> {
+  const first = await callUnitOnce(userId, system, userMessage, maxTokens)
+  if (!first.truncated) {
+    try {
+      return extractJson(first.text)
+    } catch (err) {
+      if (!(err instanceof GenerationParseError)) throw err
+      // fall through to the retry
+    }
+  }
+  const retryTokens = Math.min(16000, Math.round(maxTokens * 1.6))
+  const second = await callUnitOnce(userId, system, userMessage, retryTokens)
+  return extractJson(second.text)
+}
+
 // ── Unit runner ─────────────────────────────────────────────────────────────
-// Runs one unit's Anthropic call and returns the parsed partial. Throws
-// GenerationParseError (from extractJson) on unparseable output, which callers
-// map to 502 generation_truncated. Each call logs its own cost under 'generate'.
+// Runs one unit's Anthropic call (with a single truncation retry) and returns
+// the parsed partial. Throws GenerationParseError on a still-unparseable retry,
+// which callers map to 502 generation_truncated. Each call logs its own cost.
 async function runUnit(
   userId: string,
   unit: AssetUnit,
@@ -340,18 +380,7 @@ async function runUnit(
 ): Promise<Partial<MicroTraining>> {
   const spec = UNIT_SPECS[unit]
   const system = voiceContext ? `${spec.prompt}\n\n${voiceContext}` : spec.prompt
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-5',
-    max_tokens: spec.maxTokens,
-    thinking: { type: 'disabled' },
-    system,
-    messages: [{ role: 'user', content: `${grounding}\n\nGenerate now.` }],
-  })
-
-  await logApiCost(userId, 'generate', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens)
-
-  const textBlock = message.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined
-  const parsed = extractJson(textBlock?.text ?? '')
+  const parsed = await callAndParse(userId, system, `${grounding}\n\nGenerate now.`, spec.maxTokens)
 
   switch (unit) {
     case 'meta':
@@ -449,7 +478,7 @@ EXISTING DECK (rewrite the script for each, keep everything else): ${JSON.string
 
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-5',
-    max_tokens: 6000,
+    max_tokens: 8000,
     thinking: { type: 'disabled' },
     system: inputs.voiceContext ? `${SCRIPT_PROMPT}\n\n${inputs.voiceContext}` : SCRIPT_PROMPT,
     messages: [{ role: 'user', content: `${grounding}\n\nRewrite the scripts now.` }],
