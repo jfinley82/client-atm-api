@@ -75,8 +75,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // lib/syncDependencies.ts.
     const sync_snapshot = await stampSyncSnapshot(userId, 'problem_solution_cards')
 
-    const rows = cards.map((c) => ({
-      user_id: userId,
+    // Finalize REPLACES the validated set — it never appends. Re-finalizing
+    // leaves the user with exactly these 3, so the downstream "exactly 3
+    // validated blueprints" gate (core_offers / program) can't be broken by
+    // accumulated duplicates from repeat finalizes. finalize_blueprints
+    // (migration 034) deletes the caller's existing validated=true rows and
+    // inserts the new batch in ONE transaction, so a failed insert rolls back
+    // the delete — the user is never left with 0 validated cards. Only the
+    // caller's own validated rows are removed; drafts and other users' rows are
+    // untouched. Returns the inserted rows, same shape as the prior insert.
+    const cardPayload = cards.map((c) => ({
       card_name: c.card_name,
       problem_text: c.problem_text,
       reasoning: c.reasoning,
@@ -84,11 +92,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // The matcher top_10 id this card came from, so results pages can join
       // back to its match scoring (migration 033).
       source_problem_id: c.id,
-      validated: true,
-      sync_snapshot,
     }))
 
-    const { data, error } = await supabase.from('problem_solution_cards').insert(rows).select()
+    const { data, error } = await supabase.rpc('finalize_blueprints', {
+      p_user_id: userId,
+      p_cards: cardPayload,
+      p_sync_snapshot: sync_snapshot,
+    })
 
     if (error) throw error
 
