@@ -27,10 +27,11 @@ import {
 // transformation, confirmed framework, the chosen blueprint, and the voice guide
 // are all loaded server-side. See lib/microTrainingGenerator.ts.
 //
-// The generation runs as six parallel Anthropic calls (one per asset group) to
-// stay inside maxDuration 60; a single call for the whole set would truncate or
-// run past the ceiling.
-export const config = { maxDuration: 60 }
+// The generation runs in two waves (the meta unit first to fix the title, then
+// the remaining five asset units in parallel). maxDuration is 90 (Pro plan
+// allows it) so the sequential first wave plus a truncation retry stays clear of
+// the ceiling.
+export const config = { maxDuration: 90 }
 
 const REGEN_TARGETS = new Set([
   'slides',
@@ -67,6 +68,7 @@ function parseDelivery(raw: unknown): DeliveryInput {
   if (typeof d.presenter_name === 'string' && d.presenter_name.trim().length > 0) delivery.presenter_name = d.presenter_name.trim()
   if (typeof d.soft_cta === 'string' && d.soft_cta.trim().length > 0) delivery.soft_cta = d.soft_cta.trim()
   if (typeof d.call_page_url === 'string' && d.call_page_url.trim().length > 0) delivery.call_page_url = d.call_page_url.trim()
+  if (typeof d.sell_page_url === 'string' && d.sell_page_url.trim().length > 0) delivery.sell_page_url = d.sell_page_url.trim()
   const hook = parsePersonalHook(d.personal_hook)
   if (hook) delivery.personal_hook = hook
   const cta = parseCtaType(d.cta_type)

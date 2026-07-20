@@ -58,8 +58,11 @@ export type CtaType = 'book_call' | 'sell_program'
 // cta_type are the Build-studio authorship inputs, persisted in this same blob.
 export type DeliveryInput = {
   presenter_name?: string
-  soft_cta?: string
   call_page_url?: string
+  // The coach's offer/checkout link — one generic field that accepts a checkout
+  // URL or a sales/offer page. Used as the CTA target when cta_type is sell_program.
+  sell_page_url?: string
+  soft_cta?: string
   personal_hook?: PersonalHook
   cta_type?: CtaType
 }
@@ -99,6 +102,7 @@ function buildGrounding(inputs: GeneratorInputs): string {
   const presenter = d.presenter_name && d.presenter_name.trim().length > 0 ? d.presenter_name.trim() : '(the coach)'
   const ctaLine = d.soft_cta && d.soft_cta.trim().length > 0 ? d.soft_cta.trim() : '(none provided — write a soft, teaching-first CTA grounded in the blueprint suggested_offer)'
   const callUrl = d.call_page_url && d.call_page_url.trim().length > 0 ? d.call_page_url.trim() : '[BOOK_A_CALL_LINK]'
+  const sellUrl = d.sell_page_url && d.sell_page_url.trim().length > 0 ? d.sell_page_url.trim() : '[OFFER_LINK]'
 
   // The coach's own authorship inputs.
   const story = d.personal_hook?.opening_story?.trim()
@@ -110,10 +114,17 @@ function buildGrounding(inputs: GeneratorInputs): string {
   const exampleLine = example
     ? `- COACH'S SIGNATURE EXAMPLE (their words — work into the teaching where it fits naturally, preserve them): ${JSON.stringify(example)}`
     : `- COACH'S SIGNATURE EXAMPLE: (none provided)`
-  const ctaTypeLine =
+
+  // The CTA toggle. Exactly ONE target link applies; the closing email sequence
+  // and the closing slide use THAT link (written as the token below).
+  const ctaBlock =
     ctaType === 'sell_program'
-      ? `- CTA TYPE: sell_program (the closing invites buying the program directly)`
-      : `- CTA TYPE: book_call (the closing invites booking a call)`
+      ? `CTA:
+- cta_type: sell_program — the closing invites buying the program directly.
+- target link: use the token [OFFER_LINK] (resolves to ${sellUrl}) in the closing email sequence and the closing slide. Do NOT use the book-a-call link.`
+      : `CTA:
+- cta_type: book_call — the closing invites booking a call.
+- target link: use the token [BOOK_A_CALL_LINK] (resolves to ${callUrl}) in the closing email sequence and the closing slide. Do NOT use the offer link.`
 
   return `AUDIENCE INTELLIGENCE: ${JSON.stringify(inputs.audience)}
 TRANSFORMATION DATA: ${JSON.stringify(inputs.transformation)}
@@ -127,11 +138,10 @@ FORMAT: a single 15-20 minute pre-recorded teaching video the coach records solo
 AUTHORSHIP (the coach's own inputs — preserve their words, frame around them):
 ${storyLine}
 ${exampleLine}
-${ctaTypeLine}
+${ctaBlock}
 RECORDING DETAILS:
 - presenter name (use when signing / referring to the coach): ${JSON.stringify(presenter)}
-- coach's soft CTA line: ${ctaLine}
-- book-a-call link: ${callUrl}`
+- coach's soft CTA line: ${ctaLine}`
 }
 
 // Shared header + guardrails appended to every unit's system prompt.
@@ -187,7 +197,7 @@ Rules:
 - script is the spoken content grounded in this blueprint and the audience's language — specific teaching, not vague restatements of the title. No live-audience or "welcome to today's session" language; this is recorded solo.
 - If a COACH'S OWN OPENING STORY is provided in the AUTHORSHIP block, the opening hook slide's script MUST weave it in as the coach's own opening — in their voice, teaching-first, preserving their words (frame around them, do not paraphrase them away). If none is provided, write a strong hook and do NOT fabricate a personal story.
 - If a COACH'S SIGNATURE EXAMPLE is provided, work it into a teaching slide where it fits naturally, preserving their words.
-- The final slide is a soft next-step slide, teaching-first, no hard pitch, grounded in the blueprint's suggested_offer. Reflect the CTA TYPE: for book_call, invite the viewer to book a call (use the book-a-call link); for sell_program, invite them to get the program directly.
+- The final slide is a soft next-step slide, teaching-first, no hard pitch, grounded in the blueprint's suggested_offer. Reflect the CTA in the grounding: for book_call, invite the viewer to book a call and use the token [BOOK_A_CALL_LINK]; for sell_program, invite them to get the program directly and use the token [OFFER_LINK]. Use only the applicable link.
 ${SHARED_RULES}`,
   },
   workbook: {
@@ -249,19 +259,26 @@ ${SHARED_RULES}`,
   book_a_call: {
     key: 'book_a_call',
     maxTokens: 4000,
-    prompt: `You write the post-video booking email sequence (3 emails) that invites a viewer who watched the recorded training to book a call, softly.
+    prompt: `You write the post-video CLOSING email sequence (3 emails) for a viewer who watched the recorded training. The sequence is driven by the CTA in the grounding — read the CTA block and produce the matching variant.
+
+Output key is always "book_a_call_emails" (this is the training's closing sequence, whatever the CTA):
 
 {
   "book_a_call_emails": [
-    { "email_number": 1, "send_timing": "same day, after watching", "subject": "subject line", "body": "warm and personal. Reference what they just learned and the shift it created, soft invite to go deeper on a call, end with the booking link as [BOOK_A_CALL_LINK]." },
-    { "email_number": 2, "send_timing": "2 days after", "subject": "subject line", "body": "name the single most common objection to booking and reframe it with empathy, point back to the result they want, end with [BOOK_A_CALL_LINK]." },
-    { "email_number": 3, "send_timing": "4 days after", "subject": "subject line", "body": "final soft nudge. Clear, direct, no false scarcity, end with [BOOK_A_CALL_LINK]." }
+    { "email_number": 1, "send_timing": "same day, after watching", "subject": "subject line", "body": "..." },
+    { "email_number": 2, "send_timing": "2 days after", "subject": "subject line", "body": "..." },
+    { "email_number": 3, "send_timing": "4 days after", "subject": "subject line", "body": "..." }
   ]
 }
 
-Rules:
-- Exactly 3 emails, grounded in this blueprint's problem/solution and its suggested_offer, signed by the coach (use the presenter name).
-- Soft and teaching-first — invite the call, never hard-sell.
+Branch on the CTA TYPE in the grounding:
+- cta_type = book_call: 3 emails that softly invite the viewer to BOOK A CALL. Email 1 warm and personal, referencing what they just learned and the shift it created; email 2 names the single most common objection to booking and reframes it with empathy; email 3 a final soft nudge. EVERY email ends with the token [BOOK_A_CALL_LINK].
+- cta_type = sell_program: 3 emails that softly invite the viewer to GET THE PROGRAM DIRECTLY. Email 1 warm and personal, referencing what they just learned and the shift it created; email 2 names the single most common objection to buying and reframes it with empathy; email 3 a final soft nudge. EVERY email ends with the token [OFFER_LINK].
+
+Rules for BOTH variants:
+- Exactly 3 emails, grounded in this blueprint's problem/solution, naming the transformation and the blueprint's suggested_offer, signed by the coach (use the presenter name).
+- Teaching-first: reference what they learned, no hard pitch, no false scarcity.
+- Use ONLY the target link the CTA block designates — do not include the other link.
 ${SHARED_RULES}`,
   },
 }
@@ -435,14 +452,23 @@ async function runUnit(
   }
 }
 
-// Full generate — all six units in parallel, merged into one MicroTraining.
-// If any unit throws (including GenerationParseError), the whole generate fails
-// so the caller returns an error rather than persisting a half-populated record.
+// Full generate — two waves so the downstream assets align to the FINAL title.
+// Wave 1: meta first, fixing chosen_topic (+ subtitle). Wave 2: the remaining
+// five units in parallel, grounded through withTitle(grounding, chosen_topic) —
+// the same helper the regenerate path uses. Merged exactly as before. If any
+// unit throws (including GenerationParseError), the whole generate fails so the
+// caller returns an error rather than persisting a half-populated record.
 export async function generateMicroTraining(userId: string, inputs: GeneratorInputs): Promise<MicroTraining> {
   const grounding = buildGrounding(inputs)
-  const units: AssetUnit[] = ['meta', 'slides', 'workbook', 'recording_tips', 'emails', 'book_a_call']
-  const parts = await Promise.all(units.map((u) => runUnit(userId, u, grounding, inputs.voiceContext)))
-  const merged = Object.assign({}, ...parts) as Partial<MicroTraining>
+
+  const metaPart = await runUnit(userId, 'meta', grounding, inputs.voiceContext)
+  const chosenTopic = typeof metaPart.chosen_topic === 'string' ? metaPart.chosen_topic : ''
+
+  const rest: AssetUnit[] = ['slides', 'workbook', 'recording_tips', 'emails', 'book_a_call']
+  const titledGrounding = withTitle(grounding, chosenTopic)
+  const restParts = await Promise.all(rest.map((u) => runUnit(userId, u, titledGrounding, inputs.voiceContext)))
+
+  const merged = Object.assign({}, metaPart, ...restParts) as Partial<MicroTraining>
   return {
     topics: merged.topics ?? [],
     chosen_topic: merged.chosen_topic ?? '',
