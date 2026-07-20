@@ -129,19 +129,29 @@ export type JourneySignals = {
   build_ready: boolean
   launch_ready: boolean
 }
+// Step 4 (Build) gate. Build is accessible only when the monetize step is
+// complete AND a blueprint is selected; the review screen (where selection
+// happens) is reachable once monetize is complete. This is an ADDITIONAL signal
+// the frontend enforces — it does not change step completion or unlocked_through.
+export type BuildGate = { blueprint_selected: boolean; selected_card_id: string | null }
 export type MtmJourney = {
   total_steps: number
   current_step: number
   unlocked_through: number
   steps: JourneyStep[]
   signals: JourneySignals
+  build_gate: BuildGate
 }
 
 export async function getMtmJourney(userId: string): Promise<MtmJourney> {
   const [{ data: outputs }, { data: cards }, { data: gens }] = await Promise.all([
     supabase.from('saved_outputs').select('tool_type, content').eq('user_id', userId),
     supabase.from('problem_solution_cards').select('id').eq('user_id', userId).eq('validated', true).limit(1),
-    supabase.from('mtm_generations').select('slides, emails, book_a_call_emails, workbook').eq('user_id', userId),
+    supabase
+      .from('mtm_generations')
+      .select('card_id, slides, emails, book_a_call_emails, workbook')
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false }),
   ])
 
   const byType = new Map<string, any>()
@@ -185,11 +195,24 @@ export async function getMtmJourney(userId: string): Promise<MtmJourney> {
   // accessible once 1..N-1 are complete, so unlocked_through == current_step.
   const firstIncomplete = steps.find((s) => !s.complete)?.number ?? 5
 
+  // Build gate: the explicit build_selection wins; otherwise an already-built
+  // training (most-recent mtm_generations row with slides — gens is ordered
+  // updated_at desc) counts as selected; else nothing is selected.
+  const selectionCardId = byType.get('build_selection')?.card_id
+  const builtCardId = (gens || []).find((g: any) => nonEmptyArray(g.slides))?.card_id
+  const selected_card_id =
+    typeof selectionCardId === 'string' && selectionCardId.length > 0
+      ? selectionCardId
+      : typeof builtCardId === 'string'
+        ? builtCardId
+        : null
+
   return {
     total_steps: 5,
     current_step: firstIncomplete,
     unlocked_through: firstIncomplete,
     steps,
     signals,
+    build_gate: { blueprint_selected: selected_card_id != null, selected_card_id },
   }
 }
