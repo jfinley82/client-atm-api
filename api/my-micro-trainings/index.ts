@@ -65,7 +65,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .order('created_at', { ascending: true }),
       supabase
         .from('mtm_generations')
-        .select('card_id, chosen_topic, slides, emails, book_a_call_emails, workbook, facilitator_tips')
+        .select('card_id, chosen_topic, slides, emails, book_a_call_emails, workbook, recording_tips')
         .eq('user_id', userId),
       getSavedOutput(userId, 'qualifier'),
       getSavedOutput(userId, 'program'),
@@ -97,7 +97,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const slideCount = len(gen?.slides)
         const emailCount = len(gen?.emails)
         const bookACallCount = len(gen?.book_a_call_emails)
-        const tipCount = len(gen?.facilitator_tips)
+        const tipCount = len(gen?.recording_tips)
         const hasWorkbook = workbookPopulated(gen?.workbook)
         const chosenTopic = typeof gen?.chosen_topic === 'string' && gen.chosen_topic.trim().length > 0 ? gen.chosen_topic : null
         // Build = slides present. Launch = emails + book_a_call + workbook.
@@ -122,7 +122,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             has_workbook: hasWorkbook,
             email_count: emailCount,
             book_a_call_count: bookACallCount,
-            facilitator_tip_count: tipCount,
+            recording_tip_count: tipCount,
           },
           ai_coach: {
             status: statusOf(coach),
