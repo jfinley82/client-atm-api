@@ -179,7 +179,10 @@ function isConfirmedWithSnapshot(content: unknown): content is { confirmed: true
 }
 
 const SINGLE_ROW_ITEMS: SyncableToolType[] = ['transformation_analysis', 'framework', 'core_offers', 'program', 'content']
-const PER_CARD_ITEMS: SyncableToolType[] = ['slides', 'qualifier']
+// Per-card items still stored in saved_outputs[tool].by_card_id. 'slides' moved
+// off this list in the Task 5 consolidation — its snapshot now lives on the
+// canonical mtm_generations row and is evaluated separately below.
+const BY_CARD_ITEMS: SyncableToolType[] = ['qualifier']
 
 // Only items that ACTUALLY EXIST and are CONFIRMED for this user are ever
 // evaluated — an item never generated, or a draft never confirmed, never
@@ -187,18 +190,20 @@ const PER_CARD_ITEMS: SyncableToolType[] = ['slides', 'qualifier']
 // sync_snapshot stored) are silently skipped rather than guessed at — not
 // flagged stale, not counted as in-sync either.
 export async function computeStaleness(userId: string): Promise<{ in_sync: boolean; stale_items: StaleItem[] }> {
-  const [savedOutputsResult, cardsResult, timestamps] = await Promise.all([
+  const [savedOutputsResult, cardsResult, mtmGensResult, timestamps] = await Promise.all([
     supabase
       .from('saved_outputs')
       .select('tool_type, content')
       .eq('user_id', userId)
-      .in('tool_type', [...SINGLE_ROW_ITEMS, ...PER_CARD_ITEMS]),
+      .in('tool_type', [...SINGLE_ROW_ITEMS, ...BY_CARD_ITEMS]),
     supabase.from('problem_solution_cards').select('id, created_at, sync_snapshot').eq('user_id', userId).eq('validated', true),
+    supabase.from('mtm_generations').select('card_id, slides, sync_snapshot').eq('user_id', userId),
     getDependencyTimestamps(userId),
   ])
 
   if (savedOutputsResult.error) throw savedOutputsResult.error
   if (cardsResult.error) throw cardsResult.error
+  if (mtmGensResult.error) throw mtmGensResult.error
 
   const byToolType = new Map((savedOutputsResult.data || []).map((r) => [r.tool_type as string, r.content]))
   const validatedCards = cardsResult.data || []
@@ -212,7 +217,7 @@ export async function computeStaleness(userId: string): Promise<{ in_sync: boole
     if (because.length > 0) stale_items.push({ tool_type: toolType, card_id: null, stale_because: because })
   }
 
-  for (const toolType of PER_CARD_ITEMS) {
+  for (const toolType of BY_CARD_ITEMS) {
     const content = byToolType.get(toolType) as { by_card_id?: Record<string, unknown> } | undefined
     if (!content?.by_card_id) continue
     for (const [cardId, entry] of Object.entries(content.by_card_id)) {
@@ -222,6 +227,26 @@ export async function computeStaleness(userId: string): Promise<{ in_sync: boole
       const because = findStaleDependencies(SYNC_DEPENDENCIES[toolType], entry.sync_snapshot, timestamps, cardTimestamp)
       if (because.length > 0) stale_items.push({ tool_type: toolType, card_id: cardId, stale_because: because })
     }
+  }
+
+  // Slides — consolidated onto mtm_generations (Task 5). A card's slides are
+  // staleness-evaluated when they exist and carry a stamped sync_snapshot;
+  // there is no confirmed flag anymore (presence is the signal).
+  for (const row of mtmGensResult.data || []) {
+    const slides = (row as { slides?: unknown }).slides
+    const snapshot = (row as { sync_snapshot?: unknown }).sync_snapshot
+    if (!Array.isArray(slides) || slides.length === 0) continue
+    if (!snapshot || typeof snapshot !== 'object') continue
+    const cardId = (row as { card_id: string }).card_id
+    const cardRow = validatedCards.find((c) => c.id === cardId)
+    const cardTimestamp = (cardRow?.created_at as string | undefined) ?? null
+    const because = findStaleDependencies(
+      SYNC_DEPENDENCIES.slides,
+      snapshot as Record<string, string>,
+      timestamps,
+      cardTimestamp
+    )
+    if (because.length > 0) stale_items.push({ tool_type: 'slides', card_id: cardId, stale_because: because })
   }
 
   // Blueprints — a single batch-level check, since there's no per-card sync

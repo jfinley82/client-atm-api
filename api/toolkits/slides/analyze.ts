@@ -1,26 +1,53 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
+import { supabase } from '../../../lib/supabase'
 import { requireActiveUser } from '../../../lib/auth'
 import { requireCapability } from '../../../lib/entitlements'
 import { setCors } from '../../../lib/cors'
 import { getSavedOutput, stripSessionHistory } from '../../../lib/savedOutputs'
 import { generateSlides, SlidesDeck } from '../../../lib/slidesAnalysis'
-import { checkFrameworkConfirmed, getValidatedBlueprint, getByCardIdEntry, saveByCardIdEntry, ByCardIdContent } from '../../../lib/toolkitsShared'
+import { checkFrameworkConfirmed, getValidatedBlueprint, getByCardIdEntry } from '../../../lib/toolkitsShared'
 import { getVoiceContext } from '../../../lib/voiceGuide'
 import { GenerationParseError } from '../../../lib/aiJson'
 import { checkSyncGate } from '../../../lib/syncGate'
+import { stampSyncSnapshot } from '../../../lib/syncDependencies'
+import { deckSlidesToCanonical, canonicalRowToDeck, frameworkPhaseNames } from '../../../lib/slidesCanonical'
 
-// Toolkit: Micro-Training Creator (slides). Generates a real teaching
-// deck for ONE of the member's validated Blueprints.
+// Toolkit: Micro-Training Creator (slides). Now a thin editor of the CANONICAL
+// mtm_generations.slides column (Task 5 consolidation) — slides no longer live
+// in saved_outputs[slides].by_card_id. The SlidesDeck API shape is preserved by
+// mapping to/from canonical (see lib/slidesCanonical.ts). The row's staleness
+// snapshot lives in mtm_generations.sync_snapshot, stamped on every write.
 //
-// Gate: framework.confirmed AND the specific member-selected card_id is
-// validated and belongs to this user (checked precisely by id, not just "the
-// user has at least one validated card somewhere" — a generic existence
-// check would let a request pass an unvalidated or someone else's card_id).
-//
-// GET ?card_id=<id>: return that one stored deck (404 if none). GET with no
-// card_id: return the full by_card_id map for this user.
-// POST { card_id }: generate a fresh deck for that Blueprint, persist as a
-// draft (confirmed: false) keyed by card_id, and return it.
+// GET ?card_id=<id>: the canonical deck (with a read-through migration of a
+// legacy by_card_id deck if the canonical slides are still empty). GET with no
+// card_id: the by_card_id-shaped map built from the user's canonical rows.
+// POST { card_id }: generate a fresh deck, write it to the canonical row.
+
+// Writes a deck's slides to the canonical mtm_generations row for (user, card),
+// stamping the 'slides' sync snapshot. Upserts on (user_id, card_id) so a card
+// that has no generation row yet gets one.
+async function writeCanonicalDeck(userId: string, cardId: string, deck: SlidesDeck, phaseNames: string[]) {
+  const sync_snapshot = await stampSyncSnapshot(userId, 'slides', cardId)
+  const { data, error } = await supabase
+    .from('mtm_generations')
+    .upsert(
+      {
+        user_id: userId,
+        card_id: cardId,
+        slides: deckSlidesToCanonical(deck.slides, phaseNames),
+        chosen_topic: deck.training_title,
+        total_duration: deck.duration_estimate,
+        sync_snapshot,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'user_id,card_id' }
+    )
+    .select('slides, chosen_topic, total_duration')
+    .single()
+  if (error) throw error
+  return canonicalRowToDeck(data)
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
 
@@ -31,13 +58,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
       const cardId = typeof req.query.card_id === 'string' ? req.query.card_id : undefined
       if (cardId) {
-        const entry = await getByCardIdEntry<SlidesDeck>(userId, 'slides', cardId)
-        if (!entry) return res.status(404).json({ error: 'No slide deck generated yet for this card_id' })
-        return res.status(200).json(entry)
+        const { data: row, error } = await supabase
+          .from('mtm_generations')
+          .select('slides, chosen_topic, total_duration')
+          .eq('user_id', userId)
+          .eq('card_id', cardId)
+          .maybeSingle()
+        if (error) throw error
+        if (row && Array.isArray(row.slides) && row.slides.length > 0) {
+          return res.status(200).json(canonicalRowToDeck(row))
+        }
+        // Read-through migration: a legacy by_card_id deck with no canonical
+        // slides yet is migrated into the canonical row on first read.
+        const legacy = await getByCardIdEntry<SlidesDeck>(userId, 'slides', cardId)
+        if (legacy && Array.isArray(legacy.slides) && legacy.slides.length > 0) {
+          const frameworkRow = await getSavedOutput(userId, 'framework')
+          const migrated = await writeCanonicalDeck(userId, cardId, legacy, frameworkPhaseNames(frameworkRow?.content))
+          return res.status(200).json(migrated)
+        }
+        return res.status(404).json({ error: 'No slide deck generated yet for this card_id' })
       }
-      const saved = await getSavedOutput(userId, 'slides')
-      const content = (saved?.content as ByCardIdContent<SlidesDeck> | undefined) ?? { by_card_id: {} }
-      return res.status(200).json(content)
+
+      // No card_id — the by_card_id-shaped map, now built from canonical rows.
+      const { data: rows, error } = await supabase
+        .from('mtm_generations')
+        .select('card_id, slides, chosen_topic, total_duration')
+        .eq('user_id', userId)
+      if (error) throw error
+      const by_card_id: Record<string, SlidesDeck> = {}
+      for (const row of rows || []) {
+        if (Array.isArray(row.slides) && row.slides.length > 0) by_card_id[row.card_id as string] = canonicalRowToDeck(row)
+      }
+      return res.status(200).json({ by_card_id })
     } catch (err) {
       console.error('[toolkits/slides/analyze] GET', err)
       return res.status(500).json({ error: 'Failed to load slides' })
@@ -89,9 +141,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const deck: SlidesDeck = { ...generated, confirmed: false }
-    const updated = await saveByCardIdEntry(userId, 'slides', blueprintGate.card.id, deck)
+    const saved = await writeCanonicalDeck(userId, blueprintGate.card.id, deck, frameworkPhaseNames(frameworkGate.framework))
 
-    return res.status(200).json(updated.by_card_id[blueprintGate.card.id])
+    return res.status(200).json(saved)
   } catch (err) {
     if (err instanceof GenerationParseError) {
       console.error('[toolkits/slides/analyze] POST generation_truncated', err.message, { rawTextLength: err.rawText.length })

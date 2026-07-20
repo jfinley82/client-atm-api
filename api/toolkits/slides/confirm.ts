@@ -1,16 +1,22 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
+import { supabase } from '../../../lib/supabase'
 import { requireActiveUser } from '../../../lib/auth'
 import { requireCapability } from '../../../lib/entitlements'
 import { setCors } from '../../../lib/cors'
+import { getSavedOutput } from '../../../lib/savedOutputs'
 import { SlideEntry, SlidesDeck } from '../../../lib/slidesAnalysis'
-import { getValidatedBlueprint, saveByCardIdEntry } from '../../../lib/toolkitsShared'
+import { getValidatedBlueprint } from '../../../lib/toolkitsShared'
 import { stampSyncSnapshot } from '../../../lib/syncDependencies'
 import { checkSyncGate } from '../../../lib/syncGate'
+import { deckSlidesToCanonical, canonicalRowToDeck, frameworkPhaseNames } from '../../../lib/slidesCanonical'
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === 'string' && v.trim().length > 0
 }
 
+// Accepts the frontend's SlidesDeck shape (still includes key_points), which is
+// validated here but not persisted — key_points is retired in the canonical
+// model.
 function isValidSlide(v: unknown): v is SlideEntry {
   if (!v || typeof v !== 'object') return false
   const s = v as Record<string, unknown>
@@ -23,10 +29,10 @@ function isValidSlide(v: unknown): v is SlideEntry {
   )
 }
 
-// Explicit buy-in step for one card_id's deck. Body carries card_id plus the
-// full (possibly edited) deck. Re-verifies the card is still a validated
-// blueprint belonging to this user (same check as analyze) before writing —
-// never trust a client-supplied card_id blindly. Sets confirmed: true.
+// Save step for one card's deck. Writes the (possibly edited) deck to the
+// canonical mtm_generations row and re-stamps its 'slides' sync snapshot — there
+// is no separate confirmed boolean anymore (Build is presence-based). Re-checks
+// the card is a validated user-owned blueprint before writing.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
   if (req.method !== 'POST') return res.status(405).end()
@@ -34,8 +40,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const userId = await requireActiveUser(req, res)
   if (!userId) return
 
-  // Capability gate — confirm/save is part of the toolkits capability (beta/full;
-  // admin bypasses), closing the analyze-gated-but-confirm-open gap.
+  // Capability gate — save is part of the toolkits capability (beta/full; admin bypasses).
   if (!(await requireCapability(userId, 'toolkits', res))) return
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
@@ -65,19 +70,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(409).json({ error: 'out_of_sync', blocking: syncGate.blocking, stale_items: syncGate.stale_items })
     }
 
+    const frameworkRow = await getSavedOutput(userId, 'framework')
+    const phaseNames = frameworkPhaseNames(frameworkRow?.content)
     const sync_snapshot = await stampSyncSnapshot(userId, 'slides', blueprintGate.card.id)
 
-    const updated: SlidesDeck = {
-      training_title,
-      duration_estimate,
+    const deck: SlidesDeck = {
+      training_title: training_title as string,
+      duration_estimate: duration_estimate as string,
       slides: slides as SlideEntry[],
       confirmed: true,
-      sync_snapshot,
     }
 
-    const saved = await saveByCardIdEntry(userId, 'slides', blueprintGate.card.id, updated)
+    const { data, error } = await supabase
+      .from('mtm_generations')
+      .upsert(
+        {
+          user_id: userId,
+          card_id: blueprintGate.card.id,
+          slides: deckSlidesToCanonical(deck.slides, phaseNames),
+          chosen_topic: deck.training_title,
+          total_duration: deck.duration_estimate,
+          sync_snapshot,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,card_id' }
+      )
+      .select('slides, chosen_topic, total_duration')
+      .single()
+    if (error) throw error
 
-    return res.status(200).json(saved.by_card_id[blueprintGate.card.id])
+    return res.status(200).json(canonicalRowToDeck(data))
   } catch (err) {
     console.error('[toolkits/slides/confirm] POST', err)
     return res.status(500).json({ error: 'Confirm failed' })
