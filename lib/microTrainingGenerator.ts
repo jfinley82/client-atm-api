@@ -284,7 +284,7 @@ ${SHARED_RULES}`,
 }
 
 // ── Coercers ────────────────────────────────────────────────────────────────
-function coerceTopics(v: unknown): MtTopic[] {
+export function coerceTopics(v: unknown): MtTopic[] {
   if (!Array.isArray(v)) return []
   return v
     .map((r) => (r && typeof r === 'object' ? (r as Record<string, unknown>) : {}))
@@ -293,7 +293,7 @@ function coerceTopics(v: unknown): MtTopic[] {
     .slice(0, 5)
 }
 
-function coerceOutline(v: unknown): MtOutlineItem[] {
+export function coerceOutline(v: unknown): MtOutlineItem[] {
   if (!Array.isArray(v)) return []
   return v
     .map((r, i) => {
@@ -304,7 +304,7 @@ function coerceOutline(v: unknown): MtOutlineItem[] {
     .filter((o) => o.title.trim().length > 0)
 }
 
-function coerceSlides(v: unknown): MtSlide[] {
+export function coerceSlides(v: unknown): MtSlide[] {
   if (!Array.isArray(v)) return []
   return v
     .map((r, i) => {
@@ -322,7 +322,7 @@ function coerceSlides(v: unknown): MtSlide[] {
     .filter((s) => s.slideTitle.trim().length > 0 || s.script.trim().length > 0)
 }
 
-function coerceWorkbook(v: unknown): MtWorkbook {
+export function coerceWorkbook(v: unknown): MtWorkbook {
   const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
   const rawSections = Array.isArray(o.sections) ? o.sections : []
   const sections: MtWorkbookSection[] = rawSections
@@ -352,7 +352,7 @@ function coerceWorkbook(v: unknown): MtWorkbook {
   }
 }
 
-function coerceEmails(v: unknown): MtEmail[] {
+export function coerceEmails(v: unknown): MtEmail[] {
   if (!Array.isArray(v)) return []
   return v
     .map((r, i) => {
@@ -368,7 +368,7 @@ function coerceEmails(v: unknown): MtEmail[] {
     .filter((e) => e.subject.trim().length > 0 || e.body.trim().length > 0)
 }
 
-function coerceRecordingTips(v: unknown): MtRecordingTip[] {
+export function coerceRecordingTips(v: unknown): MtRecordingTip[] {
   if (!Array.isArray(v)) return []
   return v
     .map((r) => (r && typeof r === 'object' ? (r as Record<string, unknown>) : {}))
