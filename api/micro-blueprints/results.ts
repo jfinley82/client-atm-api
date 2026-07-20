@@ -10,6 +10,7 @@ import {
   resolveSynopsis,
   BlueprintCardRow,
 } from '../../lib/blueprintEnrichment'
+import { getMtmSessionProgress } from '../../lib/progress'
 
 // GET /api/micro-blueprints/results — read-only assembly of the member's own
 // Micro-Blueprints output page. requireActiveUser only, no tier gate (a read of
@@ -36,13 +37,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!userId) return
 
   try {
-    const [audienceRow, transformationRow, frameworkRow, coreOffersRow, programRow, matcherRow, cardsRes] = await Promise.all([
+    const [audienceRow, transformationRow, frameworkRow, coreOffersRow, programRow, matcherRow, sessions, cardsRes] = await Promise.all([
       getSavedOutput(userId, 'audience'),
       getSavedOutput(userId, 'transformation_analysis'),
       getSavedOutput(userId, 'framework'),
       getSavedOutput(userId, 'core_offers'),
       getSavedOutput(userId, 'program'),
       getSavedOutput(userId, 'matcher_analysis'),
+      getMtmSessionProgress(userId),
       supabase
         .from('problem_solution_cards')
         .select('id, card_name, problem_text, reasoning, suggested_offer, source_problem_id, synopsis')
@@ -111,6 +113,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       core_offers: { status: status(coreOffersReady), core_offers: coreOffersReady ? coreOffers : null },
       program: { status: status(programReady), program: programReady ? program : null },
       runner_ups: { status: status(!!matcher), items: runnerUps },
+      // The 5-step model (audience, transformation, matcher, build, launch).
+      progress: sessions,
     })
   } catch (err) {
     console.error('[micro-blueprints/results] GET', err)

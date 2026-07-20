@@ -18,7 +18,12 @@ const tsOf = (row: any): string | null =>
  *   - Matcher                    -> a problem_solution_cards row (validated
  *                                   preferred), falling back to a saved_outputs
  *                                   'matcher' row
- *   - Blueprint generation       -> an mtm_generations row
+ *   - Build (Step 4)             -> an mtm_generations row with non-empty slides
+ *                                   (the coach has built at least one training)
+ *   - Launch (Step 5)            -> an mtm_generations row whose emails,
+ *                                   book_a_call_emails, AND workbook are all
+ *                                   populated (derived from asset presence, no
+ *                                   confirm/launched flag)
  *
  * Note: Transformation is stored as a single saved_outputs record; the backend
  * does not track its Part A / Part B halves separately, so it is reported as one
@@ -34,10 +39,9 @@ export async function getMtmSessionProgress(userId: string): Promise<SessionProg
       .order('updated_at', { ascending: false }),
     supabase
       .from('mtm_generations')
-      .select('created_at')
+      .select('created_at, updated_at, slides, emails, book_a_call_emails, workbook')
       .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(1),
+      .order('updated_at', { ascending: false }),
   ])
 
   const outputByType = new Map<string, any>()
@@ -61,13 +65,26 @@ export async function getMtmSessionProgress(userId: string): Promise<SessionProg
   const matcherCompleted = !!matcherOutput || !!validatedCard
   const matcherAt = tsOf(matcherOutput) || tsOf(matcherCard)
 
-  const generation = (gens || [])[0] || null
+  // Build (Step 4): at least one mtm_generations row has non-empty slides.
+  // Launch (Step 5): at least one row has emails, book_a_call_emails, AND a
+  // populated workbook. Presence-based — no confirm/launched flag. Rows come
+  // ordered updated_at desc, so the first match is the most recent.
+  const nonEmptyArray = (v: unknown): boolean => Array.isArray(v) && v.length > 0
+  const workbookPopulated = (v: unknown): boolean =>
+    !!v && typeof v === 'object' && nonEmptyArray((v as { sections?: unknown }).sections)
+  const hasSlides = (r: any): boolean => nonEmptyArray(r.slides)
+  const isLaunched = (r: any): boolean =>
+    nonEmptyArray(r.emails) && nonEmptyArray(r.book_a_call_emails) && workbookPopulated(r.workbook)
+
+  const buildRow = (gens || []).find(hasSlides) || null
+  const launchRow = (gens || []).find(isLaunched) || null
 
   const sessions: SessionProgress[] = [
     { key: 'audience', label: 'Audience', completed: isComplete(audience), completed_at: isComplete(audience) ? tsOf(audience) : null },
     { key: 'transformation', label: 'Transformation', completed: isComplete(transformation), completed_at: isComplete(transformation) ? tsOf(transformation) : null },
     { key: 'matcher', label: 'Matcher', completed: matcherCompleted, completed_at: matcherAt },
-    { key: 'blueprint', label: 'Blueprint Generation', completed: !!generation, completed_at: generation ? generation.created_at : null },
+    { key: 'build', label: 'Build', completed: !!buildRow, completed_at: buildRow ? tsOf(buildRow) : null },
+    { key: 'launch', label: 'Launch', completed: !!launchRow, completed_at: launchRow ? tsOf(launchRow) : null },
   ]
 
   // Backfill: the funnel makes it structurally impossible to have reached a
