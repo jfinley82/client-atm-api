@@ -17,6 +17,12 @@ import {
   MtSlide,
   PersonalHook,
   CtaType,
+  coerceSlides,
+  coerceEmails,
+  coerceWorkbook,
+  coerceRecordingTips,
+  coerceOutline,
+  coerceTopics,
 } from '../../lib/microTrainingGenerator'
 
 // POST /api/generate — the unified Micro-Training generator. From ONE validated
@@ -108,6 +114,52 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } catch (err) {
         console.error('[generate] POST choose_title', err)
         return res.status(500).json({ error: 'Failed to set title' })
+      }
+    }
+
+    // Inline-edit SAVE — persist the coach's manual edits to an EXISTING
+    // generation. No LLM call. delivery is left untouched and sync_snapshot is NOT
+    // re-stamped: a manual edit is the coach's own change, not a rebuild from
+    // upstream, so staleness must not move. Only the recognized editable keys
+    // present in body.save are written, each through its matching coercer.
+    if (body.save && typeof body.save === 'object') {
+      if (!(await requireCapability(userId, 'toolkits', res))) return
+      const save = body.save as Record<string, unknown>
+      const update: Record<string, unknown> = {}
+
+      if ('slides' in save) update.slides = coerceSlides(save.slides)
+      if ('emails' in save) update.emails = coerceEmails(save.emails)
+      if ('book_a_call_emails' in save) update.book_a_call_emails = coerceEmails(save.book_a_call_emails)
+      if ('workbook' in save) update.workbook = coerceWorkbook(save.workbook)
+      if ('recording_tips' in save) update.recording_tips = coerceRecordingTips(save.recording_tips)
+      if ('outline' in save) update.outline = coerceOutline(save.outline)
+      if ('topics' in save) update.topics = coerceTopics(save.topics)
+      if ('subtitle' in save) update.subtitle = typeof save.subtitle === 'string' ? save.subtitle.trim() : ''
+      if ('chosen_topic' in save) {
+        const t = typeof save.chosen_topic === 'string' ? save.chosen_topic.trim() : ''
+        if (!t) return res.status(400).json({ error: 'chosen_topic cannot be empty' })
+        update.chosen_topic = t
+      }
+
+      if (Object.keys(update).length === 0) {
+        return res.status(400).json({ error: 'save had no editable fields' })
+      }
+      update.updated_at = new Date().toISOString()
+
+      try {
+        const { data, error } = await supabase
+          .from('mtm_generations')
+          .update(update)
+          .eq('user_id', userId)
+          .eq('card_id', card_id)
+          .select()
+          .maybeSingle()
+        if (error) throw error
+        if (!data) return res.status(404).json({ error: 'No generation to edit — generate first' })
+        return res.status(200).json(data)
+      } catch (err) {
+        console.error('[generate] POST save', err)
+        return res.status(500).json({ error: 'Failed to save edits' })
       }
     }
 
