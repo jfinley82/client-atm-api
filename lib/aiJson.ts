@@ -19,6 +19,54 @@ export class GenerationParseError extends Error {
   }
 }
 
+// Escapes raw control characters (newline, tab, etc.) that appear INSIDE JSON
+// string literals, leaving structural whitespace between tokens untouched.
+// Model output routinely puts literal line breaks inside long string values
+// (slide scripts, email bodies, workbook prose), which strict JSON.parse
+// rejects ("Bad control character in string literal") even though nothing was
+// truncated. Walks the text tracking string/escape state so only in-string
+// control chars are escaped.
+function escapeControlCharsInStrings(input: string): string {
+  let out = ''
+  let inString = false
+  let escaped = false
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+    if (!inString) {
+      out += ch
+      if (ch === '"') inString = true
+      continue
+    }
+    if (escaped) {
+      out += ch
+      escaped = false
+      continue
+    }
+    if (ch === '\\') {
+      out += ch
+      escaped = true
+      continue
+    }
+    if (ch === '"') {
+      out += ch
+      inString = false
+      continue
+    }
+    const code = input.charCodeAt(i)
+    if (code < 0x20) {
+      if (ch === '\n') out += '\\n'
+      else if (ch === '\r') out += '\\r'
+      else if (ch === '\t') out += '\\t'
+      else if (ch === '\b') out += '\\b'
+      else if (ch === '\f') out += '\\f'
+      else out += '\\u' + code.toString(16).padStart(4, '0')
+      continue
+    }
+    out += ch
+  }
+  return out
+}
+
 export function extractJson(text: string): any {
   const cleaned = text
     .replace(/^```json\s*/i, '')
@@ -26,11 +74,21 @@ export function extractJson(text: string): any {
     .replace(/```\s*$/, '')
     .trim()
   try {
+    // Fast path — well-formed JSON parses directly, so existing callers are
+    // unaffected.
     return JSON.parse(cleaned)
-  } catch (err) {
-    throw new GenerationParseError(
-      `Failed to parse model output as JSON: ${(err as Error).message}`,
-      cleaned
-    )
+  } catch (firstErr) {
+    // Retry after escaping raw control chars inside string literals. This is
+    // NOT truncation — it repairs valid-but-strict-illegal model prose. A
+    // genuinely truncated response (unterminated string) still fails here and
+    // falls through to GenerationParseError.
+    try {
+      return JSON.parse(escapeControlCharsInStrings(cleaned))
+    } catch {
+      throw new GenerationParseError(
+        `Failed to parse model output as JSON: ${(firstErr as Error).message}`,
+        cleaned
+      )
+    }
   }
 }
