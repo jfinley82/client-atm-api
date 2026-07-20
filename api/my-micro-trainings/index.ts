@@ -4,7 +4,6 @@ import { requireActiveUser } from '../../lib/auth'
 import { setCors, noStore } from '../../lib/cors'
 import { getSavedOutput } from '../../lib/savedOutputs'
 import type { ByCardIdContent } from '../../lib/toolkitsShared'
-import type { SlidesDeck } from '../../lib/slidesAnalysis'
 import type { QualifierDeck } from '../../lib/qualifierAnalysis'
 import type { ProgramAnalysis } from '../../lib/programAnalysis'
 import type { ContentAnalysis } from '../../lib/contentAnalysis'
@@ -57,14 +56,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!userId) return
 
   try {
-    const [cardsRes, slidesRow, qualifierRow, programRow, contentRow, matcherRow, synopsisInputs] = await Promise.all([
+    const [cardsRes, mtmRes, qualifierRow, programRow, contentRow, matcherRow, synopsisInputs] = await Promise.all([
       supabase
         .from('problem_solution_cards')
         .select('id, card_name, problem_text, reasoning, suggested_offer, source_problem_id, synopsis')
         .eq('user_id', userId)
         .eq('validated', true)
         .order('created_at', { ascending: true }),
-      getSavedOutput(userId, 'slides'),
+      supabase
+        .from('mtm_generations')
+        .select('card_id, chosen_topic, slides, emails, book_a_call_emails, workbook, facilitator_tips')
+        .eq('user_id', userId),
       getSavedOutput(userId, 'qualifier'),
       getSavedOutput(userId, 'program'),
       getSavedOutput(userId, 'content'),
@@ -72,18 +74,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       loadSynopsisInputs(userId),
     ])
     if (cardsRes.error) throw cardsRes.error
+    if (mtmRes.error) throw mtmRes.error
 
-    const slidesByCard = byCardId<SlidesDeck>(slidesRow?.content)
+    // Canonical per-card generation rows (Build + Launch presence).
+    const mtmByCard = new Map<string, Record<string, unknown>>()
+    for (const row of mtmRes.data || []) mtmByCard.set(row.card_id as string, row)
     const qualByCard = byCardId<QualifierDeck>(qualifierRow?.content)
     const matcher = (matcherRow?.content ?? null) as MatcherAnalysis | null
+
+    const len = (v: unknown): number => (Array.isArray(v) ? v.length : 0)
+    const workbookPopulated = (v: unknown): boolean =>
+      !!v && typeof v === 'object' && len((v as { sections?: unknown }).sections) > 0
 
     const cards = (cardsRes.data || []) as BlueprintCardRow[]
     const blueprints = await Promise.all(
       cards.map(async (card) => {
-        const slides = slidesByCard[card.id] ?? null
+        const gen = mtmByCard.get(card.id)
         const coach = qualByCard[card.id] ?? null
         const scoring = resolveScoring(card, matcher)
         const synopsis = await resolveSynopsis(userId, card, synopsisInputs)
+
+        const slideCount = len(gen?.slides)
+        const emailCount = len(gen?.emails)
+        const bookACallCount = len(gen?.book_a_call_emails)
+        const tipCount = len(gen?.facilitator_tips)
+        const hasWorkbook = workbookPopulated(gen?.workbook)
+        const chosenTopic = typeof gen?.chosen_topic === 'string' && gen.chosen_topic.trim().length > 0 ? gen.chosen_topic : null
+        // Build = slides present. Launch = emails + book_a_call + workbook.
+        const buildReady = slideCount > 0
+        const launchReady = emailCount > 0 && bookACallCount > 0 && hasWorkbook
+
         return {
           card_id: card.id,
           card_name: card.card_name,
@@ -94,11 +114,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           match_strength: scoring.match_strength,
           match_factors: scoring.match_factors,
           synopsis,
-          micro_training: {
-            status: statusOf(slides),
-            training_title: slides?.training_title ?? null,
-            slide_count: Array.isArray(slides?.slides) ? slides!.slides.length : 0,
-            duration_estimate: slides?.duration_estimate ?? null,
+          build: { status: (buildReady ? 'ready' : 'none') as AssetStatus },
+          launch: { status: (launchReady ? 'ready' : 'none') as AssetStatus },
+          assets: {
+            chosen_topic: chosenTopic,
+            slide_count: slideCount,
+            has_workbook: hasWorkbook,
+            email_count: emailCount,
+            book_a_call_count: bookACallCount,
+            facilitator_tip_count: tipCount,
           },
           ai_coach: {
             status: statusOf(coach),
