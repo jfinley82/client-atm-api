@@ -111,3 +111,85 @@ export async function getMtmSessionProgress(userId: string): Promise<SessionProg
 
   return sessions
 }
+
+// ── Journey ─────────────────────────────────────────────────────────────────
+// The authoritative five-step UI journey (Attract, Transform, Monetize, Build,
+// Launch) so the frontend stops re-deriving step completion. Distinct from
+// `sessions` (which is the finer-grained session checklist). Each step's
+// completion is derived from the same underlying reads; a later step being
+// complete backfills earlier steps (the funnel makes skipping impossible).
+export type JourneyStep = { key: string; number: number; complete: boolean }
+export type JourneySignals = {
+  audience_complete: boolean
+  transformation_complete: boolean
+  framework_confirmed: boolean
+  matcher_validated: boolean
+  core_offers_confirmed: boolean
+  program_confirmed: boolean
+  build_ready: boolean
+  launch_ready: boolean
+}
+export type MtmJourney = {
+  total_steps: number
+  current_step: number
+  unlocked_through: number
+  steps: JourneyStep[]
+  signals: JourneySignals
+}
+
+export async function getMtmJourney(userId: string): Promise<MtmJourney> {
+  const [{ data: outputs }, { data: cards }, { data: gens }] = await Promise.all([
+    supabase.from('saved_outputs').select('tool_type, content').eq('user_id', userId),
+    supabase.from('problem_solution_cards').select('id').eq('user_id', userId).eq('validated', true).limit(1),
+    supabase.from('mtm_generations').select('slides, emails, book_a_call_emails, workbook').eq('user_id', userId),
+  ])
+
+  const byType = new Map<string, any>()
+  for (const o of outputs || []) byType.set(o.tool_type, o.content)
+  const flag = (tool: string, key: string): boolean => byType.get(tool)?.[key] === true
+
+  const nonEmptyArray = (v: unknown): boolean => Array.isArray(v) && v.length > 0
+  const workbookPopulated = (v: unknown): boolean =>
+    !!v && typeof v === 'object' && nonEmptyArray((v as { sections?: unknown }).sections)
+
+  const signals: JourneySignals = {
+    audience_complete: flag('audience', 'completed'),
+    transformation_complete: flag('transformation', 'completed'),
+    framework_confirmed: flag('framework', 'confirmed'),
+    matcher_validated: (cards || []).length > 0,
+    core_offers_confirmed: flag('core_offers', 'confirmed'),
+    program_confirmed: flag('program', 'confirmed'),
+    build_ready: (gens || []).some((g: any) => nonEmptyArray(g.slides)),
+    launch_ready: (gens || []).some(
+      (g: any) => workbookPopulated(g.workbook) && nonEmptyArray(g.emails) && nonEmptyArray(g.book_a_call_emails)
+    ),
+  }
+
+  const steps: JourneyStep[] = [
+    { key: 'attract', number: 1, complete: signals.audience_complete },
+    { key: 'transform', number: 2, complete: signals.transformation_complete && signals.framework_confirmed },
+    { key: 'monetize', number: 3, complete: signals.matcher_validated && signals.core_offers_confirmed && signals.program_confirmed },
+    { key: 'build', number: 4, complete: signals.build_ready },
+    { key: 'launch', number: 5, complete: signals.launch_ready },
+  ]
+
+  // Monotonic backfill — a later completed step marks earlier steps complete,
+  // same rule as the session backfill above.
+  let laterComplete = false
+  for (let i = steps.length - 1; i >= 0; i--) {
+    if (steps[i].complete) laterComplete = true
+    else if (laterComplete) steps[i] = { ...steps[i], complete: true }
+  }
+
+  // First incomplete step (1..5), or 5 when everything is complete. Step N is
+  // accessible once 1..N-1 are complete, so unlocked_through == current_step.
+  const firstIncomplete = steps.find((s) => !s.complete)?.number ?? 5
+
+  return {
+    total_steps: 5,
+    current_step: firstIncomplete,
+    unlocked_through: firstIncomplete,
+    steps,
+    signals,
+  }
+}
