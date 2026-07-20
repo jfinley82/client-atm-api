@@ -68,6 +68,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const card_id = typeof body.card_id === 'string' ? body.card_id : ''
     if (!card_id) return res.status(400).json({ error: 'card_id required' })
 
+    // Choose / swap title — set chosen_topic with NO regeneration (instant
+    // relabel). Accepts any topics[].title or free text. Handled before any
+    // grounding load since nothing is generated.
+    if (typeof body.choose_title === 'string') {
+      const title = body.choose_title.trim()
+      if (!title) return res.status(400).json({ error: 'choose_title must be a non-empty string' })
+      if (!(await requireCapability(userId, 'toolkits', res))) return
+      try {
+        const { data, error } = await supabase
+          .from('mtm_generations')
+          .update({ chosen_topic: title, updated_at: new Date().toISOString() })
+          .eq('user_id', userId)
+          .eq('card_id', card_id)
+          .select()
+          .maybeSingle()
+        if (error) throw error
+        if (!data) return res.status(404).json({ error: 'No generation for this card yet' })
+        return res.status(200).json(data)
+      } catch (err) {
+        console.error('[generate] POST choose_title', err)
+        return res.status(500).json({ error: 'Failed to set title' })
+      }
+    }
+
     // A regenerate request rebuilds ONE asset conditioned on the current
     // chosen_topic and reuses the stored delivery, so no delivery in the body.
     // A full generate requires delivery up front.
