@@ -36,11 +36,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!userId) return
 
   try {
-    const [audienceRow, transformationRow, frameworkRow, coreOffersRow, matcherRow, cardsRes] = await Promise.all([
+    const [audienceRow, transformationRow, frameworkRow, coreOffersRow, programRow, matcherRow, cardsRes] = await Promise.all([
       getSavedOutput(userId, 'audience'),
       getSavedOutput(userId, 'transformation_analysis'),
       getSavedOutput(userId, 'framework'),
       getSavedOutput(userId, 'core_offers'),
+      getSavedOutput(userId, 'program'),
       getSavedOutput(userId, 'matcher_analysis'),
       supabase
         .from('problem_solution_cards')
@@ -62,6 +63,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const coreOffers = (coreOffersRow?.content ?? null) as { confirmed?: boolean } | null
     const coreOffersReady = coreOffers?.confirmed === true
+
+    const program = (programRow?.content ?? null) as { confirmed?: boolean } | null
+    const programReady = program?.confirmed === true
 
     const matcher = (matcherRow?.content ?? null) as MatcherAnalysis | null
     const cards = (cardsRes.data || []) as BlueprintCardRow[]
@@ -105,6 +109,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       framework: { status: status(frameworkReady), framework: frameworkReady ? framework : null },
       blueprints: { status: status(cards.length > 0), items: blueprintItems },
       core_offers: { status: status(coreOffersReady), core_offers: coreOffersReady ? coreOffers : null },
+      program: { status: status(programReady), program: programReady ? program : null },
       runner_ups: { status: status(!!matcher), items: runnerUps },
     })
   } catch (err) {
