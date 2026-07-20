@@ -18,9 +18,10 @@ import {
 } from '../../lib/microTrainingGenerator'
 
 // POST /api/generate — the unified Micro-Training generator. From ONE validated
-// blueprint plus the coach's delivery choices, it produces and persists the full
-// Step 4 (Build) / Step 5 (Launch) asset set into the canonical mtm_generations
-// row for (user_id, card_id). No content is entered by the caller — audience,
+// blueprint plus a few optional recording details, it produces and persists the
+// full Step 4 (Build) / Step 5 (Launch) asset set into the canonical
+// mtm_generations row for (user_id, card_id). The Micro-Training is a single
+// 15-20 minute recorded video. No content is entered by the caller — audience,
 // transformation, confirmed framework, the chosen blueprint, and the voice guide
 // are all loaded server-side. See lib/microTrainingGenerator.ts.
 //
@@ -29,30 +30,24 @@ import {
 // run past the ceiling.
 export const config = { maxDuration: 60 }
 
-const DURATIONS = new Set(['60', '90', '120'])
-const FORMATS = new Set(['virtual', 'in-person', 'hybrid'])
 const REGEN_TARGETS = new Set([
   'slides',
   'emails',
   'book_a_call',
   'workbook',
-  'facilitator_tips',
+  'recording_tips',
   'script',
   'topics',
   'outline',
 ])
 
-function parseDelivery(raw: unknown): DeliveryInput | null {
-  if (!raw || typeof raw !== 'object') return null
-  const d = raw as Record<string, unknown>
-  if (typeof d.duration !== 'string' || !DURATIONS.has(d.duration)) return null
-  if (typeof d.format !== 'string' || !FORMATS.has(d.format)) return null
-  if (typeof d.facilitator_name !== 'string' || d.facilitator_name.trim().length === 0) return null
-  const delivery: DeliveryInput = {
-    duration: d.duration as DeliveryInput['duration'],
-    format: d.format as DeliveryInput['format'],
-    facilitator_name: d.facilitator_name.trim(),
-  }
+// Recording details are all optional (no duration/format — the video is a fixed
+// 15-20 minutes). Always returns an object; presenter_name defaults to the
+// coach's account name later.
+function parseDelivery(raw: unknown): DeliveryInput {
+  const d = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const delivery: DeliveryInput = {}
+  if (typeof d.presenter_name === 'string' && d.presenter_name.trim().length > 0) delivery.presenter_name = d.presenter_name.trim()
   if (typeof d.soft_cta === 'string' && d.soft_cta.trim().length > 0) delivery.soft_cta = d.soft_cta.trim()
   if (typeof d.call_page_url === 'string' && d.call_page_url.trim().length > 0) delivery.call_page_url = d.call_page_url.trim()
   return delivery
@@ -94,8 +89,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // A regenerate request rebuilds ONE asset conditioned on the current
-    // chosen_topic and reuses the stored delivery, so no delivery in the body.
-    // A full generate requires delivery up front.
+    // chosen_topic and reuses the stored delivery. A full generate takes optional
+    // recording details in the body (no content).
     const regenerate = typeof body.regenerate === 'string' ? body.regenerate : null
     const keepTitle = body.keep_title === true
 
@@ -103,17 +98,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (regenerate) {
       if (!REGEN_TARGETS.has(regenerate)) {
         return res.status(400).json({
-          error: 'regenerate must be one of: slides, emails, book_a_call, workbook, facilitator_tips, script, topics, outline',
+          error: 'regenerate must be one of: slides, emails, book_a_call, workbook, recording_tips, script, topics, outline',
         })
       }
     } else {
+      // Optional recording details only — { presenter_name?, soft_cta?, call_page_url? }.
       delivery = parseDelivery(body.delivery)
-      if (!delivery) {
-        return res.status(400).json({
-          error:
-            "delivery required — { duration: '60'|'90'|'120', format: 'virtual'|'in-person'|'hybrid', facilitator_name (non-empty), soft_cta?, call_page_url? }",
-        })
-      }
     }
 
     // Capability gate — toolkits require beta/full (admin bypasses).
@@ -126,7 +116,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const frameworkGate = await checkFrameworkConfirmed(userId)
       if (!frameworkGate.ok) return res.status(400).json({ error: frameworkGate.error })
 
-      const [audienceRow, transformationRow, existingRow, voiceContext] = await Promise.all([
+      const [audienceRow, transformationRow, existingRow, userRow, voiceContext] = await Promise.all([
         getSavedOutput(userId, 'audience'),
         getSavedOutput(userId, 'transformation'),
         supabase
@@ -135,9 +125,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .eq('user_id', userId)
           .eq('card_id', card_id)
           .maybeSingle(),
+        supabase.from('users').select('name').eq('id', userId).maybeSingle(),
         getVoiceContext(userId),
       ])
       const existing = existingRow.data
+      // presenter_name defaults to the coach's account name when not supplied.
+      const accountName = typeof userRow.data?.name === 'string' ? userRow.data.name.trim() : ''
+      const withPresenter = (dv: DeliveryInput): DeliveryInput =>
+        dv.presenter_name || !accountName ? dv : { ...dv, presenter_name: accountName }
 
       const baseInputs: Omit<GeneratorInputs, 'delivery'> = {
         audience: audienceRow ? stripSessionHistory(audienceRow.content) : null,
@@ -161,11 +156,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // delivery, writing back only that asset's column(s).
       if (regenerate) {
         if (!existing) return res.status(404).json({ error: 'No generation to regenerate — run a full generate first' })
-        const storedDelivery = parseDelivery(existing.delivery)
-        if (!storedDelivery) {
-          return res.status(400).json({ error: 'This generation has no delivery on file — run a full generate first' })
-        }
-        const inputs: GeneratorInputs = { ...baseInputs, delivery: storedDelivery }
+        const inputs: GeneratorInputs = { ...baseInputs, delivery: withPresenter(parseDelivery(existing.delivery)) }
         const chosenTopic = typeof existing.chosen_topic === 'string' ? existing.chosen_topic : ''
 
         const update: Record<string, unknown> = { updated_at: new Date().toISOString() }
@@ -182,8 +173,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           case 'workbook':
             update.workbook = (await regenerateAsset(userId, 'workbook', inputs, chosenTopic)).workbook
             break
-          case 'facilitator_tips':
-            update.facilitator_tips = (await regenerateAsset(userId, 'facilitator_tips', inputs, chosenTopic)).facilitator_tips
+          case 'recording_tips':
+            update.recording_tips = (await regenerateAsset(userId, 'recording_tips', inputs, chosenTopic)).recording_tips
             break
           case 'topics':
             update.topics = (await regenerateAsset(userId, 'meta', inputs, chosenTopic)).topics
@@ -214,7 +205,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       // ── Full generate ──
-      const inputs: GeneratorInputs = { ...baseInputs, delivery: delivery! }
+      const resolvedDelivery = withPresenter(delivery!)
+      const inputs: GeneratorInputs = { ...baseInputs, delivery: resolvedDelivery }
       const generated = await generateMicroTraining(userId, inputs)
 
       // chosen_topic is never null on success. Keep the coach's existing title
@@ -240,8 +232,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             workbook: generated.workbook,
             emails: generated.emails,
             book_a_call_emails: generated.book_a_call_emails,
-            facilitator_tips: generated.facilitator_tips,
-            delivery,
+            recording_tips: generated.recording_tips,
+            delivery: resolvedDelivery,
             sync_snapshot,
             updated_at: new Date().toISOString(),
           },

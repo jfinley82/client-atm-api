@@ -7,10 +7,12 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
 // ── Unified Micro-Training generator ────────────────────────────────────────
 // Produces the full Step 4 (Build) / Step 5 (Launch) asset set for ONE
-// validated blueprint, grounded only in the coach's own Steps 1-3 data + their
-// delivery choices. The full asset set is far too large for one Anthropic call
-// to return inside maxDuration 60 (it would run ~2 min and/or truncate), so it
-// is produced as SIX grouped calls that share one grounding block and run in
+// validated blueprint, grounded only in the coach's own Steps 1-3 data + a few
+// optional delivery details. The Micro-Training is a single 15-20 minute
+// RECORDED teaching video (no live audience, no Q&A, no room pacing), about
+// 10-12 slides. The full asset set is far too large for one Anthropic call to
+// return inside maxDuration 60 (it would run ~2 min and/or truncate), so it is
+// produced as SIX grouped calls that share one grounding block and run in
 // parallel (the same pattern as the blueprint synopsis split). Each call logs
 // its own cost. The per-asset units are also the reuse surface for the
 // regenerate path (see regenerateAsset).
@@ -29,7 +31,7 @@ export type MtExercise = { prompt: string; lines: number }
 export type MtWorkbookSection = { sectionTitle: string; keyInsight: string; exercises: MtExercise[]; reflection: string }
 export type MtWorkbook = { title: string; intro: string; sections: MtWorkbookSection[]; keyTakeaways: string[] }
 export type MtEmail = { email_number: number; send_timing: string; subject: string; body: string }
-export type MtFacilitatorTip = { category: string; tip: string }
+export type MtRecordingTip = { category: string; tip: string }
 
 export type MicroTraining = {
   topics: MtTopic[]
@@ -41,13 +43,14 @@ export type MicroTraining = {
   workbook: MtWorkbook
   emails: MtEmail[]
   book_a_call_emails: MtEmail[]
-  facilitator_tips: MtFacilitatorTip[]
+  recording_tips: MtRecordingTip[]
 }
 
+// The coach's optional recording details. No duration/format — the video is a
+// fixed 15-20 minute recording. presenter_name defaults to the coach's account
+// name when omitted (resolved by the endpoint).
 export type DeliveryInput = {
-  duration: '60' | '90' | '120'
-  format: 'virtual' | 'in-person' | 'hybrid'
-  facilitator_name: string
+  presenter_name?: string
   soft_cta?: string
   call_page_url?: string
 }
@@ -72,31 +75,32 @@ export type GeneratorInputs = {
 
 // The asset units. Each maps 1:1 to a persisted column group and is the unit the
 // regenerate path re-runs individually.
-export type AssetUnit = 'meta' | 'slides' | 'workbook' | 'facilitator_tips' | 'emails' | 'book_a_call'
+export type AssetUnit = 'meta' | 'slides' | 'workbook' | 'recording_tips' | 'emails' | 'book_a_call'
 
 const asString = (v: unknown): string => (typeof v === 'string' ? v : '')
 const asStringArray = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
 
 // ── Grounding ───────────────────────────────────────────────────────────────
-// The identical block every unit call receives. delivery drives pacing + the
-// CTA; the framework phases are the teaching arc / slide sectionNames.
+// The identical block every unit call receives. The framework phases are the
+// recorded teaching arc / slide sectionNames; the optional presenter name + CTA
+// are the only delivery details.
 function buildGrounding(inputs: GeneratorInputs): string {
   const d = inputs.delivery
+  const presenter = d.presenter_name && d.presenter_name.trim().length > 0 ? d.presenter_name.trim() : '(the coach)'
   const ctaLine = d.soft_cta && d.soft_cta.trim().length > 0 ? d.soft_cta.trim() : '(none provided — write a soft, teaching-first CTA grounded in the blueprint suggested_offer)'
   const callUrl = d.call_page_url && d.call_page_url.trim().length > 0 ? d.call_page_url.trim() : '[BOOK_A_CALL_LINK]'
   return `AUDIENCE INTELLIGENCE: ${JSON.stringify(inputs.audience)}
 TRANSFORMATION DATA: ${JSON.stringify(inputs.transformation)}
-RESULTS FRAMEWORK (the teaching arc — use these phase names in order): ${JSON.stringify(inputs.framework)}
+RESULTS FRAMEWORK (the recorded teaching arc — use these phase names in order): ${JSON.stringify(inputs.framework)}
 BLUEPRINT (the ONE problem/solution this training teaches):
 - card_name: ${JSON.stringify(inputs.card.card_name)}
 - problem_text: ${JSON.stringify(inputs.card.problem_text)}
 - reasoning: ${JSON.stringify(inputs.card.reasoning)}
 - suggested_offer: ${JSON.stringify(inputs.card.suggested_offer)}
-DELIVERY:
-- total run time: ${d.duration} minutes
-- format: ${d.format}
-- facilitator name: ${JSON.stringify(d.facilitator_name)}
+FORMAT: a single 15-20 minute pre-recorded teaching video the coach records solo on camera. No live audience, no Q&A.
+RECORDING DETAILS:
+- presenter name (use when signing / referring to the coach): ${JSON.stringify(presenter)}
 - coach's soft CTA line: ${ctaLine}
 - book-a-call link: ${callUrl}`
 }
@@ -104,7 +108,7 @@ DELIVERY:
 // Shared header + guardrails appended to every unit's system prompt.
 const SHARED_RULES = `Output ONLY valid JSON, no preamble, no markdown, no code fences. Double quotes only.
 
-Ground EVERYTHING in the specific data provided — the coach's real audience language, their transformation, their named framework phases, and this one blueprint's problem/solution/offer. No generic coaching-industry filler that could apply to any topic. The teaching arc must follow the coach's ACTUAL framework phases in order, applied to this blueprint's problem — not a generic skeleton. The workshop timing frame is only for pacing: a short welcome (~5 minutes), teaching blocks scaled to the total run time, and a wrap-up (~5 minutes). Any call to action is soft and teaching-first: it references the blueprint's suggested_offer and invites the next step, never a hard pitch.
+Ground EVERYTHING in the specific data provided — the coach's real audience language, their transformation, their named framework phases, and this one blueprint's problem/solution/offer. No generic coaching-industry filler that could apply to any topic. The teaching arc must follow the coach's ACTUAL framework phases in order, applied to this blueprint's problem — not a generic skeleton. This is ONE pre-recorded 15-20 minute teaching video, not a live session: no welcome-the-room, no housekeeping, no Q&A, no live-audience or workshop language. The arc is a recorded hook, then the framework applied to this problem, then the key insight, then a soft next step. Any call to action is soft and teaching-first: it references the blueprint's suggested_offer and invites the viewer to book a call, never a hard pitch.
 ${GENDER_NEUTRAL_INSTRUCTION}
 ${STYLE_GUIDELINES}`
 
@@ -118,113 +122,114 @@ const UNIT_SPECS: Record<AssetUnit, UnitSpec> = {
   meta: {
     key: 'meta',
     maxTokens: 1500,
-    prompt: `You design the framing for a coach's micro-training video. Produce the title options, the recommended primary title, a subtitle, the total run time, and a section outline.
+    prompt: `You design the framing for a coach's pre-recorded micro-training video. Produce the title options, the recommended primary title, a subtitle, the run time, and a section outline.
 
 {
   "topics": [ { "title": "title option", "angle": "the specific hook or framing", "why": "why this angle resonates with THIS audience" } ],
   "chosen_topic": "the ONE recommended primary title (may match one of the topics or be a sharper version of the strongest) — this is the working title",
   "subtitle": "a one-line subtitle that clarifies the promise",
-  "total_duration": "the total run time as words, matching the delivery run time (e.g. '90 minutes')",
+  "total_duration": "the video run time in words — always in the 15-20 minute range (e.g. '15-20 minutes')",
   "outline": [ { "section_number": 1, "title": "section title", "description": "one sentence on what this section covers" } ]
 }
 
 Rules:
 - topics: exactly 5 distinct options, each grounded in this blueprint's problem and this audience's language.
 - chosen_topic must never be empty — pick the strongest, sharpened for this audience.
-- total_duration must reflect the delivery total run time given below.
-- outline: the sections a viewer moves through, mapped to the framework's phases in order (welcome, the teaching phases, wrap-up + soft next step). One entry per section.
+- total_duration is always a 15-20 minute recorded video — do not invent a longer run time.
+- outline: the sections a viewer moves through in the recording, mapped to the framework's phases in order (hook, the teaching phases applied to this problem, the key insight, a soft next step). One entry per section.
 ${SHARED_RULES}`,
   },
   slides: {
     key: 'slides',
     maxTokens: 6000,
-    prompt: `You build the teaching slide deck the coach records the micro-training from. Each slide has the script the facilitator speaks, a short speaker note/cue, its timing, and the framework section it belongs to.
+    prompt: `You build the slide deck the coach records the micro-training video from. Each slide has the script the coach speaks on camera, a short speaker note/cue, its timing, and the framework section it belongs to.
 
 {
   "slides": [
-    { "slideNumber": 1, "slideTitle": "slide title", "script": "what the facilitator actually says on this slide, written to be read or paraphrased on camera", "speakerNote": "a short delivery cue for this slide", "timing": "minutes for this slide, e.g. '5 min'", "sectionName": "the framework phase name this slide belongs to" }
+    { "slideNumber": 1, "slideTitle": "slide title", "script": "what the coach actually says on this slide, written to be read or paraphrased on camera", "speakerNote": "a short delivery cue for this slide", "timing": "minutes for this slide, e.g. '2 min'", "sectionName": "the framework phase name this slide belongs to" }
   ]
 }
 
 Rules:
-- Number slides 1..N in order. Scale the count to the delivery run time (roughly one slide per 4-6 minutes): about 10-12 slides for 60 minutes, 14-16 for 90, 18-22 for 120.
-- The arc MUST follow the framework's ACTUAL phases in order: open with a welcome slide, move through the teaching phases applied to this blueprint's problem, and close with a wrap-up + a soft next-step slide.
-- sectionName MUST be a real framework phase name (or "Welcome" / "Wrap-up" for the opening and closing slides).
-- The per-slide timing values must sum to approximately the delivery total run time.
-- script is the spoken content grounded in this blueprint and the audience's language — specific teaching, not vague restatements of the title.
+- Produce 10 to 12 slides, numbered 1..N in order. This is a fixed 15-20 minute recorded video — do NOT scale the count to any run time.
+- The arc MUST follow the framework's ACTUAL phases in order: open with a hook slide, move through the teaching phases applied to this blueprint's problem, surface the key insight, and close with a soft next-step slide.
+- sectionName MUST be a real framework phase name (or "Hook" for the opening slide and "Next step" for the closing slide).
+- The per-slide timing values must sum to roughly 15-20 minutes.
+- script is the spoken content grounded in this blueprint and the audience's language — specific teaching, not vague restatements of the title. No live-audience or "welcome to today's session" language; this is recorded solo.
 - The final slide is a soft next-step slide referencing the blueprint's suggested_offer and the book-a-call link — teaching-first, no hard pitch.
 ${SHARED_RULES}`,
   },
   workbook: {
     key: 'workbook',
     maxTokens: 3500,
-    prompt: `You build the participant workbook that accompanies the micro-training. It follows the same teaching arc and gives participants exercises and reflection space.
+    prompt: `You build the companion worksheet a viewer downloads AFTER watching the recorded micro-training, to apply the teaching on their own. It follows the same arc as the video and gives the viewer prompts and reflection space.
 
 {
   "workbook": {
-    "title": "workbook title",
-    "intro": "a short intro paragraph orienting the participant",
+    "title": "worksheet title",
+    "intro": "a short intro paragraph orienting the viewer to applying what they just watched",
     "sections": [
-      { "sectionTitle": "section title (mapped to a framework phase)", "keyInsight": "the one key insight of this section", "exercises": [ { "prompt": "an exercise prompt the participant works through", "lines": 4 } ], "reflection": "a reflection question to close the section" }
+      { "sectionTitle": "section title (mapped to a framework phase)", "keyInsight": "the one key insight of this section", "exercises": [ { "prompt": "an apply-it prompt the viewer works through on their own", "lines": 4 } ], "reflection": "a reflection question to close the section" }
     ],
     "keyTakeaways": ["a concrete takeaway", "another"]
   }
 }
 
 Rules:
-- sections mirror the framework phases in order, same arc as the training.
+- This is a solo takeaway worksheet, not live workshop exercises — frame everything as the viewer applying the teaching after watching.
+- sections mirror the framework phases in order, same arc as the video.
 - Each section has 1-3 exercises; "lines" is how many blank lines to leave for the answer (an integer 2-8).
 - keyInsight, prompts, and reflection are specific to this blueprint's problem and this audience — no generic worksheet filler.
-- keyTakeaways: 3-5 concrete takeaways a participant leaves with.
+- keyTakeaways: 3-5 concrete takeaways the viewer leaves with.
 ${SHARED_RULES}`,
   },
-  facilitator_tips: {
-    key: 'facilitator_tips',
+  recording_tips: {
+    key: 'recording_tips',
     maxTokens: 1500,
-    prompt: `You write delivery tips for the coach facilitating this micro-training, tuned to the delivery format (virtual, in-person, or hybrid).
+    prompt: `You write recording tips for the coach filming this micro-training solo on camera — pacing, energy on camera, and simple setup — tuned to THIS specific video.
 
 {
-  "facilitator_tips": [ { "category": "a short category label, e.g. 'Pacing' or 'Engagement'", "tip": "a specific, usable delivery tip for THIS training and format" } ]
+  "recording_tips": [ { "category": "a short category label, e.g. 'Pacing', 'Energy', or 'Setup'", "tip": "a specific, usable recording tip for THIS video" } ]
 }
 
 Rules:
-- 5-8 tips, each grounded in this specific training's arc and the delivery format given below.
-- Tips must be concrete and usable, not generic public-speaking advice.
+- 5-8 tips, each grounded in this specific video's arc and this coach's material.
+- Tips are for recording a solo teaching video (delivery, energy on camera, framing, keeping momentum through the arc), not for facilitating a live session or public speaking generalities.
 ${SHARED_RULES}`,
   },
   emails: {
     key: 'emails',
     maxTokens: 2500,
-    prompt: `You write the registration / pre-training email sequence (3 emails) that gets a registrant to actually show up and watch.
+    prompt: `You write the registration email sequence (3 emails) that gets a registrant to actually watch the recorded micro-training video.
 
 {
   "emails": [
-    { "email_number": 1, "send_timing": "immediately after registration", "subject": "subject line", "body": "full email body — warm, direct, in the coach's voice. Confirm registration, remind them what they will learn and why it matters, end with the training link as [TRAINING_LINK]." },
-    { "email_number": 2, "send_timing": "24 hours before / after registration", "subject": "subject line", "body": "reference the specific problem this training solves, build mild real urgency, end with [TRAINING_LINK]." },
-    { "email_number": 3, "send_timing": "the day of / final reminder", "subject": "subject line", "body": "final nudge to attend, one clear reason to show up, end with [TRAINING_LINK]." }
+    { "email_number": 1, "send_timing": "immediately after registration", "subject": "subject line", "body": "full email body — warm, direct, in the coach's voice. Confirm registration, remind them what they will learn and why it matters, end with the video link as [TRAINING_LINK]." },
+    { "email_number": 2, "send_timing": "1 day after registration if not yet watched", "subject": "subject line", "body": "reference the specific problem this training solves, build mild real urgency, end with [TRAINING_LINK]." },
+    { "email_number": 3, "send_timing": "final reminder", "subject": "subject line", "body": "final nudge, one clear reason to watch now, end with [TRAINING_LINK]." }
   ]
 }
 
 Rules:
-- Exactly 3 emails, grounded in this blueprint's problem and this audience's language, signed by the facilitator.
-- These are PRE-training emails about attending — do not pitch the offer or a call here.
+- Exactly 3 emails, grounded in this blueprint's problem and this audience's language, signed by the coach (use the presenter name).
+- These emails are about WATCHING the recorded video — no live-session language (no "attend", "seat", "join us live"). Do not pitch the offer or a call here.
 ${SHARED_RULES}`,
   },
   book_a_call: {
     key: 'book_a_call',
     maxTokens: 2500,
-    prompt: `You write the post-training booking email sequence (3 emails) that invites a viewer who watched the training to book a call, softly.
+    prompt: `You write the post-video booking email sequence (3 emails) that invites a viewer who watched the recorded training to book a call, softly.
 
 {
   "book_a_call_emails": [
-    { "email_number": 1, "send_timing": "same day, after the training", "subject": "subject line", "body": "warm and personal. Reference what they just learned and the shift it created, soft invite to go deeper on a call, end with the booking link as [BOOK_A_CALL_LINK]." },
+    { "email_number": 1, "send_timing": "same day, after watching", "subject": "subject line", "body": "warm and personal. Reference what they just learned and the shift it created, soft invite to go deeper on a call, end with the booking link as [BOOK_A_CALL_LINK]." },
     { "email_number": 2, "send_timing": "2 days after", "subject": "subject line", "body": "name the single most common objection to booking and reframe it with empathy, point back to the result they want, end with [BOOK_A_CALL_LINK]." },
     { "email_number": 3, "send_timing": "4 days after", "subject": "subject line", "body": "final soft nudge. Clear, direct, no false scarcity, end with [BOOK_A_CALL_LINK]." }
   ]
 }
 
 Rules:
-- Exactly 3 emails, grounded in this blueprint's problem/solution and its suggested_offer, signed by the facilitator.
+- Exactly 3 emails, grounded in this blueprint's problem/solution and its suggested_offer, signed by the coach (use the presenter name).
 - Soft and teaching-first — invite the call, never hard-sell.
 ${SHARED_RULES}`,
   },
@@ -315,7 +320,7 @@ function coerceEmails(v: unknown): MtEmail[] {
     .filter((e) => e.subject.trim().length > 0 || e.body.trim().length > 0)
 }
 
-function coerceFacilitatorTips(v: unknown): MtFacilitatorTip[] {
+function coerceRecordingTips(v: unknown): MtRecordingTip[] {
   if (!Array.isArray(v)) return []
   return v
     .map((r) => (r && typeof r === 'object' ? (r as Record<string, unknown>) : {}))
@@ -361,8 +366,8 @@ async function runUnit(
       return { slides: coerceSlides(parsed.slides) }
     case 'workbook':
       return { workbook: coerceWorkbook(parsed.workbook) }
-    case 'facilitator_tips':
-      return { facilitator_tips: coerceFacilitatorTips(parsed.facilitator_tips) }
+    case 'recording_tips':
+      return { recording_tips: coerceRecordingTips(parsed.recording_tips) }
     case 'emails':
       return { emails: coerceEmails(parsed.emails) }
     case 'book_a_call':
@@ -375,20 +380,21 @@ async function runUnit(
 // so the caller returns an error rather than persisting a half-populated record.
 export async function generateMicroTraining(userId: string, inputs: GeneratorInputs): Promise<MicroTraining> {
   const grounding = buildGrounding(inputs)
-  const units: AssetUnit[] = ['meta', 'slides', 'workbook', 'facilitator_tips', 'emails', 'book_a_call']
+  const units: AssetUnit[] = ['meta', 'slides', 'workbook', 'recording_tips', 'emails', 'book_a_call']
   const parts = await Promise.all(units.map((u) => runUnit(userId, u, grounding, inputs.voiceContext)))
   const merged = Object.assign({}, ...parts) as Partial<MicroTraining>
   return {
     topics: merged.topics ?? [],
     chosen_topic: merged.chosen_topic ?? '',
     subtitle: merged.subtitle ?? '',
-    total_duration: merged.total_duration ?? `${inputs.delivery.duration} minutes`,
+    // The Micro-Training is always a 15-20 minute recorded video.
+    total_duration: merged.total_duration ?? '15-20 minutes',
     outline: merged.outline ?? [],
     slides: merged.slides ?? [],
     workbook: merged.workbook ?? { title: '', intro: '', sections: [], keyTakeaways: [] },
     emails: merged.emails ?? [],
     book_a_call_emails: merged.book_a_call_emails ?? [],
-    facilitator_tips: merged.facilitator_tips ?? [],
+    recording_tips: merged.recording_tips ?? [],
   }
 }
 
@@ -409,7 +415,7 @@ function withTitle(grounding: string, chosenTopic: string): string {
     : grounding
 }
 
-const SCRIPT_PROMPT = `You rewrite ONLY the spoken script for each slide of an existing micro-training deck. Keep every slide's title, timing, and section exactly as given — you are refreshing the words the facilitator speaks, not restructuring the deck.
+const SCRIPT_PROMPT = `You rewrite ONLY the spoken script for each slide of an existing micro-training deck. Keep every slide's title, timing, and section exactly as given — you are refreshing the words the coach speaks on camera in this recorded video, not restructuring the deck.
 
 You are given the existing deck (each slide's number, title, section, and timing) plus the coach's grounding data. Return new spoken script for every slide, matched by slideNumber.
 
@@ -419,7 +425,7 @@ You are given the existing deck (each slide's number, title, section, and timing
 
 Rules:
 - Return one entry per slide given, same slideNumber values, in order.
-- script is what the facilitator says on camera — specific teaching grounded in this blueprint's problem/solution and this audience, not vague restatements of the slide title.
+- script is what the coach says on camera — specific teaching grounded in this blueprint's problem/solution and this audience, not vague restatements of the slide title.
 - The final slide's script keeps its soft, teaching-first next-step framing referencing the blueprint's suggested_offer.
 ${SHARED_RULES}`
 
