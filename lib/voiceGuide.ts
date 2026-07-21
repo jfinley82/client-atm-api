@@ -169,3 +169,23 @@ export async function getVoiceContext(userId: string): Promise<string> {
   }
   return STYLE_GUIDELINES
 }
+
+// Voice context for the AI Coach builder. Same inputs as getVoiceContext, but
+// the coach's voice guide is AUTHORITATIVE over the anti-AI writing rules — the
+// deployed bot must sound like the coach even where that means using a word the
+// style layer would avoid. Order is deliberate: style rules first, then the
+// voice guide with an explicit override note (the opposite emphasis from
+// getVoiceContext, which is a style layer for app-generated marketing copy).
+// getVoiceContext is unchanged.
+export async function getCoachVoiceContext(userId: string): Promise<string> {
+  const { data } = await supabase
+    .from('voice_guides')
+    .select('status, guide_md')
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  if (data?.status === 'complete' && typeof data.guide_md === 'string' && data.guide_md.trim().length > 0) {
+    return `${STYLE_GUIDELINES}\n\n---\n\nVOICE GUIDE — AUTHORITATIVE. Where this conflicts with the writing-style rules above, follow THIS, including specific word choices those rules would avoid.\n${data.guide_md}`
+  }
+  return STYLE_GUIDELINES
+}
