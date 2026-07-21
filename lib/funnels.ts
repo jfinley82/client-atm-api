@@ -115,6 +115,35 @@ export async function resolveGenerationCard(
   return card ?? null
 }
 
+// funnel_events types that count as true ENGAGEMENT for a lead's activity feed —
+// an inclusion allowlist (safer than excluding page-views, so a future page-view
+// type can never leak into the feed). Page reaches (landing_view, training_view,
+// booking_click) are deliberately absent: they stay in the aggregate KPI counts
+// only. Video/email types are appended by Phases 4/5 when those events exist.
+export const ENGAGEMENT_EVENT_TYPES = ['signup', 'booked', 'closed', 'video_watched', 'video_completed', 'email_opened', 'email_clicked'] as const
+
+/**
+ * Load a lead scoped to an owned funnel: confirms the funnel is owned AND the
+ * lead belongs to it. Returns the lead row (selected columns) or null — callers
+ * 404 on null so a foreign funnel/lead is indistinguishable from missing.
+ */
+export async function getOwnedLead(
+  userId: string,
+  funnelId: string,
+  leadId: string,
+  columns = 'id, status'
+): Promise<Record<string, any> | null> {
+  const funnel = await getOwnedFunnel(userId, funnelId)
+  if (!funnel) return null
+  const { data } = await supabase
+    .from('funnel_leads')
+    .select(columns)
+    .eq('id', leadId)
+    .eq('funnel_id', funnelId)
+    .maybeSingle()
+  return (data as Record<string, any>) ?? null
+}
+
 /**
  * Resolve a LIVE funnel for the public pages, by subdomain or by id. Returns the
  * full row, or null when it is missing or not live. The public renderer and the
