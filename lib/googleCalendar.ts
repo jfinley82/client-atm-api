@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import { SignJWT, jwtVerify } from 'jose'
 import { supabase } from './supabase'
 import { encryptToken, decryptToken } from './cryptoTokens'
@@ -8,7 +9,14 @@ import type { Interval } from './availability'
 // URI is ALWAYS read from GOOGLE_REDIRECT_URI (never hardcoded), so it tracks the
 // Vercel env across environments.
 
-const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET!)
+// The OAuth state is signed with a DISTINCT key derived from JWT_SECRET — NOT
+// JWT_SECRET itself. This is deliberate: session tokens are signed with
+// JWT_SECRET and verifySessionToken ignores custom claims, so if the state used
+// the same key a leaked state (it travels in URLs → logs/Referer) would be
+// accepted verbatim as a Bearer session. A separate key means a state can never
+// verify as a session token, and vice versa.
+const STATE_SECRET = crypto.createHmac('sha256', process.env.JWT_SECRET || '').update('gcal-oauth-state-v1').digest()
+
 const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/calendar.readonly',
   'https://www.googleapis.com/auth/calendar.events',
@@ -18,23 +26,43 @@ export function isGoogleConfigured(): boolean {
   return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REDIRECT_URI)
 }
 
-// ---- CSRF state (signed, bound to the userId) --------------------------------
+// ---- CSRF state (signed, bound to userId + a per-flow nonce) -----------------
+
+// sha256 hex of the connect-time nonce cookie value. The state carries this HASH
+// (states travel in URLs), and the callback re-hashes the cookie to match — so
+// the flow is bound to the browser session that started it (blocks OAuth
+// account-linking CSRF) without the state ever revealing the cookie value.
+export function hashNonce(nonce: string): string {
+  return crypto.createHash('sha256').update(nonce, 'utf8').digest('hex')
+}
+
+// Constant-time compare of a raw nonce against a stored hash.
+export function nonceMatches(nonce: string | undefined | null, expectedHash: unknown): boolean {
+  if (typeof nonce !== 'string' || !nonce || typeof expectedHash !== 'string' || !expectedHash) return false
+  const a = Buffer.from(hashNonce(nonce), 'utf8')
+  const b = Buffer.from(expectedHash, 'utf8')
+  return a.length === b.length && crypto.timingSafeEqual(a, b)
+}
 
 // Short-lived signed state so the public callback can trust which user began the
-// flow. Reuses the app's JWT_SECRET; `purpose` scopes it to this flow only.
-export async function signOAuthState(userId: string): Promise<string> {
-  return new SignJWT({ userId, purpose: 'gcal_oauth' })
+// flow and that this browser session started it. Signed with STATE_SECRET (see
+// above) so it is unusable as a session token. `nh` = hashNonce(nonce cookie).
+export async function signOAuthState(userId: string, nonceHash: string): Promise<string> {
+  return new SignJWT({ userId, purpose: 'gcal_oauth', nh: nonceHash })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime('10m')
-    .sign(JWT_SECRET)
+    .setJti(crypto.randomUUID())
+    .sign(STATE_SECRET)
 }
 
-export async function verifyOAuthState(state: string): Promise<{ userId: string } | null> {
+export async function verifyOAuthState(state: string): Promise<{ userId: string; nonceHash: string } | null> {
   try {
-    const { payload } = await jwtVerify(state, JWT_SECRET)
-    if (payload.purpose !== 'gcal_oauth' || typeof payload.userId !== 'string') return null
-    return { userId: payload.userId }
+    const { payload } = await jwtVerify(state, STATE_SECRET)
+    if (payload.purpose !== 'gcal_oauth' || typeof payload.userId !== 'string' || typeof payload.nh !== 'string') {
+      return null
+    }
+    return { userId: payload.userId, nonceHash: payload.nh }
   } catch {
     return null
   }
@@ -151,7 +179,9 @@ export async function saveGoogleConnection(
   const row = {
     user_id: userId,
     provider: 'google',
-    access_token: tokens.access_token ?? null,
+    // Both tokens encrypted at rest — the access token is short-lived but is
+    // still a live OAuth credential, so there's no reason to store it plaintext.
+    access_token: tokens.access_token ? encryptToken(tokens.access_token) : null,
     refresh_token: encRefresh,
     expires_at: expiresAt,
     calendar_id: 'primary',
@@ -180,8 +210,12 @@ export async function getValidAccessToken(
   if (!conn) return null
   const calendarId = conn.calendar_id || 'primary'
 
+  // Use the stored access token if it's still valid and decryptable.
   const notExpired = conn.access_token && conn.expires_at && new Date(conn.expires_at).getTime() > Date.now() + 60_000
-  if (notExpired) return { access_token: conn.access_token as string, calendar_id: calendarId }
+  if (notExpired) {
+    const at = decryptToken(conn.access_token as string)
+    if (at) return { access_token: at, calendar_id: calendarId }
+  }
 
   const refreshToken = decryptToken(conn.refresh_token as string | null)
   if (!refreshToken) return null
@@ -190,7 +224,7 @@ export async function getValidAccessToken(
     const refreshed = await refreshAccessToken(refreshToken)
     if (!refreshed.access_token) return null
     const update: Record<string, unknown> = {
-      access_token: refreshed.access_token,
+      access_token: encryptToken(refreshed.access_token),
       expires_at: refreshed.expires_in ? new Date(Date.now() + refreshed.expires_in * 1000).toISOString() : null,
       updated_at: new Date().toISOString(),
     }

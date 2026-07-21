@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { setCors } from '../../../lib/cors'
 import {
   verifyOAuthState,
+  nonceMatches,
   exchangeCode,
   fetchPrimaryEmail,
   saveGoogleConnection,
@@ -10,8 +11,22 @@ import {
 import { isTokenKeyConfigured } from '../../../lib/cryptoTokens'
 
 const APP_URL = process.env.APP_URL || 'https://app.microtrainingmethod.com'
+const NONCE_COOKIE = 'catm_gcal_nonce'
+// Clears the one-time nonce cookie set at connect.
+const CLEAR_NONCE = `${NONCE_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`
+
+function readCookie(req: VercelRequest, name: string): string | undefined {
+  const header = (req.headers.cookie as string) || ''
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=')
+    if (idx === -1) continue
+    if (part.slice(0, idx).trim() === name) return decodeURIComponent(part.slice(idx + 1).trim())
+  }
+  return undefined
+}
 
 function back(res: VercelResponse, params: string) {
+  res.setHeader('Set-Cookie', CLEAR_NONCE)
   return res.redirect(302, `${APP_URL}/funnel-settings?${params}`)
 }
 
@@ -33,9 +48,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!code || !state) return back(res, 'gcal=error&reason=missing_params')
   if (!isGoogleConfigured() || !isTokenKeyConfigured()) return back(res, 'gcal=error&reason=not_configured')
 
-  // CSRF: the state must be our signed, unexpired token for this flow.
+  // CSRF: the state must be our signed, unexpired token for this flow AND the
+  // per-flow nonce cookie must match the hash bound into it — so this callback
+  // can only complete the session that started the connect (blocks OAuth
+  // account-linking: an attacker's state can't be completed in a victim's browser).
   const verified = await verifyOAuthState(state)
   if (!verified) return back(res, 'gcal=error&reason=bad_state')
+  if (!nonceMatches(readCookie(req, NONCE_COOKIE), verified.nonceHash)) {
+    return back(res, 'gcal=error&reason=bad_state')
+  }
 
   try {
     const tokens = await exchangeCode(code)

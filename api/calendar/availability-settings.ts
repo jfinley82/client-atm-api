@@ -4,8 +4,10 @@ import { setCors, noStore } from '../../lib/cors'
 import { requireActiveUser } from '../../lib/auth'
 import { loadUserAvailability, validateSettingsInput } from '../../lib/availabilitySettings'
 
-// GET/PUT /api/calendar/availability-settings — the coach's per-account
-// availability settings (working_hours + slot/buffer/window). Authed.
+// GET/PATCH /api/calendar/availability-settings — the coach's per-account
+// availability settings (working_hours + slot/buffer/window). Authed. PATCH (not
+// PUT) because lib/cors Allow-Methods lists PATCH, not PUT — a PUT preflight
+// would be blocked cross-origin. PATCH is also the repo convention.
 //
 // NOTE ON PATH: the spec named GET/PUT /api/calendar/availability, but that path
 // is already the LIVE public Zoom availability endpoint the funnel book page
@@ -28,7 +30,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
-  if (req.method === 'PUT') {
+  if (req.method === 'PATCH') {
     const parsed = validateSettingsInput(req.body)
     if (!parsed.ok) {
       return res.status(400).json({ error: 'invalid_field', field: parsed.field })
