@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
 import { setCors } from '../../../lib/cors'
 import { requireFunnelBuilder, resolveGenerationCard } from '../../../lib/funnels'
-import { blueprintSnapshot, generateLandingPage, BlueprintSnapshot } from '../../../lib/funnelLanding'
+import { blueprintSnapshot, generateLandingPage, landingPageHasCopy, BlueprintSnapshot } from '../../../lib/funnelLanding'
 import { GenerationParseError } from '../../../lib/aiJson'
 
 // POST /api/funnels/[id]/generate — regenerate this funnel's landing-page copy
@@ -58,6 +58,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(502).json({ error: 'generation_truncated' })
     }
     console.error('[funnels/[id]/generate] landing generation', err)
+    return res.status(502).json({ error: 'landing_generation_failed' })
+  }
+  const counts = { problem: landing_page.problem_bullets.length, solution: landing_page.solution_bullets.length }
+  if (!landingPageHasCopy(landing_page)) {
+    console.error('[funnels/[id]/generate] landing generation incomplete', counts)
     return res.status(502).json({ error: 'landing_generation_failed' })
   }
 

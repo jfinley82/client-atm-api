@@ -69,9 +69,16 @@ Rules:
 - Keep it tight and human. No hype, no fake urgency, no invented statistics.
 ${GENDER_NEUTRAL_INSTRUCTION}`
 
+// Coerce to EXACTLY 3 non-empty bullets: drop empties, then take the first 3.
+// Fewer than 3 usable bullets is a generation miss the caller rejects (it can't
+// fabricate a third), so this returns whatever it has and landingPageHasCopy
+// enforces the count.
 function normalizeBullets(v: unknown): string[] {
   if (!Array.isArray(v)) return []
-  return v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((x) => x.trim())
+  return v
+    .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+    .map((x) => x.trim())
+    .slice(0, 3)
 }
 
 /**
@@ -131,18 +138,21 @@ Write the landing page copy now.`
   }
 }
 
-// True once the generated copy is usable enough to publish — a headline and at
-// least one problem and one solution bullet. Used by the publish gate and to
-// decide whether generation succeeded.
+// True once the generated copy is the FULL, publishable shape: a non-empty
+// headline and subheadline, and EXACTLY 3 non-empty problem and 3 solution
+// bullets. Used to decide whether generation succeeded (else regenerate) and as
+// the publish readiness gate, so a 2- or 4-bullet page can never go live.
 export function landingPageHasCopy(lp: unknown): lp is LandingPage {
   if (!lp || typeof lp !== 'object') return false
   const p = lp as Partial<LandingPage>
+  const nonEmpty = (arr: unknown): arr is string[] =>
+    Array.isArray(arr) && arr.length === 3 && arr.every((x) => typeof x === 'string' && x.trim().length > 0)
   return (
     typeof p.headline === 'string' &&
     p.headline.trim().length > 0 &&
-    Array.isArray(p.problem_bullets) &&
-    p.problem_bullets.length > 0 &&
-    Array.isArray(p.solution_bullets) &&
-    p.solution_bullets.length > 0
+    typeof p.subheadline === 'string' &&
+    p.subheadline.trim().length > 0 &&
+    nonEmpty(p.problem_bullets) &&
+    nonEmpty(p.solution_bullets)
   )
 }

@@ -6,6 +6,7 @@ import { isZoomConfigured, getSchedulerAvailability, createZoomMeeting, slotMinu
 import { buildBookingIcs } from '../../lib/ics'
 import { sendBookingConfirmationEmail } from '../../lib/email'
 import { loadBookingQuestions } from '../../lib/bookingQuestions'
+import { resolveLiveFunnel } from '../../lib/funnels'
 
 // POST /api/calendar/book
 // Body: { slot_start, first_name, last_name, email, answers?, notes? }
@@ -30,6 +31,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
   const slotStart = typeof body.slot_start === 'string' ? body.slot_start : ''
   const email = typeof body.email === 'string' ? body.email.trim() : ''
+  // Optional funnel context — when a booking comes from a live funnel's book
+  // page, log the 'booked' funnel event SERVER-SIDE here (authoritative, unlike a
+  // post-redirect client beacon that can be lost). Both are best-effort below.
+  const funnelId = typeof body.funnel_id === 'string' ? body.funnel_id.trim() : ''
 
   // Name: prefer first_name + last_name; fall back to a legacy { name }.
   const firstName = typeof body.first_name === 'string' ? body.first_name.trim() : ''
@@ -127,6 +132,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .from('bookings')
       .update({ zoom_meeting_id: meeting.id, zoom_join_url: meeting.join_url })
       .eq('id', reserved.id)
+
+    // 4b) Funnel attribution — if this booking came from a live funnel, log a
+    // server-side 'booked' event, scoping the lead to that funnel by matching
+    // email (a client-supplied lead_id is never trusted). Best-effort only.
+    if (funnelId) {
+      try {
+        const funnel = await resolveLiveFunnel({ funnelId })
+        if (funnel) {
+          const { data: lead } = await supabase
+            .from('funnel_leads')
+            .select('id')
+            .eq('funnel_id', funnel.id)
+            .eq('email', email)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+          await supabase
+            .from('funnel_events')
+            .insert({ funnel_id: funnel.id, lead_id: lead?.id ?? null, event_type: 'booked' })
+        }
+      } catch (funnelErr) {
+        console.error('[calendar/book] funnel booked event', funnelErr)
+      }
+    }
 
     // 5) Best-effort branded confirmation with .ics — never fails the booking.
     const startLabel = new Date(startIso).toLocaleString('en-US', {

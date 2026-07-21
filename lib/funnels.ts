@@ -134,6 +134,60 @@ export async function resolveLiveFunnel(opts: {
   return funnel
 }
 
+// ---- brand-field validation --------------------------------------------
+// These values are interpolated into the PUBLIC render's <style> and <script>,
+// so they must be strictly validated on write AND sanitized on read. A raw
+// brand_font / color could otherwise break out of the CSS/JS context and inject
+// markup on the live *.microtrainingmethod.com page (stored XSS).
+
+export const DEFAULT_BRAND_PRIMARY = '#020c31'
+export const DEFAULT_BRAND_SECONDARY = '#6dd80e'
+export const DEFAULT_BRAND_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+
+// Hex (#rgb..#rrggbbaa) or a digits/percent/comma-only rgb()/hsl() form. No
+// character in either form can close a <style>/<script> or start a CSS rule.
+const BRAND_HEX_RE = /^#[0-9a-fA-F]{3,8}$/
+const BRAND_FUNC_RE = /^(rgb|rgba|hsl|hsla)\(\s*[0-9.,%\s]+\)$/
+
+export function isValidBrandColor(v: unknown): v is string {
+  if (typeof v !== 'string') return false
+  const t = v.trim()
+  return BRAND_HEX_RE.test(t) || BRAND_FUNC_RE.test(t)
+}
+
+// Fixed allowlist of font-family strings a coach may pick. Stored value must
+// match one of these EXACTLY — never free text.
+export const BRAND_FONT_ALLOWLIST: string[] = [
+  DEFAULT_BRAND_FONT,
+  "'Inter', sans-serif",
+  "'Poppins', sans-serif",
+  "'Montserrat', sans-serif",
+  "'Roboto', sans-serif",
+  "'Lato', sans-serif",
+  "'Open Sans', sans-serif",
+  "'Nunito', sans-serif",
+  "'Work Sans', sans-serif",
+  "'Raleway', sans-serif",
+  "'Georgia', serif",
+  "'Merriweather', serif",
+  "'Playfair Display', serif",
+  "'Courier New', monospace",
+]
+
+export function isValidBrandFont(v: unknown): v is string {
+  return typeof v === 'string' && BRAND_FONT_ALLOWLIST.includes(v.trim())
+}
+
+// Read-side defense in depth: return the stored value only if it still passes
+// validation, else the safe default. Used by the public renderer so even a row
+// that predates validation (or is tampered directly in the DB) can't inject.
+export function sanitizeBrandColor(v: unknown, fallback: string): string {
+  return isValidBrandColor(v) ? v.trim() : fallback
+}
+export function sanitizeBrandFont(v: unknown): string {
+  return isValidBrandFont(v) ? v.trim() : DEFAULT_BRAND_FONT
+}
+
 // Subdomain: lowercase letters, numbers, hyphens only (no leading/trailing hyphen).
 const SUBDOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 

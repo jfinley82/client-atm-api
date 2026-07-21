@@ -1,7 +1,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
 import { setCors } from '../../../lib/cors'
-import { requireFunnelBuilder, isValidSubdomain, subdomainTaken } from '../../../lib/funnels'
+import {
+  requireFunnelBuilder,
+  isValidSubdomain,
+  subdomainTaken,
+  isValidBrandColor,
+  isValidBrandFont,
+} from '../../../lib/funnels'
 
 const THEME_MODES = ['dark', 'light']
 
@@ -27,8 +33,9 @@ const EDITABLE_KEYS = new Set([
 
 // jsonb page/config fields — accept a plain object, or null to clear.
 const OBJECT_FIELDS = ['landing_page', 'training_page', 'booking_page', 'tracking']
-// free-text fields — accept a string (trimmed), or null to clear.
-const TEXT_FIELDS = ['logo_url', 'headshot_url', 'brand_font', 'video_url']
+// free-text fields — accept a string (trimmed), or null to clear. (brand_font is
+// NOT here — it is allowlist-validated separately, and colors are pattern-checked.)
+const TEXT_FIELDS = ['logo_url', 'headshot_url', 'video_url']
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v)
@@ -96,8 +103,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    if ('brand_primary_color' in body) updates.brand_primary_color = body.brand_primary_color
-    if ('brand_secondary_color' in body) updates.brand_secondary_color = body.brand_secondary_color
+    // Brand colors are interpolated into the public page's CSS/JS — validate
+    // strictly (hex or rgb()/hsl()) so a value can't break out of that context.
+    for (const field of ['brand_primary_color', 'brand_secondary_color']) {
+      if (field in body) {
+        if (!isValidBrandColor(body[field])) {
+          return res.status(400).json({ error: 'invalid_field', field, message: 'must be a hex or rgb()/hsl() color' })
+        }
+        updates[field] = (body[field] as string).trim()
+      }
+    }
+
+    // brand_font must be an allowlisted font-family string (never free text) —
+    // same public-CSS injection surface as colors.
+    if ('brand_font' in body) {
+      if (body.brand_font !== null && !isValidBrandFont(body.brand_font)) {
+        return res.status(400).json({ error: 'invalid_field', field: 'brand_font', message: 'must be an allowed font-family' })
+      }
+      updates.brand_font = body.brand_font === null ? null : (body.brand_font as string).trim()
+    }
 
     if ('theme_mode' in body) {
       if (!THEME_MODES.includes(body.theme_mode as string)) {

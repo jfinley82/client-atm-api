@@ -1,13 +1,19 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
+import {
+  sanitizeBrandColor,
+  sanitizeBrandFont,
+  DEFAULT_BRAND_PRIMARY,
+  DEFAULT_BRAND_SECONDARY,
+} from '../../lib/funnels'
 
 // PUBLIC — no auth. Resolves a LIVE funnel from the request's subdomain and
 // serves its real pages, routed by ?page= (landing | training | book; default
 // landing). Copy + brand kit come from the funnel row; the training page's key
 // takeaways come from the linked mtm_generations. Page views are logged to
 // funnel_events (best-effort). Booking reuses the existing native calendar
-// (/api/calendar/*); a successful booking is logged 'booked' via the public
-// event beacon (/api/funnel/event).
+// (/api/calendar/*): the book page passes this funnel_id to /api/calendar/book,
+// which logs the 'booked' event SERVER-SIDE (authoritative, no client beacon).
 //
 // Subdomain resolution: the leftmost label of the Host header, with a
 // ?subdomain= query override so the lookup is testable before wildcard DNS.
@@ -77,12 +83,13 @@ function logEvent(funnelId: string, eventType: string): void {
 type Brand = { primary: string; secondary: string; isDark: boolean; text: string; bg: string; muted: string; card: string; font: string }
 
 function brandKit(funnel: Record<string, any>): Brand {
-  const primary = funnel.brand_primary_color || '#020c31'
-  const secondary = funnel.brand_secondary_color || '#6dd80e'
+  // Sanitize on read — every value below is emitted into <style>/<script>, so it
+  // must be a validated color / allowlisted font or fall back to a safe default.
+  // This holds even if a row predates write-validation or was tampered directly.
+  const primary = sanitizeBrandColor(funnel.brand_primary_color, DEFAULT_BRAND_PRIMARY)
+  const secondary = sanitizeBrandColor(funnel.brand_secondary_color, DEFAULT_BRAND_SECONDARY)
   const isDark = funnel.theme_mode !== 'light'
-  const font = typeof funnel.brand_font === 'string' && funnel.brand_font.trim()
-    ? funnel.brand_font.trim()
-    : '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+  const font = sanitizeBrandFont(funnel.brand_font)
   return {
     primary,
     secondary,
@@ -251,7 +258,6 @@ function bookPage(funnel: Record<string, any>, brand: Brand): string {
 
   const script = `
     var FUNNEL_ID = ${JSON.stringify(funnel.id)};
-    var SUB = ${JSON.stringify(funnel.subdomain)};
     var slotsEl = document.getElementById('slots');
     var formEl = document.getElementById('bookform');
     function fmt(iso){ try { return new Date(iso).toLocaleString(); } catch(e){ return iso; } }
@@ -277,13 +283,11 @@ function bookPage(funnel: Record<string, any>, brand: Brand): string {
       err.textContent=''; btn.disabled = true;
       var body = { slot_start: document.getElementById('slot_start').value,
         first_name: document.getElementById('b_first').value, last_name: document.getElementById('b_last').value,
-        email: document.getElementById('b_email').value };
+        email: document.getElementById('b_email').value, funnel_id: FUNNEL_ID };
       fetch('/api/calendar/book', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })
         .then(function(r){ return r.json().then(function(j){ return { ok:r.ok, j:j }; }); })
         .then(function(res){
           if (!res.ok) { err.textContent = res.j && res.j.error ? res.j.error : 'Booking failed'; btn.disabled=false; return; }
-          fetch('/api/funnel/event', { method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ funnel_id: FUNNEL_ID, subdomain: SUB, event_type: 'booked' }) }).catch(function(){});
           formEl.style.display='none'; slotsEl.style.display='none';
           document.getElementById('done').style.display='block';
           document.getElementById('donemsg').textContent = 'Your call is booked for ' + fmt(res.j.start_time) + '. Check your email for the details.';

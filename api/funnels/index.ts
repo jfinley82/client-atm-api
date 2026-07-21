@@ -8,7 +8,7 @@ import {
   subdomainTaken,
   resolveGenerationCard,
 } from '../../lib/funnels'
-import { blueprintSnapshot, generateLandingPage } from '../../lib/funnelLanding'
+import { blueprintSnapshot, generateLandingPage, landingPageHasCopy } from '../../lib/funnelLanding'
 import { GenerationParseError } from '../../lib/aiJson'
 
 // Creation now generates the landing-page copy inline, so give the model room.
@@ -81,6 +81,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(502).json({ error: 'generation_truncated' })
       }
       console.error('[funnels] POST landing generation', err)
+      return res.status(502).json({ error: 'landing_generation_failed' })
+    }
+    // Require the full publishable shape (headline + subheadline + 3+3 bullets);
+    // a short generation is a miss, not something to persist.
+    const counts = { problem: landing_page.problem_bullets.length, solution: landing_page.solution_bullets.length }
+    if (!landingPageHasCopy(landing_page)) {
+      console.error('[funnels] POST landing generation incomplete', counts)
       return res.status(502).json({ error: 'landing_generation_failed' })
     }
 
