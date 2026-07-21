@@ -7,6 +7,7 @@ import {
   subdomainTaken,
   isValidBrandColor,
   isValidBrandFont,
+  validateTrackingInput,
 } from '../../../lib/funnels'
 
 const THEME_MODES = ['dark', 'light']
@@ -31,8 +32,10 @@ const EDITABLE_KEYS = new Set([
   'watch_threshold_pct',
 ])
 
-// jsonb page/config fields — accept a plain object, or null to clear.
-const OBJECT_FIELDS = ['landing_page', 'training_page', 'booking_page', 'tracking']
+// jsonb page/config fields — accept a plain object, or null to clear. tracking
+// is NOT here: its IDs are injected into the public page's <script>, so it is
+// strictly validated separately (validateTrackingInput).
+const OBJECT_FIELDS = ['landing_page', 'training_page', 'booking_page']
 // free-text fields — accept a string (trimmed), or null to clear. (brand_font is
 // NOT here — it is allowlist-validated separately, and colors are pattern-checked.)
 const TEXT_FIELDS = ['logo_url', 'headshot_url', 'video_url']
@@ -153,6 +156,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         updates[field] = v === null ? null : (v as string).trim()
       }
+    }
+
+    // Ad-pixel / tracking IDs — validated strictly (same public-<script>
+    // injection surface as brand fields). Stores only the cleaned, valid IDs.
+    if ('tracking' in body) {
+      const parsed = validateTrackingInput(body.tracking)
+      if (!parsed.ok) {
+        return res.status(400).json({ error: 'invalid_field', field: parsed.field, message: 'malformed tracking id' })
+      }
+      updates.tracking = parsed.tracking
     }
 
     if ('watch_threshold_pct' in body) {

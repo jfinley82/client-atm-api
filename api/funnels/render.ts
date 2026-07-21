@@ -3,6 +3,8 @@ import { supabase } from '../../lib/supabase'
 import {
   sanitizeBrandColor,
   sanitizeBrandFont,
+  sanitizeTracking,
+  Tracking,
   DEFAULT_BRAND_PRIMARY,
   DEFAULT_BRAND_SECONDARY,
 } from '../../lib/funnels'
@@ -33,7 +35,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const { data: funnel, error } = await supabase
     .from('funnels')
     .select(
-      'id, subdomain, status, generation_id, brand_primary_color, brand_secondary_color, theme_mode, brand_font, logo_url, headshot_url, video_url, collect_name, collect_phone, landing_page, training_page, booking_page'
+      'id, subdomain, status, generation_id, brand_primary_color, brand_secondary_color, theme_mode, brand_font, logo_url, headshot_url, video_url, collect_name, collect_phone, landing_page, training_page, booking_page, tracking'
     )
     .eq('subdomain', subdomain)
     .maybeSingle()
@@ -50,10 +52,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   logEvent(funnel.id, viewEvent)
 
   const brand = brandKit(funnel)
+  // Ad pixels — only the coach's VALIDATED tracking IDs are emitted (sanitize on
+  // read, defense in depth over the PATCH-time validation).
+  const head = trackingHead(sanitizeTracking(funnel.tracking))
   let html: string
-  if (page === 'training') html = trainingPage(funnel, brand, await loadKeyTakeaways(funnel.generation_id))
-  else if (page === 'book') html = bookPage(funnel, brand)
-  else html = landingPage(funnel, brand)
+  if (page === 'training') html = trainingPage(funnel, brand, head, await loadKeyTakeaways(funnel.generation_id))
+  else if (page === 'book') html = bookPage(funnel, brand, head)
+  else html = landingPage(funnel, brand, head)
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8')
   return res.status(200).send(html)
@@ -102,13 +107,40 @@ function brandKit(funnel: Record<string, any>): Brand {
   }
 }
 
-function shell(brand: Brand, title: string, body: string, script = ''): string {
+// Ad-pixel <head> injection. Every interpolated ID comes from sanitizeTracking,
+// so it matches a strict prefix + [A-Z0-9]/digits charset with no quote, angle
+// bracket, or slash — it cannot break out of the single-quoted strings below.
+// gtag config and fbq init each fire a page_view / PageView on load; GTM fires
+// via its container. Empty when the coach set no tracking IDs.
+function trackingHead(t: Tracking): string {
+  let out = ''
+  if (t.google_tag_id) {
+    out += `<script async src="https://www.googletagmanager.com/gtag/js?id=${t.google_tag_id}"></script>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${t.google_tag_id}');</script>`
+  }
+  if (t.gtm_id) {
+    out += `<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','${t.gtm_id}');</script>`
+  }
+  if (t.fb_pixel_id) {
+    out += `<script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');fbq('init','${t.fb_pixel_id}');fbq('track','PageView');</script>`
+  }
+  return out
+}
+
+// Client-side conversion-event helpers, safe no-ops when a pixel isn't present.
+// Injected once per page and called from the opt-in / booking success handlers.
+const PIXEL_EVENT_JS = `
+    function fbTrack(ev){ try { if (window.fbq) fbq('track', ev); } catch(e){} }
+    function gaEvent(ev){ try { if (window.gtag) gtag('event', ev); } catch(e){} }`
+
+function shell(brand: Brand, title: string, body: string, script = '', head = ''): string {
   return `<!DOCTYPE html>
 <html lang="en" data-theme="${brand.isDark ? 'dark' : 'light'}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${escapeHtml(title)}</title>
+  ${head}
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; }
@@ -143,12 +175,14 @@ function shell(brand: Brand, title: string, body: string, script = ''): string {
     .err { color: #ff6b6b; font-size: .9rem; margin-top: .75rem; min-height: 1.1rem; }
     .slot { display: block; width: 100%; text-align: left; margin: .4rem 0; background: ${brand.card}; color: ${brand.text}; }
     .muted { color: ${brand.muted}; }
+    .consent { max-width: 720px; margin: 0 auto; padding: 0 1.25rem 2rem; font-size: .72rem; color: ${brand.muted}; }
   </style>
 </head>
 <body>
   <main class="wrap">
     ${body}
   </main>
+  <footer class="consent">This page uses cookies and analytics to measure traffic and improve the experience. By continuing to browse, you consent to this use.</footer>
   ${script ? `<script>${script}</script>` : ''}
 </body>
 </html>`
@@ -158,7 +192,7 @@ function logoTag(funnel: Record<string, any>): string {
   return funnel.logo_url ? `<img class="logo" src="${escapeAttr(funnel.logo_url)}" alt="" />` : ''
 }
 
-function landingPage(funnel: Record<string, any>, brand: Brand): string {
+function landingPage(funnel: Record<string, any>, brand: Brand, head: string): string {
   const lp = (funnel.landing_page || {}) as Record<string, any>
   const headline = escapeHtml(lp.headline || 'A free training for you')
   const sub = lp.subheadline ? `<p class="sub">${escapeHtml(lp.subheadline)}</p>` : ''
@@ -190,7 +224,7 @@ function landingPage(funnel: Record<string, any>, brand: Brand): string {
       </form>
     </div>`
 
-  const script = `
+  const script = `${PIXEL_EVENT_JS}
     var FUNNEL_ID = ${JSON.stringify(funnel.id)};
     var SUB = ${JSON.stringify(funnel.subdomain)};
     function nextUrl(page){ var u = new URL(window.location.href); u.searchParams.set('page', page); return u.toString(); }
@@ -205,15 +239,18 @@ function landingPage(funnel: Record<string, any>, brand: Brand): string {
         .then(function(r){ return r.json().then(function(j){ return { ok: r.ok, j: j }; }); })
         .then(function(res){
           if (!res.ok) { err.textContent = res.j && res.j.error ? res.j.error : 'Something went wrong'; btn.disabled = false; return; }
+          // Fire the conversion into the coach's own pixels, then advance. fbq/gtag
+          // use sendBeacon, so the events survive the immediate navigation.
+          fbTrack('Lead'); gaEvent('generate_lead');
           window.location.href = nextUrl(res.j && res.j.next ? res.j.next : 'training');
         })
         .catch(function(){ err.textContent = 'Network error, please try again'; btn.disabled = false; });
     });`
 
-  return shell(brand, lp.headline || 'Free training', body, script)
+  return shell(brand, lp.headline || 'Free training', body, script, head)
 }
 
-function trainingPage(funnel: Record<string, any>, brand: Brand, takeaways: string[]): string {
+function trainingPage(funnel: Record<string, any>, brand: Brand, head: string, takeaways: string[]): string {
   const tp = (funnel.training_page || {}) as Record<string, any>
   const headline = escapeHtml(tp.headline || 'Your training')
   const sub = tp.subheadline ? `<p class="sub">${escapeHtml(tp.subheadline)}</p>` : ''
@@ -231,10 +268,10 @@ function trainingPage(funnel: Record<string, any>, brand: Brand, takeaways: stri
     ${kt}
     <a class="btn" href="?page=book${subQuery(funnel)}">${cta}</a>`
 
-  return shell(brand, tp.headline || 'Your training', body)
+  return shell(brand, tp.headline || 'Your training', body, '', head)
 }
 
-function bookPage(funnel: Record<string, any>, brand: Brand): string {
+function bookPage(funnel: Record<string, any>, brand: Brand, head: string): string {
   const bp = (funnel.booking_page || {}) as Record<string, any>
   const headline = escapeHtml(bp.headline || 'Book your call')
   const sub = bp.subheadline ? `<p class="sub">${escapeHtml(bp.subheadline)}</p>` : `<p class="sub">Pick a time that works for you.</p>`
@@ -256,7 +293,7 @@ function bookPage(funnel: Record<string, any>, brand: Brand): string {
     </form>
     <div id="done" style="display:none;" class="card"><h2>You're booked</h2><p class="muted" id="donemsg"></p></div>`
 
-  const script = `
+  const script = `${PIXEL_EVENT_JS}
     var FUNNEL_ID = ${JSON.stringify(funnel.id)};
     var slotsEl = document.getElementById('slots');
     var formEl = document.getElementById('bookform');
@@ -288,6 +325,8 @@ function bookPage(funnel: Record<string, any>, brand: Brand): string {
         .then(function(r){ return r.json().then(function(j){ return { ok:r.ok, j:j }; }); })
         .then(function(res){
           if (!res.ok) { err.textContent = res.j && res.j.error ? res.j.error : 'Booking failed'; btn.disabled=false; return; }
+          // Booking conversion into the coach's own pixels.
+          fbTrack('Schedule'); gaEvent('schedule');
           formEl.style.display='none'; slotsEl.style.display='none';
           document.getElementById('done').style.display='block';
           document.getElementById('donemsg').textContent = 'Your call is booked for ' + fmt(res.j.start_time) + '. Check your email for the details.';
@@ -295,7 +334,7 @@ function bookPage(funnel: Record<string, any>, brand: Brand): string {
         .catch(function(){ err.textContent='Network error, please try again'; btn.disabled=false; });
     });`
 
-  return shell(brand, bp.headline || 'Book your call', body, script)
+  return shell(brand, bp.headline || 'Book your call', body, script, head)
 }
 
 function videoEmbed(url: unknown): string {

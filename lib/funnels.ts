@@ -188,6 +188,86 @@ export function sanitizeBrandFont(v: unknown): string {
   return isValidBrandFont(v) ? v.trim() : DEFAULT_BRAND_FONT
 }
 
+// ---- ad-pixel / tracking-ID validation ---------------------------------
+// funnels.tracking = { google_tag_id, gtm_id, fb_pixel_id }. These IDs are
+// injected into the PUBLIC render's <script> tags, so they carry the SAME
+// stored-XSS risk as the brand fields: validate strictly on write AND sanitize
+// on read. Every accepted form is a fixed prefix + [A-Z0-9] (or digits), which
+// contains no quote, angle bracket, or slash — so it can never break out of the
+// single-quoted string it is interpolated into.
+
+export type Tracking = { google_tag_id?: string; gtm_id?: string; fb_pixel_id?: string }
+
+// GA4 (G-XXXX) or Google Ads (AW-XXXX) — google_tag_id covers both.
+const GTAG_ID_RE = /^(G-[A-Z0-9]{4,20}|AW-[0-9]{6,20})$/
+const GTM_ID_RE = /^GTM-[A-Z0-9]{4,12}$/
+const FB_PIXEL_RE = /^[0-9]{6,20}$/
+
+const TRACKING_VALIDATORS: Record<keyof Tracking, RegExp> = {
+  google_tag_id: GTAG_ID_RE,
+  gtm_id: GTM_ID_RE,
+  fb_pixel_id: FB_PIXEL_RE,
+}
+const TRACKING_KEYS = Object.keys(TRACKING_VALIDATORS) as (keyof Tracking)[]
+
+/**
+ * Validate a tracking object for WRITE (PATCH). Each present key must be a known
+ * tracking key with a valid ID, or an empty string / null to clear it. An
+ * unknown nested key or a malformed ID fails. Returns the cleaned object (only
+ * valid IDs) to store, so a rejected value never reaches the DB or the render.
+ */
+export function validateTrackingInput(
+  v: unknown
+): { ok: true; tracking: Tracking } | { ok: false; field: string } {
+  if (v === null) return { ok: true, tracking: {} }
+  if (typeof v !== 'object' || Array.isArray(v)) return { ok: false, field: 'tracking' }
+  const obj = v as Record<string, unknown>
+  const out: Tracking = {}
+  for (const key of Object.keys(obj)) {
+    if (!(key in TRACKING_VALIDATORS)) return { ok: false, field: `tracking.${key}` }
+    const raw = obj[key]
+    if (raw === null || raw === '') continue // clearing this one
+    if (typeof raw !== 'string' || !TRACKING_VALIDATORS[key as keyof Tracking].test(raw.trim())) {
+      return { ok: false, field: `tracking.${key}` }
+    }
+    out[key as keyof Tracking] = raw.trim()
+  }
+  return { ok: true, tracking: out }
+}
+
+/**
+ * Read-side defense in depth for the public render: return ONLY the tracking IDs
+ * that still pass validation, dropping anything malformed or unknown. Even a row
+ * written before validation (or tampered directly in the DB) can't inject a
+ * script this way.
+ */
+export function sanitizeTracking(v: unknown): Tracking {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {}
+  const obj = v as Record<string, unknown>
+  const out: Tracking = {}
+  for (const key of TRACKING_KEYS) {
+    const raw = obj[key]
+    if (typeof raw === 'string' && TRACKING_VALIDATORS[key].test(raw.trim())) out[key] = raw.trim()
+  }
+  return out
+}
+
+/**
+ * Load a funnel and confirm ownership in one step, for the owner-scoped CRM /
+ * analytics endpoints. Returns the row (selected columns) or null when it is
+ * missing or owned by someone else — callers 404 on null (never leak existence).
+ */
+export async function getOwnedFunnel(
+  userId: string,
+  id: string,
+  columns = 'id, user_id'
+): Promise<Record<string, any> | null> {
+  const cols = columns.includes('user_id') ? columns : `${columns}, user_id`
+  const { data } = await supabase.from('funnels').select(cols).eq('id', id).maybeSingle()
+  if (!data || (data as any).user_id !== userId) return null
+  return data as Record<string, any>
+}
+
 // Subdomain: lowercase letters, numbers, hyphens only (no leading/trailing hyphen).
 const SUBDOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 
