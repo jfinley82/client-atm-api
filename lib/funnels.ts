@@ -224,7 +224,13 @@ export function validateTrackingInput(
   const obj = v as Record<string, unknown>
   const out: Tracking = {}
   for (const key of Object.keys(obj)) {
-    if (!(key in TRACKING_VALIDATORS)) return { ok: false, field: `tracking.${key}` }
+    // hasOwnProperty, NOT `key in` — `in` walks the prototype chain, so an
+    // inherited key ('toString', '__proto__', 'hasOwnProperty', ...) would slip
+    // the guard and then TRACKING_VALIDATORS[key] resolves to an Object.prototype
+    // method with no .test → TypeError → unhandled 500 instead of a 400.
+    if (!Object.prototype.hasOwnProperty.call(TRACKING_VALIDATORS, key)) {
+      return { ok: false, field: `tracking.${key}` }
+    }
     const raw = obj[key]
     if (raw === null || raw === '') continue // clearing this one
     if (typeof raw !== 'string' || !TRACKING_VALIDATORS[key as keyof Tracking].test(raw.trim())) {
