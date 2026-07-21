@@ -6,7 +6,13 @@ import {
   checkBlueprintComplete,
   isValidSubdomain,
   subdomainTaken,
+  resolveGenerationCard,
 } from '../../lib/funnels'
+import { blueprintSnapshot, generateLandingPage, landingPageHasCopy } from '../../lib/funnelLanding'
+import { GenerationParseError } from '../../lib/aiJson'
+
+// Creation now generates the landing-page copy inline, so give the model room.
+export const config = { maxDuration: 60 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
@@ -31,14 +37,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
-  // POST — create a funnel (blueprint must be complete first)
+  // POST — create a funnel from a finished Micro-Training generation. The
+  // blueprint must be complete, a valid owned generation_id is required, and the
+  // landing-page copy is generated inline at creation.
   if (req.method === 'POST') {
     const { complete, missing } = await checkBlueprintComplete(userId)
     if (!complete) {
       return res.status(403).json({ error: 'blueprint_incomplete', missing })
     }
 
-    const { subdomain, template_id } = req.body || {}
+    const { subdomain, template_id, generation_id } = req.body || {}
+
+    // generation_id is now required — it names the blueprint this funnel is for.
+    if (typeof generation_id !== 'string' || !generation_id) {
+      return res.status(400).json({ error: 'generation_id required' })
+    }
+    const card = await resolveGenerationCard(userId, generation_id)
+    if (!card) {
+      return res.status(400).json({ error: 'invalid_generation_id' })
+    }
 
     // subdomain is optional at creation (funnel starts as a draft); validate if present
     if (subdomain !== undefined && subdomain !== null) {
@@ -53,16 +70,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    // Freeze the blueprint's problem/solution and generate the landing copy.
+    const snapshot = blueprintSnapshot(card)
+    let landing_page
+    try {
+      landing_page = await generateLandingPage(userId, snapshot)
+    } catch (err) {
+      if (err instanceof GenerationParseError) {
+        console.error('[funnels] POST generation_truncated', err.message, { rawTextLength: err.rawText.length })
+        return res.status(502).json({ error: 'generation_truncated' })
+      }
+      console.error('[funnels] POST landing generation', err)
+      return res.status(502).json({ error: 'landing_generation_failed' })
+    }
+    // Require the full publishable shape (headline + subheadline + 3+3 bullets);
+    // a short generation is a miss, not something to persist.
+    const counts = { problem: landing_page.problem_bullets.length, solution: landing_page.solution_bullets.length }
+    if (!landingPageHasCopy(landing_page)) {
+      console.error('[funnels] POST landing generation incomplete', counts)
+      return res.status(502).json({ error: 'landing_generation_failed' })
+    }
+
     try {
       const { data, error } = await supabase
         .from('funnels')
         .insert({
           user_id: userId,
+          generation_id,
           subdomain: subdomain ?? null,
           template_id: typeof template_id === 'string' && template_id ? template_id : 'template_1',
-          // Problem/solution tagging is wired in Phase 1 (MTM Adapter); null for now.
-          problem_solution_label: null,
-          problem_solution_snapshot: null,
+          problem_solution_label: snapshot.card_name,
+          problem_solution_snapshot: snapshot,
+          landing_page,
         })
         .select('*')
         .single()
