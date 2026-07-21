@@ -79,7 +79,11 @@ function hasTerminalFields(toolType: ToolType, data: Record<string, unknown>): b
 // derive that display subset deterministically here rather than asking the
 // model to emit two parallel schemas, and merge it into the same object —
 // nothing about the raw fields is dropped.
-function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<string, unknown> {
+// Exported so api/tools/results.ts derives the same display subset
+// (painPoints/fearsAndDoubts/objections/... camelCase aliases) on the finalized
+// audience profile that the incremental chat derives on each turn — one source
+// of truth for the report panel's shape. Additive export only.
+export function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<string, unknown> {
   const asString = (v: unknown): string | null => (typeof v === 'string' && v.trim().length > 0 ? v : null)
   const asStringArray = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
@@ -311,7 +315,12 @@ function buildAudienceRecap(p: Record<string, unknown> | null): { recap: string;
   return { recap: lines.join('\n'), avatarName }
 }
 
-function buildSystemPrompt(
+// Exported so the "generate results" trigger (api/tools/results.ts) can run a
+// one-shot audience finalize over the completed conversation using the audience
+// tool's OWN prompt/schema, guaranteeing the finalized profile matches the shape
+// the chat produces turn-by-turn. Additive export only — the incremental chat's
+// behavior is unchanged.
+export function buildSystemPrompt(
   toolType: ToolType,
   currentStep: number,
   audienceProfile: Record<string, unknown> | null = null
