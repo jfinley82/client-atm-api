@@ -82,7 +82,14 @@ export function validateSettingsInput(
   body: unknown
 ): { ok: true; update: Record<string, unknown> } | { ok: false; field: string } {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, field: 'body' }
-  const o = body as Record<string, unknown>
+  let o = body as Record<string, unknown>
+  // Symmetric with GET: the GET endpoint returns { settings: {...} }, so a
+  // frontend that echoes that shape back on PATCH sends the same envelope.
+  // Unwrap it when present (settings is never itself an editable field, so this
+  // is unambiguous). A bare top-level body is still accepted (backward-compatible).
+  if (o.settings && typeof o.settings === 'object' && !Array.isArray(o.settings)) {
+    o = o.settings as Record<string, unknown>
+  }
   for (const key of Object.keys(o)) {
     if (!ALLOWED_KEYS.has(key)) return { ok: false, field: key }
   }
