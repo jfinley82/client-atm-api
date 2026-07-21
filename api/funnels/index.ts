@@ -11,8 +11,10 @@ import {
 import { blueprintSnapshot, generateLandingPage, landingPageHasCopy } from '../../lib/funnelLanding'
 import { GenerationParseError } from '../../lib/aiJson'
 
-// Creation now generates the landing-page copy inline, so give the model room.
-export const config = { maxDuration: 60 }
+// Creation runs the landing-copy LLM inline (~40s observed), so give the server
+// generous headroom above that. This is the SERVER ceiling — the frontend still
+// needs its own loading state and a generous fetch timeout on this call.
+export const config = { maxDuration: 90 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return

@@ -9,8 +9,10 @@ import { GenerationParseError } from '../../../lib/aiJson'
 // on demand. Ownership-checked. Grounds on the same saved outputs as creation
 // and the funnel's frozen blueprint snapshot (falls back to re-resolving the
 // blueprint from generation_id if the snapshot is somehow absent). Persists the
-// new landing_page and returns the funnel.
-export const config = { maxDuration: 60 }
+// new landing_page and returns the funnel. Runs the landing-copy LLM inline
+// (~40s), so mirror create's server headroom; the frontend still needs its own
+// loading state + generous fetch timeout.
+export const config = { maxDuration: 90 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
