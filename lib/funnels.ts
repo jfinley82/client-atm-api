@@ -2,15 +2,20 @@ import { supabase } from './supabase'
 import { requireActiveUser } from './auth'
 
 /**
- * Add-on gate for the Funnel Builder. Mirrors the inline membership_tier gate
- * used in api/generate and api/tools/chat (fetch the user, check an
- * entitlement field, 403 on failure) — here we check add_ons.funnel_builder
- * instead of membership_tier.
+ * Access gate for the Funnel Builder. Mirrors the inline membership_tier gate
+ * used in api/generate and api/tools/chat (fetch the user, check an entitlement
+ * field, 403 on failure).
+ *
+ * Phase 1 widens the gate: access is granted if ANY of these hold —
+ *   - role === 'admin'                    (admins always pass, same as elsewhere)
+ *   - membership_tier === 'full'          (the tier that bundles the builder)
+ *   - add_ons.funnel_builder === true     (the standalone add-on purchase)
+ * The three fields are fetched in one query.
  *
  * Composes requireActiveUser: verifies the session + active account first,
- * then the add-on. Writes the error response and returns null on failure
+ * then access. Writes the error response and returns null on failure
  * (401 Unauthorized / 403 account_suspended / 403 funnel_builder_required);
- * returns the userId on success.
+ * returns the userId on success. The failure shape is unchanged.
  */
 export async function requireFunnelBuilder(req: any, res: any): Promise<string | null> {
   const userId = await requireActiveUser(req, res)
@@ -18,11 +23,16 @@ export async function requireFunnelBuilder(req: any, res: any): Promise<string |
 
   const { data: gateUser } = await supabase
     .from('users')
-    .select('add_ons')
+    .select('membership_tier, role, add_ons')
     .eq('id', userId)
     .single()
 
-  if (gateUser?.add_ons?.funnel_builder !== true) {
+  const hasAccess =
+    gateUser?.role === 'admin' ||
+    gateUser?.membership_tier === 'full' ||
+    gateUser?.add_ons?.funnel_builder === true
+
+  if (!hasAccess) {
     res.status(403).json({ error: 'funnel_builder_required' })
     return null
   }
@@ -75,6 +85,53 @@ export async function checkBlueprintComplete(
 
   const missing = BLUEPRINT_SESSIONS.filter((s) => !done[s])
   return { complete: missing.length === 0, missing }
+}
+
+/**
+ * Resolve the blueprint card behind a generation_id, scoped to the owner.
+ * Verifies the mtm_generations row belongs to userId, then loads the
+ * problem_solution_cards row it was built from. Returns null when the
+ * generation does not exist / is not owned / has no card. Used on funnel
+ * creation to snapshot the blueprint's problem/solution.
+ */
+export async function resolveGenerationCard(
+  userId: string,
+  generationId: string
+): Promise<Record<string, any> | null> {
+  const { data: gen } = await supabase
+    .from('mtm_generations')
+    .select('id, user_id, card_id')
+    .eq('id', generationId)
+    .maybeSingle()
+
+  if (!gen || gen.user_id !== userId || !gen.card_id) return null
+
+  const { data: card } = await supabase
+    .from('problem_solution_cards')
+    .select('id, card_name, surface_problem, real_problem, your_solution, transformation, natural_bridge, hook_angle')
+    .eq('id', gen.card_id)
+    .maybeSingle()
+
+  return card ?? null
+}
+
+/**
+ * Resolve a LIVE funnel for the public pages, by subdomain or by id. Returns the
+ * full row, or null when it is missing or not live. The public renderer and the
+ * lead endpoint both gate on status === 'live' through this one place.
+ */
+export async function resolveLiveFunnel(opts: {
+  subdomain?: string | null
+  funnelId?: string | null
+}): Promise<Record<string, any> | null> {
+  let query = supabase.from('funnels').select('*')
+  if (opts.funnelId) query = query.eq('id', opts.funnelId)
+  else if (opts.subdomain) query = query.eq('subdomain', opts.subdomain)
+  else return null
+
+  const { data: funnel } = await query.maybeSingle()
+  if (!funnel || funnel.status !== 'live') return null
+  return funnel
 }
 
 // Subdomain: lowercase letters, numbers, hyphens only (no leading/trailing hyphen).
