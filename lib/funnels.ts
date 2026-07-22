@@ -310,6 +310,22 @@ export function isValidSubdomain(value: unknown): value is string {
   return typeof value === 'string' && value.length >= 1 && value.length <= 63 && SUBDOMAIN_RE.test(value)
 }
 
+// System / infrastructure labels a coach must not be able to claim as a funnel
+// slug — they collide with real hosts on freeminiworkshop.com (and MTM's other
+// domains). Public funnels serve on {slug}.freeminiworkshop.com, so e.g. `www`
+// or `mail` or `admin` as a slug would shadow or impersonate a system host.
+export const RESERVED_SUBDOMAINS = new Set([
+  'www', 'api', 'app', 'mail', 'admin', 'root', 'assets', 'static', 'cdn', 'help',
+  'support', 'docs', 'status', 'dashboard', 'login', 'signup', 'blog', 'cname',
+  'ns1', 'ns2', 'mx', 'smtp', 'email', 'test', 'staging', 'preview', 'vercel',
+])
+
+// Case-insensitive reserved check (slugs are stored lowercase, but reject a
+// mixed-case attempt too before it is normalized).
+export function isReservedSubdomain(value: unknown): boolean {
+  return typeof value === 'string' && RESERVED_SUBDOMAINS.has(value.trim().toLowerCase())
+}
+
 /**
  * True if `subdomain` is already taken by a different funnel. Pass the current
  * funnel id to exclude it (so a no-op PATCH of the same subdomain is allowed).

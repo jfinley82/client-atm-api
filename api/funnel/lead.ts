@@ -4,6 +4,7 @@ import { setCors } from '../../lib/cors'
 import { resolveLiveFunnel } from '../../lib/funnels'
 import { rateLimit, clientIp } from '../../lib/rateLimit'
 import { signWatchToken } from '../../lib/funnelLeadToken'
+import { scheduleNurtureSequence } from '../../lib/funnelNurture'
 
 // POST /api/funnel/lead — PUBLIC opt-in capture for a live funnel's landing page.
 // Mirrors the public pattern of /api/calendar/book (no auth, strict body
@@ -66,6 +67,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Short-lived signed token that names this lead, carried to the training page
     // so its video beacons attribute the watch back to this lead (Phase 4).
     const watchToken = signWatchToken(funnel.id as string, lead.id as string)
+
+    // Kick off the nurture sequence (Phase 5b). Best-effort — the engine never
+    // throws, and the lead is already captured either way.
+    await scheduleNurtureSequence(funnel, lead.id as string, email)
 
     return res.status(200).json({ ok: true, next: 'training', watch_token: watchToken })
   } catch (err) {

@@ -4,6 +4,7 @@ import { setCors } from '../../../lib/cors'
 import {
   requireFunnelBuilder,
   isValidSubdomain,
+  isReservedSubdomain,
   subdomainTaken,
   isValidBrandColor,
   isValidBrandFont,
@@ -98,6 +99,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             error: 'invalid_subdomain',
             message: 'subdomain must be lowercase letters, numbers, and hyphens only',
           })
+        }
+        if (isReservedSubdomain(subdomain)) {
+          return res.status(409).json({ error: 'reserved_subdomain', message: 'that subdomain is reserved' })
         }
         if (changing && (await subdomainTaken(subdomain as string, id))) {
           return res.status(409).json({ error: 'subdomain_taken' })

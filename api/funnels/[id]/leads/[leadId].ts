@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../../lib/supabase'
 import { setCors, noStore } from '../../../../lib/cors'
 import { requireFunnelBuilder, getOwnedFunnel, getOwnedLead, ENGAGEMENT_EVENT_TYPES } from '../../../../lib/funnels'
+import { cancelLeadQueue } from '../../../../lib/funnelNurture'
 
 // GET/PATCH /api/funnels/[id]/leads/[leadId] — owner-scoped single-lead detail
 // and management.
@@ -127,6 +128,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .from('funnel_events')
         .insert({ funnel_id: id, lead_id: leadId, event_type: newStatus })
       if (evErr) console.error('[funnels/[id]/leads/[leadId]] status event log', evErr)
+      // Booked/closed leaves the nurture flow — cancel any still-scheduled
+      // sends (Phase 5b). Best-effort; never fails the PATCH.
+      await cancelLeadQueue(leadId)
     }
 
     return res.status(200).json({ lead: data })
