@@ -110,12 +110,16 @@ async function scheduleSet(opts: {
     const kind = `${opts.kindPrefix}_${i + 1}`
     const subject = (em.subject && em.subject.trim()) || opts.defaultSubjects[i] || opts.defaultSubjects[opts.defaultSubjects.length - 1]
 
+    // Per-email training URL carrying a watch token minted for THIS email's send
+    // time — used for the nurture CTA and to substitute [TRAINING_LINK] in the
+    // body (so a body-embedded training link still attributes + fires the pivot).
+    const training = trainingUrl(opts.subdomain, signWatchToken(opts.funnel.id as string, opts.leadId, sendTimeMs))
     const cta =
       opts.kindPrefix === 'nurture'
-        ? { label: 'Watch the training', url: trainingUrl(opts.subdomain, signWatchToken(opts.funnel.id as string, opts.leadId, sendTimeMs)) }
+        ? { label: 'Watch the training', url: training }
         : { label: 'Book your call', url: opts.bookUrlForTokens }
 
-    const bodyHtml = linkifyEmailBody(em.body, opts.bookUrlForTokens)
+    const bodyHtml = linkifyEmailBody(em.body, opts.bookUrlForTokens, training)
     const html = brandedEmailHtml(opts.brand, { heading: subject, bodyHtml, cta, unsubscribeUrl: unsub })
     const scheduledAt = opts.offsets[i] > 0 ? new Date(sendTimeMs).toISOString() : undefined
 
