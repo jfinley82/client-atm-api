@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { verifyManageToken } from '../../lib/funnelLeadToken'
-import { loadBooking, resolveFunnelAndLead, formatInTz } from '../../lib/bookingManage'
+import { loadBooking, resolveFunnelAndLead, formatInTz, MANAGE_CUTOFF_MS, RESCHEDULE_CAP } from '../../lib/bookingManage'
 import { loadUserAvailability } from '../../lib/availabilitySettings'
 
 // GET /api/funnel/booking?token=… — PUBLIC self-service manage page for a booked
@@ -52,8 +52,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (booking.status === 'canceled') {
     return messagePage(res, 200, 'This call is already canceled', "You won't get any more reminders for it.")
   }
-  if (new Date(booking.start_time).getTime() <= Date.now()) {
-    return messagePage(res, 200, 'This call has already started or passed', 'Reply to your confirmation email to reach your coach.')
+  // Inside the cutoff (covers "coming up soon" and "already started/passed"):
+  // show neither control, just the message.
+  if (new Date(booking.start_time).getTime() - Date.now() < MANAGE_CUTOFF_MS) {
+    return messagePage(res, 200, 'Your call is coming up soon', "Your call is coming up soon, so it can't be changed here. Reply to your confirmation email to reach your coach.")
   }
 
   const [settings, ctx] = await Promise.all([
@@ -63,6 +65,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const tz = settings.working_hours?.timezone
   const whenLabel = formatInTz(booking.start_time, tz)
   const funnelId = ctx.funnel?.id ? String(ctx.funnel.id) : ''
+  const capped = booking.reschedule_count >= RESCHEDULE_CAP
+
+  // When capped, keep the current time + cancel, drop the reschedule panel and
+  // show a short line; otherwise render the full pick-a-new-time panel.
+  const rescheduleSection = capped
+    ? `<p class="muted" style="margin-top:18px;">You've already moved this call twice, so it can't be moved again. You can still cancel, or reply to your confirmation email.</p>`
+    : `<h2>Pick a new time</h2>
+      <div id="slots"><p class="muted">Loading available times…</p></div>
+      <div class="err" id="rerr"></div>`
 
   const inner = `
     <h1>Manage your call</h1>
@@ -70,31 +81,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       <p>Your call is booked for <span class="time">${escapeHtml(whenLabel)}</span>.</p>
       <button type="button" id="cancelBtn" class="danger">Cancel this call</button>
       <div class="err" id="cerr"></div>
-      <h2>Pick a new time</h2>
-      <div id="slots"><p class="muted">Loading available times…</p></div>
-      <div class="err" id="rerr"></div>
+      ${rescheduleSection}
     </div>
     <div id="done" style="display:none;" class="card"></div>`
 
-  const script = `
-    var TOKEN = ${JSON.stringify(token)};
-    var FUNNEL_ID = ${JSON.stringify(funnelId)};
-    var slotsEl = document.getElementById('slots');
-    var doneEl = document.getElementById('done');
-    var cardEl = document.querySelector('.card');
-    function fmt(iso){ try { return new Date(iso).toLocaleString(); } catch(e){ return iso; } }
-    function finish(title, body){ cardEl.style.display='none'; doneEl.style.display='block'; doneEl.innerHTML = '<h1>'+title+'</h1><p>'+body+'</p>'; }
-    document.getElementById('cancelBtn').addEventListener('click', function(){
-      var err = document.getElementById('cerr'); err.textContent=''; this.disabled=true;
-      fetch('/api/funnel/booking/cancel', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ token: TOKEN }) })
-        .then(function(r){ return r.json().then(function(j){ return { ok:r.ok, j:j }; }); })
-        .then(function(res){
-          if (res.ok) { finish('Your call is canceled', "You won't get any more reminders for it. If you'd like to talk after all, you can book again from the training page."); return; }
-          err.textContent = res.j && res.j.error === 'past_call' ? 'This call has already started or passed.' : 'Could not cancel, please try again.';
-          document.getElementById('cancelBtn').disabled=false;
-        })
-        .catch(function(){ err.textContent='Network error, please try again'; document.getElementById('cancelBtn').disabled=false; });
-    });
+  const rescheduleScript = capped
+    ? ''
+    : `
     function pick(slotStart, btn){
       var err = document.getElementById('rerr'); err.textContent='';
       document.querySelectorAll('.slot').forEach(function(b){ b.disabled=true; });
@@ -103,12 +96,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .then(function(res){
           if (res.ok) { finish('Your call is moved', 'Your new time is confirmed and we sent you an updated calendar invite.'); return; }
           if (res.j && res.j.error === 'slot_taken') { err.textContent = 'That time was just taken. Please pick another.'; loadSlots(); return; }
+          if (res.j && (res.j.error === 'cap' || res.j.error === 'cutoff')) { err.textContent = "This call can't be moved right now. Reply to your confirmation email to reach your coach."; return; }
           err.textContent = 'Could not move your call, please try again.';
           document.querySelectorAll('.slot').forEach(function(b){ b.disabled=false; });
         })
         .catch(function(){ err.textContent='Network error, please try again'; document.querySelectorAll('.slot').forEach(function(b){ b.disabled=false; }); });
     }
     function loadSlots(){
+      var slotsEl = document.getElementById('slots');
       if (!FUNNEL_ID) { slotsEl.innerHTML = '<p class="muted">No times available right now. Reply to your confirmation email to reach your coach.</p>'; return; }
       slotsEl.innerHTML = '<p class="muted">Loading available times…</p>';
       fetch('/api/funnel/availability?funnel_id=' + encodeURIComponent(FUNNEL_ID)).then(function(r){ return r.json(); }).then(function(j){
@@ -123,6 +118,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }).catch(function(){ slotsEl.innerHTML = '<p class="err">Could not load times.</p>'; });
     }
     loadSlots();`
+
+  const script = `
+    var TOKEN = ${JSON.stringify(token)};
+    var FUNNEL_ID = ${JSON.stringify(funnelId)};
+    var doneEl = document.getElementById('done');
+    var cardEl = document.querySelector('.card');
+    function fmt(iso){ try { return new Date(iso).toLocaleString(); } catch(e){ return iso; } }
+    function finish(title, body){ cardEl.style.display='none'; doneEl.style.display='block'; doneEl.innerHTML = '<h1>'+title+'</h1><p>'+body+'</p>'; }
+    document.getElementById('cancelBtn').addEventListener('click', function(){
+      var err = document.getElementById('cerr'); err.textContent=''; this.disabled=true;
+      fetch('/api/funnel/booking/cancel', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ token: TOKEN }) })
+        .then(function(r){ return r.json().then(function(j){ return { ok:r.ok, j:j }; }); })
+        .then(function(res){
+          if (res.ok) { finish('Your call is canceled', "You won't get any more reminders for it. If you'd like to talk after all, you can book again from the training page."); return; }
+          err.textContent = res.j && res.j.error === 'cutoff' ? "Your call is coming up soon, so it can't be changed here." : 'Could not cancel, please try again.';
+          document.getElementById('cancelBtn').disabled=false;
+        })
+        .catch(function(){ err.textContent='Network error, please try again'; document.getElementById('cancelBtn').disabled=false; });
+    });
+    ${rescheduleScript}`
 
   return res.status(200).send(shell('Manage your call', inner, script))
 }

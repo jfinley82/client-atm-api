@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
 import { verifyManageToken } from '../../../lib/funnelLeadToken'
-import { loadBooking, resolveFunnelAndLead, formatInTz } from '../../../lib/bookingManage'
+import { loadBooking, resolveFunnelAndLead, formatInTz, MANAGE_CUTOFF_MS } from '../../../lib/bookingManage'
 import { deleteCalendarEvent } from '../../../lib/googleCalendar'
 import { loadUserAvailability } from '../../../lib/availabilitySettings'
 import { cancelLeadQueue } from '../../../lib/funnelNurture'
@@ -21,7 +21,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!booking || !booking.coach_user_id) return res.status(404).json({ error: 'not_found' })
 
   if (booking.status === 'canceled') return res.status(200).json({ ok: true })
-  if (new Date(booking.start_time).getTime() <= Date.now()) return res.status(409).json({ error: 'past_call' })
+  // One check covers both "inside the 3-hour window" and "already started/passed".
+  if (new Date(booking.start_time).getTime() - Date.now() < MANAGE_CUTOFF_MS) return res.status(409).json({ error: 'cutoff' })
 
   try {
     // 1) Delete the calendar event (best-effort; the helper tolerates 404/410).

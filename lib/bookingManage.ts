@@ -8,6 +8,15 @@ import { signManageToken } from './funnelLeadToken'
 
 const FUNNEL_DOMAIN = process.env.FUNNEL_PUBLIC_DOMAIN || 'freeminiworkshop.com'
 
+// No self-service change inside this window before the call — covers both "the
+// call is coming up soon" and "already started/passed" in one check. Also the
+// floor a rescheduled call must land outside of. Cancel uses it too.
+export const MANAGE_CUTOFF_MS = 3 * 60 * 60 * 1000 // 3 hours
+
+// Max lead-side moves per booking; the reschedule endpoint refuses at this and
+// increments atomically. Cancel is uncapped.
+export const RESCHEDULE_CAP = 2
+
 export type BookingRow = {
   id: string
   coach_user_id: string | null
@@ -18,9 +27,10 @@ export type BookingRow = {
   status: string
   email: string
   name: string | null
+  reschedule_count: number
 }
 
-const BOOKING_COLUMNS = 'id, coach_user_id, google_event_id, meeting_url, start_time, end_time, status, email, name'
+const BOOKING_COLUMNS = 'id, coach_user_id, google_event_id, meeting_url, start_time, end_time, status, email, name, reschedule_count'
 
 export async function loadBooking(bookingId: string): Promise<BookingRow | null> {
   const { data } = await supabase.from('bookings').select(BOOKING_COLUMNS).eq('id', bookingId).maybeSingle()

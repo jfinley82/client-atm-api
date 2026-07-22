@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
 import { verifyManageToken } from '../../../lib/funnelLeadToken'
-import { loadBooking, resolveFunnelAndLead, buildManageUrl, formatInTz } from '../../../lib/bookingManage'
+import { loadBooking, resolveFunnelAndLead, buildManageUrl, formatInTz, MANAGE_CUTOFF_MS, RESCHEDULE_CAP } from '../../../lib/bookingManage'
 import { loadUserAvailability } from '../../../lib/availabilitySettings'
 import { isSlotOpen } from '../../../lib/funnelAvailability'
 import { updateCalendarEventTime } from '../../../lib/googleCalendar'
@@ -32,15 +32,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const booking = await loadBooking(bookingId)
   if (!booking || !booking.coach_user_id) return res.status(404).json({ error: 'not_found' })
   if (booking.status === 'canceled') return res.status(409).json({ error: 'canceled' })
-  if (new Date(booking.start_time).getTime() <= Date.now()) return res.status(409).json({ error: 'past_call' })
+  // Distinct reasons so the page can message each. Cutoff covers past/near calls.
+  if (new Date(booking.start_time).getTime() - Date.now() < MANAGE_CUTOFF_MS) return res.status(409).json({ error: 'cutoff' })
+  if (booking.reschedule_count >= RESCHEDULE_CAP) return res.status(409).json({ error: 'cap' })
 
   const slotStart = typeof body.slot_start === 'string' ? body.slot_start.trim() : ''
   const newStartMs = new Date(slotStart).getTime()
-  if (!Number.isFinite(newStartMs) || newStartMs <= Date.now()) return res.status(400).json({ error: 'invalid_slot' })
+  // The new time must also sit outside the cutoff, so a lead can't move a call
+  // into the no-change window.
+  if (!Number.isFinite(newStartMs) || newStartMs - Date.now() < MANAGE_CUTOFF_MS) return res.status(400).json({ error: 'invalid_slot' })
 
   const coach = booking.coach_user_id
   const prevStart = booking.start_time
   const prevEnd = booking.end_time
+  const prevCount = booking.reschedule_count
 
   try {
     const settings = await loadUserAvailability(coach)
@@ -51,28 +56,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Confirm the new slot is genuinely open (same engine the page shows).
     if (!(await isSlotOpen(coach, newStartIso))) return res.status(409).json({ error: 'slot_taken' })
 
-    // DB-first reservation. The per-coach unique index on (coach_user_id,
-    // start_time) WHERE status='active' is the authoritative guard — a 23505 here
-    // means another booking already holds the slot.
+    // DB-first reservation + atomic cap increment. Two guards:
+    //  - the per-coach unique index on (coach_user_id, start_time) WHERE
+    //    status='active' → a 23505 means another booking holds the slot.
+    //  - a compare-and-swap on reschedule_count (eq the value we read) → two
+    //    concurrent moves can't both slip past the cap: the second's WHERE no
+    //    longer matches once the first commits, so it gets 0 rows. Setting an
+    //    absolute prevCount+1 (not a bare < CAP guard) is what closes the
+    //    count=0 concurrent-double-move hole.
     const { data: moved, error: updErr } = await supabase
       .from('bookings')
-      .update({ start_time: newStartIso, end_time: newEndIso })
+      .update({ start_time: newStartIso, end_time: newEndIso, reschedule_count: prevCount + 1 })
       .eq('id', booking.id)
       .eq('status', 'active')
+      .eq('reschedule_count', prevCount)
       .select('id')
       .maybeSingle()
     if (updErr) {
       if ((updErr as { code?: string }).code === '23505') return res.status(409).json({ error: 'slot_taken' })
       throw updErr
     }
-    if (!moved) return res.status(409).json({ error: 'slot_taken' })
+    // No row matched: the CAS lost to a concurrent move (or the booking changed).
+    // Treat as the cap being hit rather than burning a retry.
+    if (!moved) return res.status(409).json({ error: 'cap' })
 
-    // Patch the calendar event in place. On failure, roll the row back so the DB
+    // Patch the calendar event in place. On failure, roll the row back
+    // (start/end AND the count, so a failed move doesn't burn a try) so the DB
     // and calendar never diverge.
     if (booking.google_event_id) {
       const ok = await updateCalendarEventTime(coach, booking.google_event_id, newStartIso, newEndIso, tz)
       if (!ok) {
-        await supabase.from('bookings').update({ start_time: prevStart, end_time: prevEnd }).eq('id', booking.id)
+        await supabase.from('bookings').update({ start_time: prevStart, end_time: prevEnd, reschedule_count: prevCount }).eq('id', booking.id)
         return res.status(502).json({ error: 'calendar_update_failed' })
       }
     }
