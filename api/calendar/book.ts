@@ -9,7 +9,7 @@ import { loadBookingQuestions, loadFunnelBookingQuestions, validateBookingAnswer
 import { resolveLiveFunnel } from '../../lib/funnels'
 import { loadUserAvailability } from '../../lib/availabilitySettings'
 import { isSlotOpen } from '../../lib/funnelAvailability'
-import { getValidAccessToken, createCalendarEvent, ValidToken } from '../../lib/googleCalendar'
+import { getValidAccessToken, createCalendarEvent, deleteCalendarEvent, ValidToken } from '../../lib/googleCalendar'
 import { loadBusinessSettings } from '../../lib/businessSettings'
 
 // POST /api/calendar/book
@@ -194,7 +194,16 @@ async function bookGooglePath(
     return res.status(502).json({ error: 'Failed to create calendar event' })
   }
 
+  // A Meet was requested (no zoom_link) but Google returned no conference link —
+  // don't save a booking with an empty confirmation link. Treat it like an
+  // event-create failure: delete the orphan event and release the reservation.
   const meetingUrl = zoomLink || event.meetUrl || ''
+  if (!meetingUrl) {
+    await deleteCalendarEvent(owner, event.eventId).catch(() => {})
+    await supabase.from('bookings').delete().eq('id', reserved.id)
+    console.error('[calendar/book] google event created without a meeting link — released')
+    return res.status(502).json({ error: 'Failed to create meeting link' })
+  }
   await supabase.from('bookings').update({ google_event_id: event.eventId, meeting_url: meetingUrl }).eq('id', reserved.id)
 
   await logFunnelBooked(funnelRow.id as string, email)
