@@ -10,6 +10,7 @@ import {
 } from '../../lib/funnels'
 import { blueprintSnapshot, generateLandingPage, landingPageHasCopy } from '../../lib/funnelLanding'
 import { GenerationParseError } from '../../lib/aiJson'
+import { coerceEmails } from '../../lib/microTrainingGenerator'
 
 // Creation runs the landing-copy LLM inline (~40s observed), so give the server
 // generous headroom above that. This is the SERVER ceiling — the frontend still
@@ -72,6 +73,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    // Seed this funnel's OWN copy of the nurture (pre-watch) and book-a-call
+    // (post-watch) sequences from the generation, so builder edits never touch
+    // the master generation (Phase 5b). Owner-scoped read.
+    const { data: gen } = await supabase
+      .from('mtm_generations')
+      .select('emails, book_a_call_emails')
+      .eq('id', generation_id)
+      .eq('user_id', userId)
+      .maybeSingle()
+    const nurture_emails = coerceEmails(gen?.emails)
+    const book_a_call_emails = coerceEmails(gen?.book_a_call_emails)
+
     // Freeze the blueprint's problem/solution and generate the landing copy.
     const snapshot = blueprintSnapshot(card)
     let landing_page
@@ -104,6 +117,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           problem_solution_label: snapshot.card_name,
           problem_solution_snapshot: snapshot,
           landing_page,
+          nurture_emails,
+          book_a_call_emails,
         })
         .select('*')
         .single()

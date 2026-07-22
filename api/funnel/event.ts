@@ -4,6 +4,7 @@ import { setCors } from '../../lib/cors'
 import { resolveLiveFunnel } from '../../lib/funnels'
 import { rateLimit, clientIp } from '../../lib/rateLimit'
 import { verifyWatchToken } from '../../lib/funnelLeadToken'
+import { pivotToBookACall } from '../../lib/funnelNurture'
 
 // POST /api/funnel/event — PUBLIC, client-reported funnel engagement beacons.
 //
@@ -70,16 +71,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Attribute to a lead only when the signed token resolves AND that lead still
     // belongs to this funnel (the FK would reject a stale id anyway). Else null.
     let leadId: string | null = null
+    let leadEmail = ''
     if (watchToken) {
       const tokenLead = verifyWatchToken(watchToken, funnel.id as string)
       if (tokenLead) {
         const { data: leadRow } = await supabase
           .from('funnel_leads')
-          .select('id')
+          .select('id, email')
           .eq('id', tokenLead)
           .eq('funnel_id', funnel.id)
           .maybeSingle()
-        if (leadRow) leadId = tokenLead
+        if (leadRow) {
+          leadId = tokenLead
+          leadEmail = typeof leadRow.email === 'string' ? leadRow.email : ''
+        }
       }
     }
 
@@ -93,6 +98,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // 23505 = the dedup unique index → a replayed milestone. Benign, still 200.
     if (error && (error as { code?: string }).code !== '23505') {
       console.error('[funnel/event] insert', error)
+    }
+
+    // Nurture pivot (Phase 5b): an ATTRIBUTED watch crossing the funnel's
+    // threshold moves the lead from the nurture track to the book-a-call track.
+    // pivotToBookACall is idempotent (atomic CAS) so replays / multiple
+    // milestones don't double-fire; best-effort, never blocks the 200.
+    if (leadId && leadEmail) {
+      const threshold = Number(funnel.watch_threshold_pct) || 50
+      if (percent >= threshold) {
+        await pivotToBookACall(funnel, leadId, leadEmail)
+      }
     }
 
     return res.status(200).json({ ok: true })

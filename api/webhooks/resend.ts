@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import crypto from 'crypto'
 import { supabase } from '../../lib/supabase'
+import { cancelLeadQueue } from '../../lib/funnelNurture'
 
 // POST /api/webhooks/resend — Resend (Svix) delivery webhooks for funnel emails.
 //
@@ -135,13 +136,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Mark this specific send failed.
         await supabase.from('funnel_email_sends').update({ status: 'failed' }).eq('resend_message_id', messageId)
         if (send.lead_id) {
-          // Suppress the lead and cancel any of their still-queued sends.
+          // Suppress the lead and cancel any of their still-scheduled sends —
+          // cancelLeadQueue also cancels them at Resend (Phase 5b), not just in
+          // our table.
           await supabase.from('funnel_leads').update({ email_unsubscribed: true }).eq('id', send.lead_id)
-          await supabase
-            .from('funnel_email_sends')
-            .update({ status: 'canceled' })
-            .eq('lead_id', send.lead_id)
-            .eq('status', 'queued')
+          await cancelLeadQueue(send.lead_id)
         }
       }
       return res.status(200).json({ received: true })

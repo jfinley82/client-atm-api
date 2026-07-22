@@ -11,6 +11,7 @@ import { loadUserAvailability } from '../../lib/availabilitySettings'
 import { isSlotOpen } from '../../lib/funnelAvailability'
 import { getValidAccessToken, createCalendarEvent, deleteCalendarEvent, ValidToken } from '../../lib/googleCalendar'
 import { loadBusinessSettings } from '../../lib/businessSettings'
+import { cancelLeadQueue, scheduleBookingReminders } from '../../lib/funnelNurture'
 
 // POST /api/calendar/book
 // Body: { slot_start, first_name, last_name, email, answers?, funnel_id? }
@@ -226,7 +227,7 @@ async function bookGooglePath(
     organizerEmail,
     attendeeEmail: email,
   })
-  await sendBookingConfirmationEmail({ email, name, startLabel, joinUrl: meetingUrl, icsContent: ics, funnelId: funnelRow.id as string, leadId })
+  await sendBookingConfirmationEmail({ email, name, startLabel, joinUrl: meetingUrl, icsContent: ics, funnelId: funnelRow.id as string, leadId, coachUserId: owner })
   await sendCoachBookingNotification({
     coachEmail: conn.calendar_email || '',
     leadName: name,
@@ -234,7 +235,15 @@ async function bookGooglePath(
     startLabel,
     answers: av.answers,
     funnelId: funnelRow.id as string,
+    coachUserId: owner,
   })
+
+  // Nurture suppression (Phase 5b): a booked lead exits the sequence — cancel any
+  // still-scheduled nurture/book-a-call sends — and gets 24h/1h call reminders.
+  if (leadId) {
+    await cancelLeadQueue(leadId)
+    await scheduleBookingReminders(funnelRow, leadId, email, startIso, meetingUrl)
+  }
 
   return res.status(200).json({ booking_id: reserved.id, join_url: meetingUrl, meeting_url: meetingUrl, start_time: startIso })
 }
@@ -318,8 +327,14 @@ async function bookLegacyPath(
     startLabel,
     joinUrl: meeting.join_url,
     icsContent: ics,
-    ...(funnelRow ? { funnelId: funnelRow.id as string, leadId } : {}),
+    ...(funnelRow ? { funnelId: funnelRow.id as string, leadId, coachUserId: funnelRow.user_id as string } : {}),
   })
+
+  // Nurture suppression + reminders when this legacy booking came from a funnel.
+  if (funnelRow && leadId) {
+    await cancelLeadQueue(leadId)
+    await scheduleBookingReminders(funnelRow, leadId, email, startIso, meeting.join_url)
+  }
 
   return res.status(200).json({ booking_id: reserved.id, join_url: meeting.join_url, start_time: startIso })
 }
