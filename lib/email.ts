@@ -342,6 +342,7 @@ export async function sendBookingConfirmationEmail(opts: {
   funnelId?: string
   leadId?: string | null
   coachUserId?: string
+  manageUrl?: string
 }): Promise<void> {
   try {
     const kind = 'booking_confirmation'
@@ -358,7 +359,7 @@ export async function sendBookingConfirmationEmail(opts: {
           <p style="margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;">Hey ${escapeHtml(opts.name || 'there')},</p>
           <p style="margin:0 0 8px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;">You're all set. Here are the details:</p>
           <p style="margin:0 0 4px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#0B1120;font-weight:bold;">${escapeHtml(opts.startLabel)}</p>
-          <p style="margin:18px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;">The attached calendar file will add this to your calendar.</p>`
+          <p style="margin:18px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;">The attached calendar file will add this to your calendar.</p>${manageSentence(opts.manageUrl)}`
       html = brandedEmailHtml(brand, { heading: 'Your call is booked', bodyHtml, cta: { label: 'Join the call', url: opts.joinUrl } })
     } else {
       html = `<!DOCTYPE html>
@@ -499,6 +500,54 @@ export async function sendCoachBookingNotification(opts: {
 
 function escapeHtml(s: string): string {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string))
+}
+
+// One-sentence "reschedule or cancel" line for a booking email, near the join
+// button. Renders nothing without a valid manage URL (e.g. the legacy path).
+function manageSentence(manageUrl?: string): string {
+  if (!manageUrl || !isValidHttpUrl(manageUrl)) return ''
+  return `<p style="margin:14px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;">Need to change your time? You can <a href="${escapeHtml(manageUrl)}" target="_blank" style="color:#8A94A6;text-decoration:underline;">reschedule or cancel here</a>.</p>`
+}
+
+// Coach-side notice when a lead cancels or moves their own call (Phase 3b
+// follow-up). Coach-branded like the booking notification; best-effort, never
+// throws. Google's own attendee update (sendUpdates=all) is a second signal —
+// this is our branded note to the coach.
+export async function sendCoachBookingChange(opts: {
+  coachEmail: string
+  coachUserId?: string
+  leadName: string
+  leadEmail: string
+  change: 'canceled' | 'moved'
+  oldLabel: string
+  newLabel?: string
+}): Promise<void> {
+  try {
+    if (!opts.coachEmail) return
+    const who = `${escapeHtml(opts.leadName || opts.leadEmail)} &lt;${escapeHtml(opts.leadEmail)}&gt;`
+    const heading = opts.change === 'canceled' ? 'A lead canceled their call' : 'A lead moved their call'
+    const subject = opts.change === 'canceled' ? `Booking canceled: ${opts.leadName || opts.leadEmail}` : `Booking moved: ${opts.leadName || opts.leadEmail}`
+    const detail =
+      opts.change === 'canceled'
+        ? `<p style="margin:0 0 6px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;">${who} canceled the call that was booked for:</p>
+           <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#0B1120;font-weight:bold;">${escapeHtml(opts.oldLabel)}</p>
+           <p style="margin:16px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;">The slot is open again and the calendar event was removed.</p>`
+        : `<p style="margin:0 0 6px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;">${who} moved their call.</p>
+           <p style="margin:0 0 2px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;">Was: ${escapeHtml(opts.oldLabel)}</p>
+           <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#0B1120;font-weight:bold;">Now: ${escapeHtml(opts.newLabel || '')}</p>
+           <p style="margin:16px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;">Your calendar event was updated to the new time.</p>`
+
+    const brand = opts.coachUserId ? await loadCoachBrand(opts.coachUserId) : null
+    const from = brand ? `${brand.fromName} <noreply@mail.microtrainingmethod.com>` : 'Micro-Training Method <noreply@mail.microtrainingmethod.com>'
+    const html = brand
+      ? brandedEmailHtml(brand, { heading, bodyHtml: detail })
+      : `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"></head><body style="margin:0;padding:0;background-color:#F4F6F9;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F4F6F9;"><tr><td align="center" style="padding:36px 16px;"><table role="presentation" width="520" cellpadding="0" cellspacing="0" border="0" style="width:520px;max-width:520px;"><tr><td bgcolor="#FFFFFF" style="background-color:#FFFFFF;border:1px solid #E5E9F0;border-radius:14px;padding:32px;"><h1 style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:20px;line-height:28px;font-weight:bold;color:#0B1120;">${heading}</h1>${detail}</td></tr></table></td></tr></table></body></html>`
+
+    const { error } = await resend.emails.send({ from, to: opts.coachEmail, subject, html })
+    if (error) throw new Error(error.message)
+  } catch (err) {
+    console.error(`[email] coach booking change failed (to=${opts.coachEmail})`, err)
+  }
 }
 
 // Beta invite welcome. Sends the published MTM beta template. The link is the

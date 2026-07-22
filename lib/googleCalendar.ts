@@ -315,6 +315,44 @@ export async function deleteCalendarEvent(userId: string, eventId: string): Prom
   }
 }
 
+// In-place time change (events.patch) for a lead-side reschedule. Patches ONLY
+// start + end, so the same event id, the same Meet/Zoom link, and the attendee's
+// place on the event all survive — the lead's existing calendar entry just
+// shifts. sendUpdates=all so Google emails the attendee the updated invite as a
+// backstop to our own email. Returns true on 2xx; false (changing nothing in our
+// DB) on any non-ok or error, so the caller can roll its row back.
+export async function updateCalendarEventTime(
+  userId: string,
+  eventId: string,
+  startIso: string,
+  endIso: string,
+  timezone?: string
+): Promise<boolean> {
+  const conn = await getValidAccessToken(userId)
+  if (!conn) return false
+  const tz = timezone || 'UTC'
+  try {
+    const res = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(conn.calendar_id)}/events/${encodeURIComponent(eventId)}?sendUpdates=all`,
+      {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${conn.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start: { dateTime: startIso, timeZone: tz }, end: { dateTime: endIso, timeZone: tz } }),
+        signal: AbortSignal.timeout(15_000),
+      }
+    )
+    if (!res.ok) {
+      const t = await res.text().catch(() => '')
+      console.error('[googleCalendar] updateCalendarEventTime', res.status, t)
+      return false
+    }
+    return true
+  } catch (err) {
+    console.error('[googleCalendar] updateCalendarEventTime', err)
+    return false
+  }
+}
+
 // Busy intervals from the Google free/busy API for [timeMin, timeMax].
 export async function fetchFreeBusy(
   accessToken: string,

@@ -20,9 +20,11 @@ function deriveSecret(label: string): Buffer {
 }
 const WATCH_SECRET = deriveSecret('funnel-lead-watch-v1')
 const UNSUB_SECRET = deriveSecret('funnel-lead-unsub-v1')
+const MANAGE_SECRET = deriveSecret('funnel-booking-manage-v1')
 
 const WATCH_TTL_MS = 24 * 60 * 60 * 1000
 const UNSUB_TTL_MS = 365 * 24 * 60 * 60 * 1000
+const MANAGE_TTL_MS = 90 * 24 * 60 * 60 * 1000
 
 function b64url(buf: Buffer): string {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
@@ -91,4 +93,46 @@ export function signUnsubscribeToken(funnelId: string, leadId: string, nowMs: nu
 // { funnelId, leadId } (or null). The endpoint then loads the lead by these ids.
 export function verifyUnsubscribeToken(token: unknown, nowMs: number = Date.now()): { funnelId: string; leadId: string } | null {
   return verifyWith(UNSUB_SECRET, token, nowMs)
+}
+
+// ---- booking manage token (Phase 3b follow-up) ------------------------------
+// Names a BOOKING (not a funnel/lead pair), so the lead-side reschedule/cancel
+// links in booking emails resolve the row directly. Two-segment payload
+// "bookingId.expMs" — booking ids are UUIDs (no dots), exp is numeric, so the
+// single-'.' split is unambiguous, same as the other tokens. 90-day TTL so a
+// call booked weeks out still has a live link; the real cutoff (call started /
+// passed) is enforced at the endpoint against start_time, not by the TTL.
+
+export function signManageToken(bookingId: string, nowMs: number = Date.now()): string {
+  const payload = `${bookingId}.${nowMs + MANAGE_TTL_MS}`
+  const sig = b64url(crypto.createHmac('sha256', MANAGE_SECRET).update(payload).digest())
+  return `${b64url(Buffer.from(payload, 'utf8'))}.${sig}`
+}
+
+// Returns the bookingId when the token is valid + unexpired + signed by us, else
+// null. Constant-time signature compare. Cannot verify as watch/unsub/session.
+export function verifyManageToken(token: unknown, nowMs: number = Date.now()): string | null {
+  if (typeof token !== 'string' || !token) return null
+  const parts = token.split('.')
+  if (parts.length !== 2) return null
+
+  let payload: string
+  try {
+    payload = fromB64url(parts[0]).toString('utf8')
+  } catch {
+    return null
+  }
+
+  const expected = b64url(crypto.createHmac('sha256', MANAGE_SECRET).update(payload).digest())
+  const a = Buffer.from(parts[1])
+  const b = Buffer.from(expected)
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null
+
+  const segs = payload.split('.')
+  if (segs.length !== 2) return null
+  const [bookingId, expStr] = segs
+  const exp = Number(expStr)
+  if (!Number.isFinite(exp) || nowMs >= exp) return null
+  if (!bookingId) return null
+  return bookingId
 }

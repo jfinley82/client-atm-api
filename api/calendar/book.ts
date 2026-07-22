@@ -12,6 +12,7 @@ import { isSlotOpen } from '../../lib/funnelAvailability'
 import { getValidAccessToken, createCalendarEvent, deleteCalendarEvent, ValidToken } from '../../lib/googleCalendar'
 import { loadBusinessSettings } from '../../lib/businessSettings'
 import { cancelLeadQueue, scheduleBookingReminders } from '../../lib/funnelNurture'
+import { buildManageUrl } from '../../lib/bookingManage'
 
 // POST /api/calendar/book
 // Body: { slot_start, first_name, last_name, email, answers?, funnel_id? }
@@ -227,7 +228,11 @@ async function bookGooglePath(
     organizerEmail,
     attendeeEmail: email,
   })
-  await sendBookingConfirmationEmail({ email, name, startLabel, joinUrl: meetingUrl, icsContent: ics, funnelId: funnelRow.id as string, leadId, coachUserId: owner })
+  // Lead-side manage link (Phase 3b follow-up): reschedule/cancel, on the funnel
+  // domain so /api/ reaches the real function rather than the renderer.
+  const manageUrl = funnelRow.subdomain ? buildManageUrl(funnelRow.subdomain as string, reserved.id as string) : undefined
+
+  await sendBookingConfirmationEmail({ email, name, startLabel, joinUrl: meetingUrl, icsContent: ics, funnelId: funnelRow.id as string, leadId, coachUserId: owner, manageUrl })
   await sendCoachBookingNotification({
     coachEmail: conn.calendar_email || '',
     leadName: name,
@@ -242,7 +247,7 @@ async function bookGooglePath(
   // still-scheduled nurture/book-a-call sends — and gets 24h/1h call reminders.
   if (leadId) {
     await cancelLeadQueue(leadId)
-    await scheduleBookingReminders(funnelRow, leadId, email, startIso, meetingUrl)
+    await scheduleBookingReminders(funnelRow, leadId, email, startIso, meetingUrl, manageUrl)
   }
 
   return res.status(200).json({ booking_id: reserved.id, join_url: meetingUrl, meeting_url: meetingUrl, start_time: startIso })
