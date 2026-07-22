@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { setCors } from '../../lib/cors'
 import { resolveLiveFunnel } from '../../lib/funnels'
 import { rateLimit, clientIp } from '../../lib/rateLimit'
+import { signWatchToken } from '../../lib/funnelLeadToken'
 
 // POST /api/funnel/lead — PUBLIC opt-in capture for a live funnel's landing page.
 // Mirrors the public pattern of /api/calendar/book (no auth, strict body
@@ -62,7 +63,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .insert({ funnel_id: funnel.id, lead_id: lead.id, event_type: 'signup' })
     if (eventError) console.error('[funnel/lead] signup event', eventError)
 
-    return res.status(200).json({ ok: true, next: 'training' })
+    // Short-lived signed token that names this lead, carried to the training page
+    // so its video beacons attribute the watch back to this lead (Phase 4).
+    const watchToken = signWatchToken(funnel.id as string, lead.id as string)
+
+    return res.status(200).json({ ok: true, next: 'training', watch_token: watchToken })
   } catch (err) {
     console.error('[funnel/lead] POST', err)
     return res.status(500).json({ error: 'Failed to capture lead' })

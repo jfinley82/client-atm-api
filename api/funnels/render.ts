@@ -262,7 +262,6 @@ function landingPage(funnel: Record<string, any>, b: Branding): string {
   const script = `${PIXEL_EVENT_JS}
     var FUNNEL_ID = ${JSON.stringify(funnel.id)};
     var SUB = ${JSON.stringify(funnel.subdomain)};
-    function nextUrl(page){ var u = new URL(window.location.href); u.searchParams.set('page', page); return u.toString(); }
     document.getElementById('optin').addEventListener('submit', function(e){
       e.preventDefault();
       var btn = document.getElementById('submit'); var err = document.getElementById('err');
@@ -275,7 +274,12 @@ function landingPage(funnel: Record<string, any>, b: Branding): string {
         .then(function(res){
           if (!res.ok) { err.textContent = res.j && res.j.error ? res.j.error : 'Something went wrong'; btn.disabled = false; return; }
           fbTrack('Lead'); gaEvent('generate_lead');
-          window.location.href = nextUrl(res.j && res.j.next ? res.j.next : 'training');
+          var u = new URL(window.location.href);
+          u.searchParams.set('page', res.j && res.j.next ? res.j.next : 'training');
+          // Carry the signed watch token to the training page so the video
+          // player can attribute milestone beacons back to this lead.
+          if (res.j && res.j.watch_token) u.searchParams.set('wt', res.j.watch_token);
+          window.location.href = u.toString();
         })
         .catch(function(){ err.textContent = 'Network error, please try again'; btn.disabled = false; });
     });`
@@ -297,11 +301,42 @@ function trainingPage(funnel: Record<string, any>, b: Branding, takeaways: strin
     ${imgTag(b.logoUrl, 'logo')}
     <h1>${headline}</h1>
     ${sub}
-    ${video}
+    ${video.html}
     ${kt}
     <a class="btn" href="?page=book${subQuery(funnel)}">${cta}</a>`
 
-  return shell(b.brand, tp.headline || 'Your training', body, '', b.head, footer(b.brand, b.businessName, b.legal))
+  // Only wire the watch-tracking player when there is a real video to track.
+  const script = video.init ? buildPlayerScript(funnel, video.init) : ''
+  return shell(b.brand, tp.headline || 'Your training', body, script, b.head, footer(b.brand, b.businessName, b.legal))
+}
+
+// Per-page player harness: one random session id, the watch token the training
+// page received from the opt-in (read client-side from ?wt=, never server HTML),
+// and a beacon fired once per milestone via sendBeacon so it survives the
+// navigation to the book page. Provider-specific `init` wires the progress calls.
+function buildPlayerScript(funnel: Record<string, any>, init: string): string {
+  return `(function(){
+    var FUNNEL_ID = ${JSON.stringify(funnel.id)};
+    var SUB = ${JSON.stringify(funnel.subdomain)};
+    var SID = (function(){ try { return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('s'+Date.now()+Math.random().toString(16).slice(2)); } catch(e){ return 's'+Date.now(); } })();
+    var WT = (function(){ try { return new URLSearchParams(window.location.search).get('wt') || ''; } catch(e){ return ''; } })();
+    var fired = {};
+    function beacon(pct){
+      if (fired[pct]) return; fired[pct] = true;
+      var payload = { funnel_id: FUNNEL_ID, subdomain: SUB, event_type: pct >= 100 ? 'video_completed' : 'video_watched', session_id: SID, percent: pct };
+      if (WT) payload.watch_token = WT;
+      var s = JSON.stringify(payload);
+      try { if (navigator.sendBeacon) { navigator.sendBeacon('/api/funnel/event', new Blob([s], { type: 'application/json' })); return; } } catch(e){}
+      try { fetch('/api/funnel/event', { method:'POST', headers:{'Content-Type':'application/json'}, body: s, keepalive: true }); } catch(e){}
+    }
+    function onProgress(pct){
+      if (pct >= 25) beacon(25);
+      if (pct >= 50) beacon(50);
+      if (pct >= 75) beacon(75);
+      if (pct >= 100) beacon(100);
+    }
+    ${init}
+  })();`
 }
 
 function bookPage(funnel: Record<string, any>, b: Branding): string {
@@ -368,17 +403,81 @@ function bookPage(funnel: Record<string, any>, b: Branding): string {
   return shell(b.brand, bp.headline || 'Book your call', body, script, b.head, footer(b.brand, b.businessName, b.legal))
 }
 
-function videoEmbed(url: unknown): string {
+// Returns the player markup plus the provider-specific tracking `init` JS that
+// calls onProgress(percent)/onProgress(100) (defined by buildPlayerScript). The
+// video id is the ONLY interpolated value and is escapeAttr'd into the src; the
+// init strings are static. Only the official YouTube / Vimeo SDKs are loaded.
+function videoEmbed(url: unknown): { html: string; init: string } {
   if (typeof url !== 'string' || !url.trim()) {
-    return `<div class="video"><div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#888;">Video coming soon</div></div>`
+    return {
+      html: `<div class="video"><div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#888;">Video coming soon</div></div>`,
+      init: '',
+    }
   }
   const u = url.trim()
+
   const yt = u.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([\w-]{6,})/)
-  if (yt) return `<div class="video"><iframe src="https://www.youtube.com/embed/${escapeAttr(yt[1])}" allowfullscreen allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe></div>`
+  if (yt) {
+    return {
+      html: `<div class="video"><iframe id="mtm-video" src="https://www.youtube.com/embed/${escapeAttr(yt[1])}?enablejsapi=1" allowfullscreen allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe></div>`,
+      init: YT_INIT,
+    }
+  }
+
   const vim = u.match(/vimeo\.com\/(?:video\/)?(\d+)/)
-  if (vim) return `<div class="video"><iframe src="https://player.vimeo.com/video/${escapeAttr(vim[1])}" allowfullscreen allow="autoplay; fullscreen; picture-in-picture"></iframe></div>`
-  return `<div class="video"><video src="${escapeAttr(u)}" controls playsinline></video></div>`
+  if (vim) {
+    return {
+      html: `<div class="video"><iframe id="mtm-video" src="https://player.vimeo.com/video/${escapeAttr(vim[1])}" allowfullscreen allow="autoplay; fullscreen; picture-in-picture"></iframe></div>`,
+      init: VIMEO_INIT,
+    }
+  }
+
+  return {
+    html: `<div class="video"><video id="mtm-video" src="${escapeAttr(u)}" controls playsinline></video></div>`,
+    init: DIRECT_INIT,
+  }
 }
+
+// Native <video>: timeupdate for the 25/50/75 milestones, ended for completion.
+const DIRECT_INIT = `
+    var v = document.getElementById('mtm-video');
+    if (v) {
+      v.addEventListener('timeupdate', function(){ if (v.duration > 0) onProgress(Math.floor(v.currentTime / v.duration * 100)); });
+      v.addEventListener('ended', function(){ onProgress(100); });
+    }`
+
+// YouTube IFrame API (official domain): poll getCurrentTime/getDuration while
+// playing; the ENDED state is completion.
+const YT_INIT = `
+    var ytPoll;
+    window.onYouTubeIframeAPIReady = function(){
+      try {
+        var p = new YT.Player('mtm-video', { events: {
+          onStateChange: function(e){
+            if (e.data === YT.PlayerState.PLAYING && !ytPoll) {
+              ytPoll = setInterval(function(){
+                try { var d = p.getDuration(), t = p.getCurrentTime(); if (d > 0) onProgress(Math.floor(t / d * 100)); } catch(_){}
+              }, 1000);
+            }
+            if (e.data === YT.PlayerState.ENDED) onProgress(100);
+          }
+        }});
+      } catch(_){}
+    };
+    var yts = document.createElement('script'); yts.src = 'https://www.youtube.com/iframe_api'; document.head.appendChild(yts);`
+
+// Vimeo Player SDK (official domain): its timeupdate gives a 0..1 percent, ended
+// is completion.
+const VIMEO_INIT = `
+    var vms = document.createElement('script'); vms.src = 'https://player.vimeo.com/api/player.js';
+    vms.onload = function(){
+      try {
+        var pl = new Vimeo.Player('mtm-video');
+        pl.on('timeupdate', function(data){ if (data && typeof data.percent === 'number') onProgress(Math.floor(data.percent * 100)); });
+        pl.on('ended', function(){ onProgress(100); });
+      } catch(_){}
+    };
+    document.head.appendChild(vms);`
 
 function bullets(v: unknown): string {
   if (!Array.isArray(v)) return ''
