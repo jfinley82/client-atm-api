@@ -5,6 +5,7 @@ import {
   requireFunnelBuilder,
   checkBlueprintComplete,
   isValidSubdomain,
+  isReservedSubdomain,
   subdomainTaken,
   resolveGenerationCard,
 } from '../../lib/funnels'
@@ -67,6 +68,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           error: 'invalid_subdomain',
           message: 'subdomain must be lowercase letters, numbers, and hyphens only',
         })
+      }
+      if (isReservedSubdomain(subdomain)) {
+        return res.status(409).json({ error: 'reserved_subdomain', message: 'that subdomain is reserved' })
       }
       if (await subdomainTaken(subdomain)) {
         return res.status(409).json({ error: 'subdomain_taken' })
