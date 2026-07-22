@@ -217,6 +217,7 @@ export async function scheduleBookingReminders(
   email: string,
   startIso: string,
   joinUrl: string,
+  manageUrl?: string,
   nowMs: number = Date.now()
 ): Promise<void> {
   try {
@@ -226,6 +227,9 @@ export async function scheduleBookingReminders(
     if (!Number.isFinite(startMs)) return
     const brand = await loadCoachBrand(funnel.user_id as string)
     const label = utcLabel(startIso)
+    const manageLine = manageUrl
+      ? `<p style="margin:14px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;">Need to change your time? You can <a href="${escapeHtml(manageUrl)}" target="_blank" style="color:#8A94A6;text-decoration:underline;">reschedule or cancel here</a>.</p>`
+      : ''
 
     const reminders = [
       { kind: 'reminder_24h', at: startMs - 24 * HOUR, heading: 'Your call is tomorrow' },
@@ -236,7 +240,7 @@ export async function scheduleBookingReminders(
       if (r.at <= nowMs + 60_000) continue // in the past / too soon to schedule
       const bodyHtml = `
           <p style="margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;">A quick reminder about your call:</p>
-          <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#0B1120;font-weight:bold;">${escapeHtml(label)}</p>`
+          <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#0B1120;font-weight:bold;">${escapeHtml(label)}</p>${manageLine}`
       const html = brandedEmailHtml(brand, { heading: r.heading, bodyHtml, cta: { label: 'Join the call', url: joinUrl } })
       tasks.push(
         scheduleFunnelEmail({
@@ -260,7 +264,7 @@ export async function scheduleBookingReminders(
 // Cancel scheduled Resend messages for a lead and flip the rows to 'canceled'.
 // kindPrefix null = the whole queue (booked/closed/unsubscribe/bounce);
 // 'nurture' = only the nurture track (the watch pivot).
-async function cancelByFilter(leadId: string, kindPrefix: 'nurture' | null): Promise<void> {
+async function cancelByFilter(leadId: string, kindPrefix: string | null): Promise<void> {
   try {
     let sel = supabase.from('funnel_email_sends').select('resend_message_id').eq('lead_id', leadId).eq('status', 'queued')
     if (kindPrefix) sel = sel.like('kind', `${kindPrefix}%`)
@@ -285,4 +289,10 @@ export async function cancelLeadQueue(leadId: string): Promise<void> {
 // Cancel only the nurture track (used by the pivot to book-a-call).
 export async function cancelNurtureQueue(leadId: string): Promise<void> {
   await cancelByFilter(leadId, 'nurture')
+}
+
+// Cancel only the 24h/1h booking reminders (used when a booking is rescheduled;
+// scheduleBookingReminders then lays down fresh ones for the new time).
+export async function cancelBookingReminders(leadId: string): Promise<void> {
+  await cancelByFilter(leadId, 'reminder')
 }
