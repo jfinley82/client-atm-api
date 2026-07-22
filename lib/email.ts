@@ -232,13 +232,20 @@ export function brandedEmailHtml(
 </body></html>`
 }
 
-// Turn an MtEmail plain-text body into safe paragraph HTML, linking the
-// [BOOK_A_CALL_LINK] / [OFFER_LINK] tokens the generator embeds. escapeHtml
-// leaves the bracket tokens intact so they survive to be replaced.
-export function linkifyEmailBody(raw: string, bookUrl: string): string {
+// Turn an MtEmail plain-text body into safe paragraph HTML, linking the tokens
+// the generator embeds: [BOOK_A_CALL_LINK] / [OFFER_LINK] → the book page, and
+// [TRAINING_LINK] → the training page (per-send URL carrying the fresh watch
+// token, threaded in by the caller). escapeHtml leaves the bracket tokens intact
+// so they survive to be replaced. A missing/invalid URL degrades to plain words
+// rather than leaking the literal placeholder.
+export function linkifyEmailBody(raw: string, bookUrl: string, trainingUrl?: string): string {
   const bookAnchor = isValidHttpUrl(bookUrl)
     ? `<a href="${escapeHtml(bookUrl)}" target="_blank" style="color:#0B1120;font-weight:bold;">book a call</a>`
     : 'book a call'
+  const trainingAnchor =
+    trainingUrl && isValidHttpUrl(trainingUrl)
+      ? `<a href="${escapeHtml(trainingUrl)}" target="_blank" style="color:#0B1120;font-weight:bold;">watch the training</a>`
+      : 'the training'
   return String(raw || '')
     .split(/\n\s*\n/)
     .filter((p) => p.trim())
@@ -249,6 +256,8 @@ export function linkifyEmailBody(raw: string, bookUrl: string): string {
         .join(bookAnchor)
         .split('[OFFER_LINK]')
         .join(bookAnchor)
+        .split('[TRAINING_LINK]')
+        .join(trainingAnchor)
       return `<p style="margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;">${h}</p>`
     })
     .join('')
