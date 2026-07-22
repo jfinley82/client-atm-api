@@ -36,7 +36,10 @@ function coerceEmails(v: unknown): MtEmail[] {
 // unsubscribe, bounce) makes it moot. All functions are best-effort and never
 // throw — a scheduling hiccup must not break the opt-in / booking that triggered it.
 
-const FUNNEL_DOMAIN = 'microtrainingmethod.com'
+// The domain public funnels actually serve on ({slug}.freeminiworkshop.com) —
+// NOT microtrainingmethod.com, which is GHL and never routes to render, so links
+// there are dead. Env-overridable; defaults to the live funnel domain.
+const FUNNEL_DOMAIN = process.env.FUNNEL_PUBLIC_DOMAIN || 'freeminiworkshop.com'
 const DAY = 24 * 60 * 60 * 1000
 const HOUR = 60 * 60 * 1000
 

@@ -146,8 +146,9 @@ async function recordFunnelEmailSend(row: {
 // only the display name, logo, accent, signature, and reply-to are the coach's.
 
 export type CoachBrand = {
-  fromName: string // sanitized display name for the From header
-  businessName: string // raw; escaped at render
+  fromName: string // sanitized display name for the From header (the coach's first name)
+  coachName: string // the coach's name, for the email signature; escaped at render
+  businessName: string // raw; escaped at render — header fallback + "Sent by" line
   replyTo: string | null // the coach's email
   logoUrl: string | null // validated http(s) or null
   primaryColor: string // sanitized color, safe to interpolate
@@ -169,10 +170,16 @@ export async function loadCoachBrand(userId: string): Promise<CoachBrand> {
     supabase.from('users').select('name, email').eq('id', userId).maybeSingle(),
   ])
   const user = (userRes.data || {}) as { name?: string | null; email?: string | null }
-  const businessName = settings.business_name || (user.name ? user.name.trim() : '') || 'Your coach'
+  const rawName = typeof user.name === 'string' ? user.name.trim() : ''
+  const firstName = rawName ? rawName.split(/\s+/)[0] : ''
+  const businessName = settings.business_name || rawName || 'Your coach'
+  const coachName = rawName || 'Your coach'
   const replyTo = typeof user.email === 'string' && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(user.email) ? user.email : null
   return {
-    fromName: sanitizeDisplayName(businessName),
+    // From display = the coach's first name, then business name, then a safe
+    // default (sanitizeDisplayName returns 'Your coach' when its input is empty).
+    fromName: sanitizeDisplayName(firstName || settings.business_name || ''),
+    coachName,
     businessName,
     replyTo,
     logoUrl: settings.logo_url && isValidHttpUrl(settings.logo_url) ? settings.logo_url : null,
@@ -216,7 +223,7 @@ export function brandedEmailHtml(
           ${button}
         </td></tr>
         <tr><td style="padding-top:20px;padding-left:4px;">
-          <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:20px;color:#98A2B3;">${escapeHtml(brand.businessName)}</p>
+          <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:20px;color:#98A2B3;">${escapeHtml(brand.coachName)}</p>
           ${foot}
         </td></tr>
       </table>
