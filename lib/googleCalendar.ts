@@ -197,24 +197,25 @@ export async function saveGoogleConnection(
 // A currently-valid access token for the coach, refreshing (and persisting any
 // rotated refresh token) when the stored access token is expired. Returns null
 // when the coach has no connection or the refresh fails.
-export async function getValidAccessToken(
-  userId: string
-): Promise<{ access_token: string; calendar_id: string } | null> {
+export type ValidToken = { access_token: string; calendar_id: string; calendar_email: string | null }
+
+export async function getValidAccessToken(userId: string): Promise<ValidToken | null> {
   const { data: conn } = await supabase
     .from('calendar_connections')
-    .select('access_token, refresh_token, expires_at, calendar_id')
+    .select('access_token, refresh_token, expires_at, calendar_id, calendar_email')
     .eq('user_id', userId)
     .eq('provider', 'google')
     .maybeSingle()
 
   if (!conn) return null
   const calendarId = conn.calendar_id || 'primary'
+  const calendarEmail = (conn.calendar_email as string | null) ?? null
 
   // Use the stored access token if it's still valid and decryptable.
   const notExpired = conn.access_token && conn.expires_at && new Date(conn.expires_at).getTime() > Date.now() + 60_000
   if (notExpired) {
     const at = decryptToken(conn.access_token as string)
-    if (at) return { access_token: at, calendar_id: calendarId }
+    if (at) return { access_token: at, calendar_id: calendarId, calendar_email: calendarEmail }
   }
 
   const refreshToken = decryptToken(conn.refresh_token as string | null)
@@ -231,10 +232,86 @@ export async function getValidAccessToken(
     // Refresh tokens can rotate — persist the new one (encrypted) if present.
     if (refreshed.refresh_token) update.refresh_token = encryptToken(refreshed.refresh_token)
     await supabase.from('calendar_connections').update(update).eq('user_id', userId).eq('provider', 'google')
-    return { access_token: refreshed.access_token, calendar_id: calendarId }
+    return { access_token: refreshed.access_token, calendar_id: calendarId, calendar_email: calendarEmail }
   } catch (err) {
     console.error('[googleCalendar] refresh failed', err)
     return null
+  }
+}
+
+// Create an event on the coach's primary calendar (events.insert). When addMeet
+// is true, a Google Meet conference is created and its URL read back. sendUpdates
+// is 'none' — WE send our own branded confirmation + .ics, so Google should not
+// double-email attendees. Returns null when the coach has no valid connection;
+// throws on a Google API failure (the caller frees the reservation, like Zoom).
+export async function createCalendarEvent(
+  userId: string,
+  opts: {
+    summary: string
+    description: string
+    startIso: string
+    endIso: string
+    attendeeEmails: string[]
+    timezone?: string
+    location?: string
+    addMeet?: boolean
+  }
+): Promise<{ eventId: string; htmlLink: string | null; meetUrl: string | null } | null> {
+  const conn = await getValidAccessToken(userId)
+  if (!conn) return null
+
+  const tz = opts.timezone || 'UTC'
+  const body: Record<string, unknown> = {
+    summary: opts.summary,
+    description: opts.description,
+    start: { dateTime: opts.startIso, timeZone: tz },
+    end: { dateTime: opts.endIso, timeZone: tz },
+    attendees: opts.attendeeEmails.filter(Boolean).map((email) => ({ email })),
+  }
+  if (opts.location) body.location = opts.location
+  if (opts.addMeet) {
+    body.conferenceData = { createRequest: { requestId: crypto.randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } }
+  }
+
+  const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(conn.calendar_id)}/events?conferenceDataVersion=1&sendUpdates=none`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${conn.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20_000),
+  })
+  if (!res.ok) {
+    const t = await res.text().catch(() => '')
+    throw new Error(`google events.insert ${res.status}: ${t}`)
+  }
+  const data = (await res.json()) as {
+    id?: string
+    htmlLink?: string
+    hangoutLink?: string
+    conferenceData?: { entryPoints?: Array<{ entryPointType?: string; uri?: string }> }
+  }
+  const meetUrl =
+    data.hangoutLink ||
+    data.conferenceData?.entryPoints?.find((e) => e.entryPointType === 'video')?.uri ||
+    null
+  return { eventId: String(data.id || ''), htmlLink: data.htmlLink ?? null, meetUrl }
+}
+
+// Delete an event from the coach's calendar. Best-effort — returns true on
+// success or if the event was already gone (404/410). Used for the reservation
+// release path and (later) lead-side cancel.
+export async function deleteCalendarEvent(userId: string, eventId: string): Promise<boolean> {
+  const conn = await getValidAccessToken(userId)
+  if (!conn) return false
+  try {
+    const res = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(conn.calendar_id)}/events/${encodeURIComponent(eventId)}?sendUpdates=none`,
+      { method: 'DELETE', headers: { Authorization: `Bearer ${conn.access_token}` }, signal: AbortSignal.timeout(15_000) }
+    )
+    return res.ok || res.status === 404 || res.status === 410
+  } catch (err) {
+    console.error('[googleCalendar] deleteCalendarEvent', err)
+    return false
   }
 }
 

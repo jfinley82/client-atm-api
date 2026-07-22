@@ -153,6 +153,57 @@ export async function sendBookingConfirmationEmail(opts: {
   }
 }
 
+// Coach notification when a lead books from their funnel. Best-effort BY
+// CONTRACT: never throws — a mail hiccup must not fail a booking that already
+// succeeded. Short, plain, MTM-styled; includes the time and the lead's answers.
+export async function sendCoachBookingNotification(opts: {
+  coachEmail: string
+  leadName: string
+  leadEmail: string
+  startLabel: string
+  answers: Array<{ label: string; answer: string }>
+}): Promise<void> {
+  try {
+    if (!opts.coachEmail) return
+    const answerRows = opts.answers
+      .filter((a) => a.answer)
+      .map(
+        (a) =>
+          `<tr><td style="font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;padding:2px 12px 2px 0;vertical-align:top;">${escapeHtml(a.label)}</td><td style="font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#0B1120;padding:2px 0;">${escapeHtml(a.answer)}</td></tr>`
+      )
+      .join('')
+    const { error } = await resend.emails.send({
+      from: 'Micro-Training Method <noreply@mail.microtrainingmethod.com>',
+      to: opts.coachEmail,
+      subject: `New booking: ${opts.leadName || opts.leadEmail}`,
+      html: `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background-color:#F4F6F9;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F4F6F9;">
+    <tr><td align="center" style="padding:36px 16px;">
+      <table role="presentation" width="520" cellpadding="0" cellspacing="0" border="0" style="width:520px;max-width:520px;">
+        <tr><td bgcolor="#FFFFFF" style="background-color:#FFFFFF;border:1px solid #E5E9F0;border-radius:14px;padding:32px;">
+          <h1 style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:20px;line-height:28px;font-weight:bold;color:#0B1120;">You have a new call booked</h1>
+          <p style="margin:0 0 6px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#0B1120;font-weight:bold;">${escapeHtml(opts.startLabel)}</p>
+          <p style="margin:0 0 18px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:22px;color:#4B5563;">${escapeHtml(opts.leadName)} &lt;${escapeHtml(opts.leadEmail)}&gt;</p>
+          ${answerRows ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-top:1px solid #E5E9F0;padding-top:12px;margin-top:4px;">${answerRows}</table>` : ''}
+          <p style="margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;">It's on your calendar. The lead has the meeting link.</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`,
+    })
+    if (error) throw new Error(error.message)
+  } catch (err) {
+    console.error(`[email] coach booking notification failed (to=${opts.coachEmail})`, err)
+  }
+}
+
+function escapeHtml(s: string): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string))
+}
+
 // Beta invite welcome. Sends the published MTM beta template. The link is the
 // caller's own token URL (invite-beta mints a 7-day token — intentionally
 // long-lived for a cold invite), NOT sendTierWelcomeEmail's 15-minute token.
