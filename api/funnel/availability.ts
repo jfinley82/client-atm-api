@@ -1,10 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { supabase } from '../../lib/supabase'
 import { setCors, noStore } from '../../lib/cors'
 import { resolveLiveFunnel } from '../../lib/funnels'
-import { loadUserAvailability } from '../../lib/availabilitySettings'
-import { generateGridSlots, subtractBusy, clampWindow, Interval } from '../../lib/availability'
-import { getValidAccessToken, fetchFreeBusy } from '../../lib/googleCalendar'
+import { computeOpenSlots } from '../../lib/funnelAvailability'
 import { rateLimit, clientIp } from '../../lib/rateLimit'
 
 // GET /api/funnel/availability?subdomain=…&from=…&to=… — PUBLIC. Open booking
@@ -34,50 +31,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const funnel = await resolveLiveFunnel({ subdomain: subdomain || null, funnelId: funnelId || null })
     if (!funnel) return res.status(404).json({ error: 'funnel_not_found' })
 
-    const owner = funnel.user_id as string
-    const settings = await loadUserAvailability(owner)
-
-    const window = clampWindow(from, to, settings.booking_window_days, Date.now())
-    if (!window) return res.status(200).json({ slots: [], connected: false })
-
-    const grid = generateGridSlots(
-      settings.working_hours,
-      settings.slot_minutes,
-      settings.buffer_minutes,
-      window.from,
-      window.to
-    )
-
-    const busy: Interval[] = []
-
-    // Google free/busy when the owner has connected — best-effort. On any Google
-    // error we fall back to bookings-only rather than failing the page.
-    const conn = await getValidAccessToken(owner)
-    if (conn) {
-      try {
-        const gbusy = await fetchFreeBusy(conn.access_token, conn.calendar_id, window.from, window.to)
-        busy.push(...gbusy)
-      } catch (gErr) {
-        console.error('[funnel/availability] freeBusy failed, bookings-only', gErr)
-      }
-    }
-
-    // The owner's existing active MTM bookings in the window.
-    const { data: bookings } = await supabase
-      .from('bookings')
-      .select('start_time, end_time')
-      .eq('coach_user_id', owner)
-      .eq('status', 'active')
-      .lt('start_time', window.to)
-      .gt('end_time', window.from)
-    for (const b of bookings || []) {
-      if (typeof b.start_time === 'string' && typeof b.end_time === 'string') {
-        busy.push({ start: b.start_time, end: b.end_time })
-      }
-    }
-
-    const slots = subtractBusy(grid, busy)
-    return res.status(200).json({ slots, connected: !!conn })
+    // Same builder the booking's isSlotOpen uses — page and booking never drift.
+    const { slots, connected } = await computeOpenSlots(funnel.user_id as string, from, to)
+    return res.status(200).json({ slots, connected })
   } catch (err) {
     console.error('[funnel/availability] GET', err)
     return res.status(500).json({ error: 'Failed to load availability' })
