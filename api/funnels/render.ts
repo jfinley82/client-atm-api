@@ -1,24 +1,21 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
-import {
-  sanitizeBrandColor,
-  sanitizeBrandFont,
-  sanitizeTracking,
-  Tracking,
-  DEFAULT_BRAND_PRIMARY,
-  DEFAULT_BRAND_SECONDARY,
-} from '../../lib/funnels'
+import { sanitizeBrandColor, sanitizeBrandFont, sanitizeTracking, Tracking, DEFAULT_BRAND_PRIMARY, DEFAULT_BRAND_SECONDARY } from '../../lib/funnels'
+import { loadBusinessSettings, isValidHttpUrl, BusinessSettings, Legal } from '../../lib/businessSettings'
 
 // PUBLIC — no auth. Resolves a LIVE funnel from the request's subdomain and
 // serves its real pages, routed by ?page= (landing | training | book; default
-// landing). Copy + brand kit come from the funnel row; the training page's key
-// takeaways come from the linked mtm_generations. Page views are logged to
-// funnel_events (best-effort). Booking reuses the existing native calendar
-// (/api/calendar/*): the book page passes this funnel_id to /api/calendar/book,
-// which logs the 'booked' event SERVER-SIDE (authoritative, no client beacon).
+// landing).
 //
-// Subdomain resolution: the leftmost label of the Host header, with a
-// ?subdomain= query override so the lookup is testable before wildcard DNS.
+// Brand identity, tracking pixels, and legal come from the funnel OWNER's
+// ACCOUNT-LEVEL business settings (funnel_business_settings), NOT the funnel row
+// — those per-funnel columns are vestigial now. The funnel row provides only
+// this funnel's CONTENT (copy, video, subdomain, opt-in field choices). The
+// headshot falls back to the owner's profile avatar when no override is set.
+//
+// Page views are logged to funnel_events (best-effort). Booking reuses the
+// native calendar (/api/calendar/*): the book page passes funnel_id to
+// /api/calendar/book, which logs 'booked' server-side.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const rawQuery = req.query?.subdomain
   const querySub = Array.isArray(rawQuery) ? rawQuery[0] : rawQuery
@@ -34,9 +31,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const { data: funnel, error } = await supabase
     .from('funnels')
-    .select(
-      'id, subdomain, status, generation_id, brand_primary_color, brand_secondary_color, theme_mode, brand_font, logo_url, headshot_url, video_url, collect_name, collect_phone, landing_page, training_page, booking_page, tracking'
-    )
+    .select('id, user_id, subdomain, status, generation_id, video_url, collect_name, collect_phone, landing_page, training_page, booking_page')
     .eq('subdomain', subdomain)
     .maybeSingle()
 
@@ -46,19 +41,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
   if (!funnel || funnel.status !== 'live') return send404(res)
 
+  // Account-level branding/tracking/legal from the funnel owner, plus the owner's
+  // profile name/avatar for the business-name + headshot fallbacks.
+  const [settings, ownerRes] = await Promise.all([
+    loadBusinessSettings(funnel.user_id as string),
+    supabase.from('users').select('name, avatar_url').eq('id', funnel.user_id).maybeSingle(),
+  ])
+  const owner = (ownerRes.data || {}) as { name?: string | null; avatar_url?: string | null }
+
+  const brand = brandKit(settings)
+  const branding: Branding = {
+    brand,
+    head: trackingHead(sanitizeTracking(settings.tracking)),
+    logoUrl: settings.logo_url,
+    headshotUrl: settings.headshot_url || owner.avatar_url || null,
+    businessName: settings.business_name || (owner.name ? owner.name.trim() : null) || null,
+    legal: settings.legal || {},
+  }
+
   // Best-effort page-view event. landing_view / training_view; the book page is
   // reached by clicking the "book a call" CTA, so its load is a booking_click.
   const viewEvent = page === 'training' ? 'training_view' : page === 'book' ? 'booking_click' : 'landing_view'
   logEvent(funnel.id, viewEvent)
 
-  const brand = brandKit(funnel)
-  // Ad pixels — only the coach's VALIDATED tracking IDs are emitted (sanitize on
-  // read, defense in depth over the PATCH-time validation).
-  const head = trackingHead(sanitizeTracking(funnel.tracking))
   let html: string
-  if (page === 'training') html = trainingPage(funnel, brand, head, await loadKeyTakeaways(funnel.generation_id))
-  else if (page === 'book') html = bookPage(funnel, brand, head)
-  else html = landingPage(funnel, brand, head)
+  if (page === 'training') html = trainingPage(funnel, branding, await loadKeyTakeaways(funnel.generation_id))
+  else if (page === 'book') html = bookPage(funnel, branding)
+  else html = landingPage(funnel, branding)
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8')
   return res.status(200).send(html)
@@ -74,7 +83,6 @@ async function loadKeyTakeaways(generationId: string | null): Promise<string[]> 
 }
 
 function logEvent(funnelId: string, eventType: string): void {
-  // Fire-and-forget — never block or fail the page render on analytics.
   void supabase
     .from('funnel_events')
     .insert({ funnel_id: funnelId, event_type: eventType })
@@ -86,15 +94,15 @@ function logEvent(funnelId: string, eventType: string): void {
 // ---- rendering ----------------------------------------------------------
 
 type Brand = { primary: string; secondary: string; isDark: boolean; text: string; bg: string; muted: string; card: string; font: string }
+type Branding = { brand: Brand; head: string; logoUrl: string | null; headshotUrl: string | null; businessName: string | null; legal: Legal }
 
-function brandKit(funnel: Record<string, any>): Brand {
-  // Sanitize on read — every value below is emitted into <style>/<script>, so it
-  // must be a validated color / allowlisted font or fall back to a safe default.
-  // This holds even if a row predates write-validation or was tampered directly.
-  const primary = sanitizeBrandColor(funnel.brand_primary_color, DEFAULT_BRAND_PRIMARY)
-  const secondary = sanitizeBrandColor(funnel.brand_secondary_color, DEFAULT_BRAND_SECONDARY)
-  const isDark = funnel.theme_mode !== 'light'
-  const font = sanitizeBrandFont(funnel.brand_font)
+function brandKit(settings: BusinessSettings): Brand {
+  // Sanitize on read — every value is emitted into <style>/<script>, so it must
+  // be a validated color / allowlisted font or fall back to a safe default.
+  const primary = sanitizeBrandColor(settings.brand_primary_color, DEFAULT_BRAND_PRIMARY)
+  const secondary = sanitizeBrandColor(settings.brand_secondary_color, DEFAULT_BRAND_SECONDARY)
+  const isDark = settings.theme_mode !== 'light'
+  const font = sanitizeBrandFont(settings.brand_font)
   return {
     primary,
     secondary,
@@ -110,8 +118,6 @@ function brandKit(funnel: Record<string, any>): Brand {
 // Ad-pixel <head> injection. Every interpolated ID comes from sanitizeTracking,
 // so it matches a strict prefix + [A-Z0-9]/digits charset with no quote, angle
 // bracket, or slash — it cannot break out of the single-quoted strings below.
-// gtag config and fbq init each fire a page_view / PageView on load; GTM fires
-// via its container. Empty when the coach set no tracking IDs.
 function trackingHead(t: Tracking): string {
   let out = ''
   if (t.google_tag_id) {
@@ -127,13 +133,37 @@ function trackingHead(t: Tracking): string {
   return out
 }
 
-// Client-side conversion-event helpers, safe no-ops when a pixel isn't present.
-// Injected once per page and called from the opt-in / booking success handlers.
 const PIXEL_EVENT_JS = `
     function fbTrack(ev){ try { if (window.fbq) fbq('track', ev); } catch(e){} }
     function gaEvent(ev){ try { if (window.gtag) gtag('event', ev); } catch(e){} }`
 
-function shell(brand: Brand, title: string, body: string, script = '', head = ''): string {
+// Compliance footer: business name + privacy/terms/contact links (only those
+// set) + the coach's custom disclaimer (plain escaped text, no inline HTML) +
+// the cookie note. A privacy link + disclaimer are effectively required to run
+// FB/Google ads, so this is a compliance requirement.
+function footer(brand: Brand, businessName: string | null, legal: Legal): string {
+  const links: string[] = []
+  // Sanitize on read — re-validate each legal URL is http(s) before emitting it
+  // into an href, so a tampered or pre-validation value can't render a
+  // javascript: link. Same defense-in-depth the brand fields use.
+  const link = (url: string | undefined, label: string) =>
+    url && isValidHttpUrl(url) ? `<a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${label}</a>` : ''
+  const p = link(legal.privacy_url, 'Privacy')
+  const t = link(legal.terms_url, 'Terms')
+  const c = link(legal.contact_url, 'Contact')
+  for (const l of [p, t, c]) if (l) links.push(l)
+
+  const parts: string[] = []
+  if (businessName) parts.push(`<div class="foot-biz">${escapeHtml(businessName)}</div>`)
+  if (links.length) parts.push(`<div class="foot-links">${links.join(' · ')}</div>`)
+  if (legal.disclaimer) parts.push(`<div class="foot-disc">${escapeHtml(legal.disclaimer)}</div>`)
+  parts.push(
+    `<div class="foot-cookie">This page uses cookies and analytics to measure traffic and improve the experience. By continuing to browse, you consent to this use.</div>`
+  )
+  return `<footer class="site-footer">${parts.join('')}</footer>`
+}
+
+function shell(brand: Brand, title: string, body: string, script = '', head = '', footerHtml = ''): string {
   return `<!DOCTYPE html>
 <html lang="en" data-theme="${brand.isDark ? 'dark' : 'light'}">
 <head>
@@ -175,24 +205,29 @@ function shell(brand: Brand, title: string, body: string, script = '', head = ''
     .err { color: #ff6b6b; font-size: .9rem; margin-top: .75rem; min-height: 1.1rem; }
     .slot { display: block; width: 100%; text-align: left; margin: .4rem 0; background: ${brand.card}; color: ${brand.text}; }
     .muted { color: ${brand.muted}; }
-    .consent { max-width: 720px; margin: 0 auto; padding: 0 1.25rem 2rem; font-size: .72rem; color: ${brand.muted}; }
+    .site-footer { max-width: 720px; margin: 0 auto; padding: 1.5rem 1.25rem 2.5rem; font-size: .72rem; color: ${brand.muted}; border-top: 1px solid ${brand.isDark ? 'rgba(255,255,255,.1)' : 'rgba(2,12,49,.1)'}; }
+    .site-footer > div { margin-top: .4rem; }
+    .foot-biz { font-weight: 600; }
+    .site-footer a { color: ${brand.muted}; }
   </style>
 </head>
 <body>
   <main class="wrap">
     ${body}
   </main>
-  <footer class="consent">This page uses cookies and analytics to measure traffic and improve the experience. By continuing to browse, you consent to this use.</footer>
+  ${footerHtml}
   ${script ? `<script>${script}</script>` : ''}
 </body>
 </html>`
 }
 
-function logoTag(funnel: Record<string, any>): string {
-  return funnel.logo_url ? `<img class="logo" src="${escapeAttr(funnel.logo_url)}" alt="" />` : ''
+// Only emit an <img> when a non-empty URL resolves — a coach with no logo /
+// null avatar + no headshot override renders cleanly with no broken image.
+function imgTag(url: string | null, cls: string): string {
+  return url ? `<img class="${cls}" src="${escapeAttr(url)}" alt="" />` : ''
 }
 
-function landingPage(funnel: Record<string, any>, brand: Brand, head: string): string {
+function landingPage(funnel: Record<string, any>, b: Branding): string {
   const lp = (funnel.landing_page || {}) as Record<string, any>
   const headline = escapeHtml(lp.headline || 'A free training for you')
   const sub = lp.subheadline ? `<p class="sub">${escapeHtml(lp.subheadline)}</p>` : ''
@@ -208,7 +243,7 @@ function landingPage(funnel: Record<string, any>, brand: Brand, head: string): s
     : ''
 
   const body = `
-    ${logoTag(funnel)}
+    ${imgTag(b.logoUrl, 'logo')}
     <h1>${headline}</h1>
     ${sub}
     ${problems ? `<h2>Sound familiar?</h2><ul>${problems}</ul>` : ''}
@@ -239,18 +274,16 @@ function landingPage(funnel: Record<string, any>, brand: Brand, head: string): s
         .then(function(r){ return r.json().then(function(j){ return { ok: r.ok, j: j }; }); })
         .then(function(res){
           if (!res.ok) { err.textContent = res.j && res.j.error ? res.j.error : 'Something went wrong'; btn.disabled = false; return; }
-          // Fire the conversion into the coach's own pixels, then advance. fbq/gtag
-          // use sendBeacon, so the events survive the immediate navigation.
           fbTrack('Lead'); gaEvent('generate_lead');
           window.location.href = nextUrl(res.j && res.j.next ? res.j.next : 'training');
         })
         .catch(function(){ err.textContent = 'Network error, please try again'; btn.disabled = false; });
     });`
 
-  return shell(brand, lp.headline || 'Free training', body, script, head)
+  return shell(b.brand, lp.headline || 'Free training', body, script, b.head, footer(b.brand, b.businessName, b.legal))
 }
 
-function trainingPage(funnel: Record<string, any>, brand: Brand, head: string, takeaways: string[]): string {
+function trainingPage(funnel: Record<string, any>, b: Branding, takeaways: string[]): string {
   const tp = (funnel.training_page || {}) as Record<string, any>
   const headline = escapeHtml(tp.headline || 'Your training')
   const sub = tp.subheadline ? `<p class="sub">${escapeHtml(tp.subheadline)}</p>` : ''
@@ -261,25 +294,24 @@ function trainingPage(funnel: Record<string, any>, brand: Brand, head: string, t
     : ''
 
   const body = `
-    ${logoTag(funnel)}
+    ${imgTag(b.logoUrl, 'logo')}
     <h1>${headline}</h1>
     ${sub}
     ${video}
     ${kt}
     <a class="btn" href="?page=book${subQuery(funnel)}">${cta}</a>`
 
-  return shell(brand, tp.headline || 'Your training', body, '', head)
+  return shell(b.brand, tp.headline || 'Your training', body, '', b.head, footer(b.brand, b.businessName, b.legal))
 }
 
-function bookPage(funnel: Record<string, any>, brand: Brand, head: string): string {
+function bookPage(funnel: Record<string, any>, b: Branding): string {
   const bp = (funnel.booking_page || {}) as Record<string, any>
   const headline = escapeHtml(bp.headline || 'Book your call')
   const sub = bp.subheadline ? `<p class="sub">${escapeHtml(bp.subheadline)}</p>` : `<p class="sub">Pick a time that works for you.</p>`
-  const headshot = funnel.headshot_url ? `<img class="headshot" src="${escapeAttr(funnel.headshot_url)}" alt="" />` : ''
 
   const body = `
-    ${logoTag(funnel)}
-    ${headshot}
+    ${imgTag(b.logoUrl, 'logo')}
+    ${imgTag(b.headshotUrl, 'headshot')}
     <h1>${headline}</h1>
     ${sub}
     <div id="slots" class="card"><p class="muted">Loading available times…</p></div>
@@ -303,15 +335,15 @@ function bookPage(funnel: Record<string, any>, brand: Brand, head: string): stri
       if (!slots.length) { slotsEl.innerHTML = '<p class="muted">No times available right now. Please check back soon.</p>'; return; }
       slotsEl.innerHTML = '<h2>Available times</h2>';
       slots.slice(0, 24).forEach(function(s){
-        var b = document.createElement('button'); b.type='button'; b.className='slot'; b.textContent = fmt(s.start);
-        b.addEventListener('click', function(){
+        var bn = document.createElement('button'); bn.type='button'; bn.className='slot'; bn.textContent = fmt(s.start);
+        bn.addEventListener('click', function(){
           document.getElementById('slot_start').value = s.start;
           formEl.style.display = 'block';
           document.querySelectorAll('.slot').forEach(function(x){ x.style.outline='none'; });
-          b.style.outline = '2px solid ' + ${JSON.stringify(brand.secondary)};
+          bn.style.outline = '2px solid ' + ${JSON.stringify(b.brand.secondary)};
           formEl.scrollIntoView({ behavior:'smooth' });
         });
-        slotsEl.appendChild(b);
+        slotsEl.appendChild(bn);
       });
     }).catch(function(){ slotsEl.innerHTML = '<p class="err">Could not load times.</p>'; });
     formEl.addEventListener('submit', function(e){
@@ -325,7 +357,6 @@ function bookPage(funnel: Record<string, any>, brand: Brand, head: string): stri
         .then(function(r){ return r.json().then(function(j){ return { ok:r.ok, j:j }; }); })
         .then(function(res){
           if (!res.ok) { err.textContent = res.j && res.j.error ? res.j.error : 'Booking failed'; btn.disabled=false; return; }
-          // Booking conversion into the coach's own pixels.
           fbTrack('Schedule'); gaEvent('schedule');
           formEl.style.display='none'; slotsEl.style.display='none';
           document.getElementById('done').style.display='block';
@@ -334,7 +365,7 @@ function bookPage(funnel: Record<string, any>, brand: Brand, head: string): stri
         .catch(function(){ err.textContent='Network error, please try again'; btn.disabled=false; });
     });`
 
-  return shell(brand, bp.headline || 'Book your call', body, script, head)
+  return shell(b.brand, bp.headline || 'Book your call', body, script, b.head, footer(b.brand, b.businessName, b.legal))
 }
 
 function videoEmbed(url: unknown): string {
@@ -346,7 +377,6 @@ function videoEmbed(url: unknown): string {
   if (yt) return `<div class="video"><iframe src="https://www.youtube.com/embed/${escapeAttr(yt[1])}" allowfullscreen allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe></div>`
   const vim = u.match(/vimeo\.com\/(?:video\/)?(\d+)/)
   if (vim) return `<div class="video"><iframe src="https://player.vimeo.com/video/${escapeAttr(vim[1])}" allowfullscreen allow="autoplay; fullscreen; picture-in-picture"></iframe></div>`
-  // Direct file — a plain HTML5 player.
   return `<div class="video"><video src="${escapeAttr(u)}" controls playsinline></video></div>`
 }
 
