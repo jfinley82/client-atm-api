@@ -91,7 +91,9 @@ function utcLabel(startIso: string): string {
 
 // Log the server-side 'booked' funnel event, attributing to the lead by matching
 // email on that funnel (a client-supplied lead_id is never trusted). Best-effort.
-async function logFunnelBooked(funnelId: string, email: string): Promise<void> {
+// Returns the resolved lead id (or null) so the caller can attribute the
+// confirmation email's opens/clicks to the same lead (Phase 5a).
+async function logFunnelBooked(funnelId: string, email: string): Promise<string | null> {
   try {
     const { data: lead } = await supabase
       .from('funnel_leads')
@@ -102,8 +104,10 @@ async function logFunnelBooked(funnelId: string, email: string): Promise<void> {
       .limit(1)
       .maybeSingle()
     await supabase.from('funnel_events').insert({ funnel_id: funnelId, lead_id: lead?.id ?? null, event_type: 'booked' })
+    return (lead?.id as string) ?? null
   } catch (err) {
     console.error('[calendar/book] funnel booked event', err)
+    return null
   }
 }
 
@@ -206,7 +210,7 @@ async function bookGooglePath(
   }
   await supabase.from('bookings').update({ google_event_id: event.eventId, meeting_url: meetingUrl }).eq('id', reserved.id)
 
-  await logFunnelBooked(funnelRow.id as string, email)
+  const leadId = await logFunnelBooked(funnelRow.id as string, email)
 
   // Confirmation + .ics to the lead (organizer = the coach's connected calendar),
   // and a best-effort notification to the coach. Never fail the booking on email.
@@ -222,13 +226,14 @@ async function bookGooglePath(
     organizerEmail,
     attendeeEmail: email,
   })
-  await sendBookingConfirmationEmail({ email, name, startLabel, joinUrl: meetingUrl, icsContent: ics })
+  await sendBookingConfirmationEmail({ email, name, startLabel, joinUrl: meetingUrl, icsContent: ics, funnelId: funnelRow.id as string, leadId })
   await sendCoachBookingNotification({
     coachEmail: conn.calendar_email || '',
     leadName: name,
     leadEmail: email,
     startLabel,
     answers: av.answers,
+    funnelId: funnelRow.id as string,
   })
 
   return res.status(200).json({ booking_id: reserved.id, join_url: meetingUrl, meeting_url: meetingUrl, start_time: startIso })
@@ -294,7 +299,7 @@ async function bookLegacyPath(
 
   // Funnel attribution when this legacy booking still came from a funnel (owner
   // not Google-connected).
-  if (funnelRow) await logFunnelBooked(funnelRow.id as string, email)
+  const leadId = funnelRow ? await logFunnelBooked(funnelRow.id as string, email) : null
 
   const startLabel = utcLabel(startIso)
   const ics = buildBookingIcs({
@@ -307,7 +312,14 @@ async function bookLegacyPath(
     organizerEmail: process.env.ZOOM_HOST_EMAIL || 'noreply@mail.microtrainingmethod.com',
     attendeeEmail: email,
   })
-  await sendBookingConfirmationEmail({ email, name, startLabel, joinUrl: meeting.join_url, icsContent: ics })
+  await sendBookingConfirmationEmail({
+    email,
+    name,
+    startLabel,
+    joinUrl: meeting.join_url,
+    icsContent: ics,
+    ...(funnelRow ? { funnelId: funnelRow.id as string, leadId } : {}),
+  })
 
   return res.status(200).json({ booking_id: reserved.id, join_url: meeting.join_url, start_time: startIso })
 }

@@ -92,6 +92,48 @@ export async function sendTierWelcomeEmail(
   }
 }
 
+// ---- funnel-scoped email tracking (Phase 5a) --------------------------------
+// A funnel-scoped send carries Resend `tags` (funnel_id, lead_id, kind) for
+// Resend-side filtering AND writes a funnel_email_sends row keyed by the returned
+// message id, so a later open/click/bounce webhook can resolve the send back to
+// its funnel + lead. Both are additive: a send with no funnel context behaves
+// exactly as before (no tags, no record).
+
+// Resend tag values are ASCII [A-Za-z0-9_-] only. UUIDs and our fixed kind
+// literals already qualify; the guard is defense so a bad value can never make a
+// send throw (the email must go out regardless of tracking).
+const TAG_SAFE = /^[A-Za-z0-9_-]+$/
+function funnelTags(funnelId?: string, leadId?: string | null, kind?: string): { name: string; value: string }[] {
+  const tags: { name: string; value: string }[] = []
+  if (funnelId && TAG_SAFE.test(funnelId)) tags.push({ name: 'funnel_id', value: funnelId })
+  if (leadId && TAG_SAFE.test(leadId)) tags.push({ name: 'lead_id', value: leadId })
+  if (kind && TAG_SAFE.test(kind)) tags.push({ name: 'kind', value: kind })
+  return tags
+}
+
+// Record a funnel-scoped send. Best-effort — a tracking-row failure must never
+// affect the email that already went out.
+async function recordFunnelEmailSend(row: {
+  funnelId: string
+  leadId: string | null
+  kind: string
+  messageId: string | null
+  status: 'sent' | 'failed'
+}): Promise<void> {
+  try {
+    const { error } = await supabase.from('funnel_email_sends').insert({
+      funnel_id: row.funnelId,
+      lead_id: row.leadId,
+      kind: row.kind,
+      resend_message_id: row.messageId,
+      status: row.status,
+    })
+    if (error) console.error('[email] funnel_email_sends record failed', error)
+  } catch (err) {
+    console.error('[email] funnel_email_sends record threw', err)
+  }
+}
+
 // Booking confirmation with the Zoom join link and an attached .ics so the
 // meeting lands on the customer's calendar. Best-effort BY CONTRACT: never
 // throws — a mail hiccup must not fail a booking that already succeeded (the
@@ -99,19 +141,26 @@ export async function sendTierWelcomeEmail(
 // (no dedicated template alias for this yet), MTM light theme, from the
 // verified MTM domain. startLocalLabel is a human-readable time string the
 // caller formats; the .ics carries the authoritative UTC times.
+//
+// funnelId/leadId (Phase 5a): when present, the send is tagged and recorded in
+// funnel_email_sends so its opens/clicks attribute to this lead.
 export async function sendBookingConfirmationEmail(opts: {
   email: string
   name: string | null
   startLabel: string
   joinUrl: string
   icsContent: string
+  funnelId?: string
+  leadId?: string | null
 }): Promise<void> {
   try {
-    const { error } = await resend.emails.send({
+    const kind = 'booking_confirmation'
+    const { data, error } = await resend.emails.send({
       from: 'Micro-Training Method <noreply@mail.microtrainingmethod.com>',
       to: opts.email,
       subject: 'Your call is booked',
       attachments: [{ filename: 'invite.ics', content: Buffer.from(opts.icsContent) }],
+      ...(opts.funnelId ? { tags: funnelTags(opts.funnelId, opts.leadId, kind) } : {}),
       html: `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
 <body style="margin:0; padding:0; background-color:#F4F6F9;">
@@ -147,6 +196,15 @@ export async function sendBookingConfirmationEmail(opts: {
   </table>
 </body></html>`,
     })
+    if (opts.funnelId) {
+      await recordFunnelEmailSend({
+        funnelId: opts.funnelId,
+        leadId: opts.leadId ?? null,
+        kind,
+        messageId: data?.id ?? null,
+        status: error ? 'failed' : 'sent',
+      })
+    }
     if (error) throw new Error(error.message)
   } catch (err) {
     console.error(`[email] booking confirmation send failed (to=${opts.email})`, err)
@@ -156,15 +214,20 @@ export async function sendBookingConfirmationEmail(opts: {
 // Coach notification when a lead books from their funnel. Best-effort BY
 // CONTRACT: never throws — a mail hiccup must not fail a booking that already
 // succeeded. Short, plain, MTM-styled; includes the time and the lead's answers.
+// funnelId (Phase 5a): the notification is tagged and recorded, but with
+// lead_id NULL by design — a coach opening their own operational notice is NOT
+// lead engagement, so it must never post an email_opened onto the lead's feed.
 export async function sendCoachBookingNotification(opts: {
   coachEmail: string
   leadName: string
   leadEmail: string
   startLabel: string
   answers: Array<{ label: string; answer: string }>
+  funnelId?: string
 }): Promise<void> {
   try {
     if (!opts.coachEmail) return
+    const kind = 'coach_booking_notification'
     const answerRows = opts.answers
       .filter((a) => a.answer)
       .map(
@@ -172,10 +235,11 @@ export async function sendCoachBookingNotification(opts: {
           `<tr><td style="font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;padding:2px 12px 2px 0;vertical-align:top;">${escapeHtml(a.label)}</td><td style="font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#0B1120;padding:2px 0;">${escapeHtml(a.answer)}</td></tr>`
       )
       .join('')
-    const { error } = await resend.emails.send({
+    const { data, error } = await resend.emails.send({
       from: 'Micro-Training Method <noreply@mail.microtrainingmethod.com>',
       to: opts.coachEmail,
       subject: `New booking: ${opts.leadName || opts.leadEmail}`,
+      ...(opts.funnelId ? { tags: funnelTags(opts.funnelId, null, kind) } : {}),
       html: `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background-color:#F4F6F9;">
@@ -194,6 +258,15 @@ export async function sendCoachBookingNotification(opts: {
   </table>
 </body></html>`,
     })
+    if (opts.funnelId) {
+      await recordFunnelEmailSend({
+        funnelId: opts.funnelId,
+        leadId: null,
+        kind,
+        messageId: data?.id ?? null,
+        status: error ? 'failed' : 'sent',
+      })
+    }
     if (error) throw new Error(error.message)
   } catch (err) {
     console.error(`[email] coach booking notification failed (to=${opts.coachEmail})`, err)
