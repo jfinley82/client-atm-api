@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { sanitizeBrandColor, sanitizeBrandFont, sanitizeTracking, Tracking, DEFAULT_BRAND_PRIMARY, DEFAULT_BRAND_SECONDARY } from '../../lib/funnels'
-import { loadBusinessSettings, BusinessSettings, Legal } from '../../lib/businessSettings'
+import { loadBusinessSettings, isValidHttpUrl, BusinessSettings, Legal } from '../../lib/businessSettings'
 
 // PUBLIC — no auth. Resolves a LIVE funnel from the request's subdomain and
 // serves its real pages, routed by ?page= (landing | training | book; default
@@ -143,8 +143,11 @@ const PIXEL_EVENT_JS = `
 // FB/Google ads, so this is a compliance requirement.
 function footer(brand: Brand, businessName: string | null, legal: Legal): string {
   const links: string[] = []
+  // Sanitize on read — re-validate each legal URL is http(s) before emitting it
+  // into an href, so a tampered or pre-validation value can't render a
+  // javascript: link. Same defense-in-depth the brand fields use.
   const link = (url: string | undefined, label: string) =>
-    url ? `<a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${label}</a>` : ''
+    url && isValidHttpUrl(url) ? `<a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${label}</a>` : ''
   const p = link(legal.privacy_url, 'Privacy')
   const t = link(legal.terms_url, 'Terms')
   const c = link(legal.contact_url, 'Contact')
