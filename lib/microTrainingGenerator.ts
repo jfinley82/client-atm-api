@@ -3,6 +3,7 @@ import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines
 import { extractJson, GenerationParseError } from './aiJson'
 import { logApiCost } from './apiCostLog'
 import { SALES_FRAMEWORK_CANONICAL, SALES_SCRIPT_BEATS, OBJECTION_LOOPS, type ObjectionLoop } from './salesFrameworksCanonical'
+import { COPYWRITING_CANONICAL } from './copywritingCanonical'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -55,11 +56,17 @@ export type MtObjection = {
 }
 // A lightweight per-angle preview so the Angle step can switch instantly without
 // regenerating the whole training. Derived from the meta unit's topic options.
+// title + angle are the INTERNAL positioning concept (the topic the coach picks
+// between); the landing_* / curiosity_bullets / cta_label are the PUBLIC opt-in
+// copy built FROM that angle, grounded on the copywriting canonical — never the
+// raw angle title.
 export type MtAnglePreview = {
   title: string
   angle: string
   landing_headline: string
   landing_subheadline: string
+  curiosity_bullets: string[]
+  cta_label: string
 }
 
 export type MicroTraining = {
@@ -377,24 +384,33 @@ ${SHARED_RULES}`,
   },
   angle_previews: {
     key: 'angle_previews',
-    maxTokens: 2500,
-    prompt: `You write a LIGHT landing preview for each candidate training angle, so the coach can switch angles instantly in the Build wizard without regenerating the whole training. You are given the ANGLE OPTIONS (each with a title, angle, and why). For each option, return the training title, the angle, and a landing-page headline + sub-headline for that angle.
+    maxTokens: 3500,
+    prompt: `You write the LANDING opt-in preview for each candidate training angle, so the coach can switch angles instantly in the Build wizard without regenerating the whole training. You are given the ANGLE OPTIONS (each with a title, angle, and why). Ground the copy in the copywriting canonical below.
+
+${COPYWRITING_CANONICAL}
+
+For each ANGLE OPTION, keep its title and angle as the INTERNAL positioning concept, and build the PUBLIC opt-in copy FROM that angle — the landing headline, sub-headline, exactly 3 curiosity bullets, and the CTA label:
 
 {
   "angle_previews": [
     {
-      "title": "the training title for this angle (from the option)",
-      "angle": "the angle/hook for this option (from the option)",
-      "landing_headline": "a punchy landing-page headline for this angle, in the audience's language",
-      "landing_subheadline": "a one-line sub-headline that clarifies the promise for this angle"
+      "title": "the training title for this angle (from the option — the internal concept, unchanged)",
+      "angle": "the angle/hook for this option (from the option — the internal concept, unchanged)",
+      "landing_headline": "the public opt-in headline built FROM this angle — the transformation/outcome, never the raw angle title",
+      "landing_subheadline": "names WHO it is for, clarifies the promise, teases the mechanism without teaching it",
+      "curiosity_bullets": ["bullet 1", "bullet 2", "bullet 3"],
+      "cta_label": "a first-person, action CTA that references the training"
     }
   ]
 }
 
 Rules:
-- One preview per ANGLE OPTION given, in the same order, keeping each option's title and angle.
-- landing_headline and landing_subheadline are grounded in this blueprint's problem and this audience's language — specific, not generic.
-- These are lightweight previews only — a headline + sub-headline, no full page copy.
+- One preview per ANGLE OPTION given, in the same order, keeping each option's title and angle exactly as the internal concept.
+- landing_headline is built FROM the angle and MUST NOT equal the angle's title (or a trivial restatement of it) — promise the outcome, not the training, in this audience's real language.
+- landing_subheadline names the audience explicitly and teases the mechanism without teaching it.
+- curiosity_bullets: EXACTLY 3, declarative, selling the watching experience — no rhetorical-question openers, no "most [X]" opener, no "not X, it's Y" split, no em-dash splitting a clause.
+- cta_label: first person, an action, references the training (e.g. "Yes! Send me the free training").
+- Honest, non-guru: no manufactured scarcity, no inflated or guaranteed promises, no hype vocabulary.
 ${SHARED_RULES}`,
   },
 }
@@ -551,9 +567,22 @@ export function coerceAnglePreviews(v: unknown): MtAnglePreview[] {
       angle: asString(r.angle),
       landing_headline: asString(r.landing_headline),
       landing_subheadline: asString(r.landing_subheadline),
+      curiosity_bullets: coerceCuriosityBullets(r.curiosity_bullets),
+      cta_label: asString(r.cta_label).trim().length > 0 ? asString(r.cta_label) : 'Watch the free training',
     }))
     .filter((p) => p.title.trim().length > 0 || p.landing_headline.trim().length > 0)
     .slice(0, 5)
+}
+
+// Exactly 3 non-empty curiosity bullets: keep the non-empty ones (max 3), pad to
+// 3 with empty strings so the shape is stable for the UI's three bullet slots.
+function coerceCuriosityBullets(v: unknown): string[] {
+  const bullets = asStringArray(v)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .slice(0, 3)
+  while (bullets.length < 3) bullets.push('')
+  return bullets
 }
 
 // One Anthropic call for a unit: logs cost and returns its text + whether the
