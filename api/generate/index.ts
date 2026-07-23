@@ -46,6 +46,7 @@ export const config = { maxDuration: 90 }
 
 const REGEN_TARGETS = new Set([
   'slides',
+  'warm_invite',
   'emails',
   'book_a_call',
   'workbook',
@@ -175,6 +176,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const update: Record<string, unknown> = {}
 
       if ('slides' in save) update.slides = coerceSlides(save.slides)
+      if ('warm_invite_emails' in save) update.warm_invite_emails = coerceEmails(save.warm_invite_emails)
       if ('emails' in save) update.emails = coerceEmails(save.emails)
       if ('book_a_call_emails' in save) update.book_a_call_emails = coerceEmails(save.book_a_call_emails)
       if ('workbook' in save) update.workbook = coerceWorkbook(save.workbook)
@@ -289,6 +291,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           case 'slides':
             update.slides = (await regenerateAsset(userId, 'slides', inputs, chosenTopic)).slides
             break
+          case 'warm_invite':
+            update.warm_invite_emails = (await regenerateAsset(userId, 'warm_invite', inputs, chosenTopic)).warm_invite_emails
+            break
           case 'emails':
             update.emails = (await regenerateAsset(userId, 'emails', inputs, chosenTopic)).emails
             break
@@ -376,6 +381,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             outline: generated.outline,
             slides: generated.slides,
             workbook: generated.workbook,
+            warm_invite_emails: generated.warm_invite_emails,
             emails: generated.emails,
             book_a_call_emails: generated.book_a_call_emails,
             recording_tips: generated.recording_tips,

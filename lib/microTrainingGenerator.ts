@@ -4,6 +4,7 @@ import { extractJson, GenerationParseError } from './aiJson'
 import { logApiCost } from './apiCostLog'
 import { SALES_FRAMEWORK_CANONICAL, SALES_SCRIPT_BEATS, OBJECTION_LOOPS, type ObjectionLoop } from './salesFrameworksCanonical'
 import { COPYWRITING_CANONICAL } from './copywritingCanonical'
+import { EMAIL_CANONICAL } from './emailCanonical'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -77,6 +78,7 @@ export type MicroTraining = {
   outline: MtOutlineItem[]
   slides: MtSlide[]
   workbook: MtWorkbook
+  warm_invite_emails: MtEmail[]
   emails: MtEmail[]
   book_a_call_emails: MtEmail[]
   recording_tips: MtRecordingTip[]
@@ -131,6 +133,7 @@ export type AssetUnit =
   | 'slides'
   | 'workbook'
   | 'recording_tips'
+  | 'warm_invite'
   | 'emails'
   | 'book_a_call'
   | 'sales_script'
@@ -287,30 +290,66 @@ Rules:
 - Tips are for recording a solo teaching video (delivery, energy on camera, framing, keeping momentum through the arc), not for facilitating a live session or public speaking generalities.
 ${SHARED_RULES}`,
   },
+  warm_invite: {
+    key: 'warm_invite',
+    maxTokens: 4500,
+    prompt: `You write the WARM-MARKET INVITE sequence (3 broadcast emails) the coach sends to their EXISTING warm list BEFORE anyone opts in — to earn the click to the opt-in page so they register and watch the free training. Ground the copy in the copywriting canonical and the email canonical below (the Warm-market invite per-type job).
+
+${COPYWRITING_CANONICAL}
+
+${EMAIL_CANONICAL}
+
+{
+  "warm_invite_emails": [
+    { "email_number": 1, "send_timing": "day 1 — announce the training", "subject": "subject line", "body": "lead with the reader's problem in 'you' language, tease the training's payoff, invite them to register. End with the opt-in CTA using [REGISTER_LINK]." },
+    { "email_number": 2, "send_timing": "day 3 — the specific result", "subject": "subject line", "body": "go deeper on the transformation the training opens the door to and who it is for, in 'you' language. End with [REGISTER_LINK]." },
+    { "email_number": 3, "send_timing": "day 5 — last call to register", "subject": "subject line", "body": "one clear, honest reason to register and watch now. End with [REGISTER_LINK]." }
+  ]
+}
+
+Rules:
+- Exactly 3 emails, signed by the coach (use the presenter name). These go to an EXISTING warm audience who have NOT opted in yet, so the job is to earn the registration — do not talk as if they already registered.
+- Reference the training's promise/angle and the offer's transformation, grounded in this blueprint and this audience. Second person, honest, non-guru: no manufactured scarcity, no inflated or guaranteed promises, no hype vocabulary.
+- One CTA per email, to the opt-in page, using the token [REGISTER_LINK]. Do not use the training/watch link or the call/offer link here — this is pre-opt-in.
+- Format each body per the email canonical: short paragraphs of 2-3 sentences, each separated by a blank line. Never one block.
+${SHARED_RULES}`,
+  },
   emails: {
     key: 'emails',
     maxTokens: 4000,
-    prompt: `You write the registration email sequence (3 emails) that gets a registrant to actually watch the recorded micro-training video.
+    prompt: `You write the post-opt-in WATCH sequence (3 emails) that gets a registrant to actually watch the recorded micro-training video. Email 1 is the CONFIRMATION; emails 2-3 are WATCH NUDGES to someone who registered but has NOT watched yet. Ground the copy in the copywriting canonical and the email canonical below (email 1 is the Confirmation per-type job; emails 2-3 are the Watch nudge job).
+
+${COPYWRITING_CANONICAL}
+
+${EMAIL_CANONICAL}
 
 {
   "emails": [
-    { "email_number": 1, "send_timing": "immediately after registration", "subject": "subject line", "body": "full email body — warm, direct, in the coach's voice. Confirm registration, remind them what they will learn and why it matters, end with the video link as [TRAINING_LINK]." },
-    { "email_number": 2, "send_timing": "1 day after registration if not yet watched", "subject": "subject line", "body": "reference the specific problem this training solves, build mild real urgency, end with [TRAINING_LINK]." },
-    { "email_number": 3, "send_timing": "final reminder", "subject": "subject line", "body": "final nudge, one clear reason to watch now, end with [TRAINING_LINK]." }
+    { "email_number": 1, "send_timing": "immediately after registration", "subject": "subject line", "body": "the confirmation — warm thanks, they're in, what they'll get (specific), one watch CTA using [TRAINING_LINK], a short 'here's what to expect', and prime the next email. Add a P.S. with a backup [TRAINING_LINK]." },
+    { "email_number": 2, "send_timing": "1 day after registration if not yet watched", "subject": "subject line", "body": "name that they registered and haven't watched yet, give ONE specific reason to watch now tied to the problem this training solves. One CTA, end with [TRAINING_LINK]." },
+    { "email_number": 3, "send_timing": "final reminder if still not watched", "subject": "subject line", "body": "a final watch-nudge to someone who registered but still hasn't watched — one clear reason to watch now. One CTA, end with [TRAINING_LINK]." }
   ]
 }
 
 Rules:
 - Exactly 3 emails, grounded in this blueprint's problem and this audience's language, signed by the coach (use the presenter name).
+- Email 1 is the confirmation (deliver the watch link, set the expectation to watch now, prime the next email, P.S. backup link); emails 2-3 explicitly nudge someone who opted in but hasn't watched (name that they registered and haven't watched yet). Teaching-first, honest, non-guru.
 - These emails are about WATCHING the recorded video — no live-session language (no "attend", "seat", "join us live"). Do not pitch the offer or a call here.
+- Format each body per the email canonical: short paragraphs of 2-3 sentences, each separated by a blank line. Never one block.
 ${SHARED_RULES}`,
   },
   book_a_call: {
     key: 'book_a_call',
-    maxTokens: 4000,
-    prompt: `You write the post-video CLOSING email sequence (3 emails) for a viewer who watched the recorded training. The sequence is driven by the CTA in the grounding — read the CTA block and produce the matching variant.
+    maxTokens: 4500,
+    prompt: `You write the post-video CONVERSION email sequence (3 emails) for a viewer who watched the recorded training — these close the loop and get them to take the next step. The sequence is driven by the CTA in the grounding — read the CTA block and produce the matching variant. These are the strongest emails in the suite: more direct than a watch-nudge, grounded in the copywriting canonical, the house sales methodology, and the email canonical below (the Book-a-call / conversion per-type job).
 
-Output key is always "book_a_call_emails" (this is the training's closing sequence, whatever the CTA):
+${COPYWRITING_CANONICAL}
+
+${SALES_FRAMEWORK_CANONICAL}
+
+${EMAIL_CANONICAL}
+
+Output key is always "book_a_call_emails" (this is the training's conversion sequence, whatever the CTA):
 
 {
   "book_a_call_emails": [
@@ -321,13 +360,14 @@ Output key is always "book_a_call_emails" (this is the training's closing sequen
 }
 
 Branch on the CTA TYPE in the grounding:
-- cta_type = book_call: 3 emails that softly invite the viewer to BOOK A CALL. Email 1 warm and personal, referencing what they just learned and the shift it created; email 2 names the single most common objection to booking and reframes it with empathy; email 3 a final soft nudge. EVERY email ends with the token [BOOK_A_CALL_LINK].
-- cta_type = sell_program: 3 emails that softly invite the viewer to GET THE PROGRAM DIRECTLY. Email 1 warm and personal, referencing what they just learned and the shift it created; email 2 names the single most common objection to buying and reframes it with empathy; email 3 a final soft nudge. EVERY email ends with the token [OFFER_LINK].
+- cta_type = book_call: 3 emails that invite the viewer to BOOK THE IMPLEMENTATION CALL. Email 1 names the specific transformation they now see is possible and the confident next step; email 2 names the real cost of staying stuck and reframes the main objection to booking; email 3 a clear, direct final call to book. EVERY email ends with the token [BOOK_A_CALL_LINK].
+- cta_type = sell_program: 3 emails that invite the viewer to GET THE PROGRAM DIRECTLY. Email 1 names the specific transformation and the confident next step; email 2 names the real cost of staying stuck and reframes the main objection to buying; email 3 a clear, direct final call to get the program. EVERY email ends with the token [OFFER_LINK].
 
 Rules for BOTH variants:
-- Exactly 3 emails, grounded in this blueprint's problem/solution, naming the transformation and the blueprint's suggested_offer, signed by the coach (use the presenter name).
-- Teaching-first: reference what they learned, no hard pitch, no false scarcity.
-- Use ONLY the target link the CTA block designates — do not include the other link.
+- Exactly 3 emails, grounded in this blueprint's problem/solution, naming the specific transformation and the blueprint's suggested_offer, signed by the coach (use the presenter name).
+- Bring umph: stronger and more direct than the watch-nudges. Name the specific transformation, the real cost of staying stuck, and a confident, clear next step to book. Still honest and non-guru: no manufactured scarcity, no hype, no false urgency, no inflated or guaranteed promises.
+- One CTA per email. Use ONLY the target link the CTA block designates — do not include the other link.
+- Format each body per the email canonical: short paragraphs of 2-3 sentences, each separated by a blank line. Never one block.
 ${SHARED_RULES}`,
   },
   sales_script: {
@@ -655,6 +695,8 @@ async function runUnit(
       return { workbook: coerceWorkbook(parsed.workbook) }
     case 'recording_tips':
       return { recording_tips: coerceRecordingTips(parsed.recording_tips) }
+    case 'warm_invite':
+      return { warm_invite_emails: coerceEmails(parsed.warm_invite_emails) }
     case 'emails':
       return { emails: coerceEmails(parsed.emails) }
     case 'book_a_call':
@@ -684,7 +726,7 @@ export async function generateMicroTraining(userId: string, inputs: GeneratorInp
   // Wave 2: the remaining full-length units, plus the two net-new sales assets,
   // all aligned to the final title. angle_previews is grounded on the meta unit's
   // topic options (withTopics), so it runs in the same wave with that grounding.
-  const rest: AssetUnit[] = ['slides', 'workbook', 'recording_tips', 'emails', 'book_a_call', 'sales_script', 'objections']
+  const rest: AssetUnit[] = ['slides', 'workbook', 'recording_tips', 'warm_invite', 'emails', 'book_a_call', 'sales_script', 'objections']
   const titledGrounding = withTitle(grounding, chosenTopic)
   const restParts = await Promise.all([
     ...rest.map((u) => runUnit(userId, u, titledGrounding, inputs.voiceContext)),
@@ -701,6 +743,7 @@ export async function generateMicroTraining(userId: string, inputs: GeneratorInp
     outline: merged.outline ?? [],
     slides: merged.slides ?? [],
     workbook: merged.workbook ?? { title: '', intro: '', sections: [], keyTakeaways: [] },
+    warm_invite_emails: merged.warm_invite_emails ?? [],
     emails: merged.emails ?? [],
     book_a_call_emails: merged.book_a_call_emails ?? [],
     recording_tips: merged.recording_tips ?? [],
