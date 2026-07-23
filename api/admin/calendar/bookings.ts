@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
-import { requireActiveUser } from '../../../lib/auth'
+import { requireAdmin } from '../../../lib/auth'
 import { setCors, noStore } from '../../../lib/cors'
 
 // GET /api/admin/calendar/bookings — admin-gated list of all bookings for the
@@ -10,18 +10,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET') return res.status(405).end()
   noStore(res)
 
-  const userId = await requireActiveUser(req, res)
+  const userId = await requireAdmin(req, res)
   if (!userId) return
-
-  const { data: actingUser } = await supabase
-    .from('users')
-    .select('role')
-    .eq('id', userId)
-    .single()
-
-  if (!actingUser || actingUser.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden' })
-  }
 
   try {
     const { data, error } = await supabase

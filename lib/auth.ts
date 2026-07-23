@@ -115,3 +115,20 @@ export async function requireActiveUser(req: any, res: any): Promise<string | nu
 
   return payload.userId
 }
+
+/**
+ * Admin gate. Composes requireActiveUser, then checks users.role === 'admin'.
+ * Writes the error response (401 / 403 account_suspended / 403 Forbidden) and
+ * returns null on failure; returns the userId on success.
+ */
+export async function requireAdmin(req: any, res: any): Promise<string | null> {
+  const userId = await requireActiveUser(req, res)
+  if (!userId) return null
+
+  const { data } = await supabase.from('users').select('role').eq('id', userId).single()
+  if (!data || data.role !== 'admin') {
+    res.status(403).json({ error: 'Forbidden' })
+    return null
+  }
+  return userId
+}
