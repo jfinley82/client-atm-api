@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
 import { extractJson, GenerationParseError } from './aiJson'
 import { logApiCost } from './apiCostLog'
+import { SALES_FRAMEWORK_CANONICAL, SALES_SCRIPT_BEATS, OBJECTION_LOOPS, type ObjectionLoop } from './salesFrameworksCanonical'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -33,6 +34,32 @@ export type MtWorkbook = { title: string; intro: string; sections: MtWorkbookSec
 export type MtEmail = { email_number: number; send_timing: string; subject: string; body: string }
 export type MtRecordingTip = { category: string; tip: string }
 
+// ── Build-wizard net-new assets ─────────────────────────────────────────────
+// The 6-beat call script and the objection set, both grounded on the house
+// sales methodology (lib/salesFrameworksCanonical.ts). One beat = one moment of
+// the call: the prospect's mindset, the phrasing options the coach could say,
+// and the recommended default. One objection = a captured audience objection in
+// the prospect's own voice, its handling, and which of the four loops it is.
+export type MtScriptBeat = {
+  beat: string
+  prospect_mindset: string
+  phrasing_options: string[]
+  recommended: string
+}
+export type MtObjection = {
+  objection: string
+  handling: string
+  loop: ObjectionLoop
+}
+// A lightweight per-angle preview so the Angle step can switch instantly without
+// regenerating the whole training. Derived from the meta unit's topic options.
+export type MtAnglePreview = {
+  title: string
+  angle: string
+  landing_headline: string
+  landing_subheadline: string
+}
+
 export type MicroTraining = {
   topics: MtTopic[]
   chosen_topic: string
@@ -44,6 +71,9 @@ export type MicroTraining = {
   emails: MtEmail[]
   book_a_call_emails: MtEmail[]
   recording_tips: MtRecordingTip[]
+  sales_script: MtScriptBeat[]
+  objections: MtObjection[]
+  angle_previews: MtAnglePreview[]
 }
 
 // The coach's own authorship material from the Build studio's guided prompts.
@@ -87,7 +117,16 @@ export type GeneratorInputs = {
 
 // The asset units. Each maps 1:1 to a persisted column group and is the unit the
 // regenerate path re-runs individually.
-export type AssetUnit = 'meta' | 'slides' | 'workbook' | 'recording_tips' | 'emails' | 'book_a_call'
+export type AssetUnit =
+  | 'meta'
+  | 'slides'
+  | 'workbook'
+  | 'recording_tips'
+  | 'emails'
+  | 'book_a_call'
+  | 'sales_script'
+  | 'objections'
+  | 'angle_previews'
 
 const asString = (v: unknown): string => (typeof v === 'string' ? v : '')
 const asStringArray = (v: unknown): string[] =>
@@ -281,6 +320,80 @@ Rules for BOTH variants:
 - Use ONLY the target link the CTA block designates — do not include the other link.
 ${SHARED_RULES}`,
   },
+  sales_script: {
+    key: 'sales_script',
+    maxTokens: 5000,
+    prompt: `You write the coach's SALES CALL SCRIPT for the 1:1 call this training drives toward — grounded on the house sales methodology below. The script is the 6 beats of the call, in order, in the coach's own offer and audience language.
+
+${SALES_FRAMEWORK_CANONICAL}
+
+Output shape — exactly ${SALES_SCRIPT_BEATS.length} beats, in this order: ${JSON.stringify(SALES_SCRIPT_BEATS)}:
+
+{
+  "sales_script": [
+    {
+      "beat": "${SALES_SCRIPT_BEATS[0]}",
+      "prospect_mindset": "one line describing the prospect's internal state at this moment of the call",
+      "phrasing_options": ["a line the coach could actually say here, in their own offer/audience language", "a second option", "an optional third"],
+      "recommended": "the strongest of the phrasing options (or a blend) — the default the coach starts from"
+    }
+  ]
+}
+
+Rules:
+- Exactly ${SALES_SCRIPT_BEATS.length} beats, using these beat names in this order: ${SALES_SCRIPT_BEATS.join(' → ')}.
+- Each beat: one prospect_mindset line, 2-3 phrasing_options, and a recommended default (which should be one of the options or a blend of them).
+- Phrasings are what the coach says OUT LOUD on the call — warm, plain, specific to THIS offer, transformation, and audience. Never canned or manipulative.
+- Ground the language in the coach's real framework, transformation, and this blueprint's offer — no generic sales-script filler.
+${SHARED_RULES}`,
+  },
+  objections: {
+    key: 'objections',
+    maxTokens: 5000,
+    prompt: `You write the coach's OBJECTION HANDLING set for the sales call — grounded on the house sales methodology below. Work from the REAL objections captured in this coach's AUDIENCE INTELLIGENCE. For each captured audience objection, phrase it in the prospect's own words, give the handling, and map it to exactly one of the four objection loops.
+
+${SALES_FRAMEWORK_CANONICAL}
+
+Output shape:
+
+{
+  "objections": [
+    {
+      "objection": "the objection in the PROSPECT'S OWN WORDS — how they would actually say it out loud",
+      "handling": "how the coach handles it — name the true concern with empathy, reframe through this coach's transformation and offer, return the decision to the prospect",
+      "loop": "one of: ${OBJECTION_LOOPS.join(' | ')}"
+    }
+  ]
+}
+
+Rules:
+- Draw the objections from the REAL objections in the AUDIENCE INTELLIGENCE — do not invent generic ones. Cover each distinct captured objection.
+- objection is in the prospect's own voice; handling is grounded in THIS coach's offer and transformation; loop is exactly one of ${OBJECTION_LOOPS.join(' | ')}.
+- Never argue or pressure — handle by naming the true concern, reframing through the transformation, and returning the decision to the prospect.
+${SHARED_RULES}`,
+  },
+  angle_previews: {
+    key: 'angle_previews',
+    maxTokens: 2500,
+    prompt: `You write a LIGHT landing preview for each candidate training angle, so the coach can switch angles instantly in the Build wizard without regenerating the whole training. You are given the ANGLE OPTIONS (each with a title, angle, and why). For each option, return the training title, the angle, and a landing-page headline + sub-headline for that angle.
+
+{
+  "angle_previews": [
+    {
+      "title": "the training title for this angle (from the option)",
+      "angle": "the angle/hook for this option (from the option)",
+      "landing_headline": "a punchy landing-page headline for this angle, in the audience's language",
+      "landing_subheadline": "a one-line sub-headline that clarifies the promise for this angle"
+    }
+  ]
+}
+
+Rules:
+- One preview per ANGLE OPTION given, in the same order, keeping each option's title and angle.
+- landing_headline and landing_subheadline are grounded in this blueprint's problem and this audience's language — specific, not generic.
+- These are lightweight previews only — a headline + sub-headline, no full page copy.
+${SHARED_RULES}`,
+  },
 }
 
 // ── Coercers ────────────────────────────────────────────────────────────────
@@ -376,6 +489,57 @@ export function coerceRecordingTips(v: unknown): MtRecordingTip[] {
     .filter((t) => t.tip.trim().length > 0)
 }
 
+// Coerce the 6-beat call script. Keeps at most one beat per canonical beat name
+// where possible, but is tolerant: any beat rows with content are kept in order.
+export function coerceSalesScript(v: unknown): MtScriptBeat[] {
+  if (!Array.isArray(v)) return []
+  return v
+    .map((r) => (r && typeof r === 'object' ? (r as Record<string, unknown>) : {}))
+    .map((r) => {
+      const options = asStringArray(r.phrasing_options).filter((o) => o.trim().length > 0).slice(0, 3)
+      const recommended = asString(r.recommended).trim().length > 0 ? asString(r.recommended) : options[0] ?? ''
+      return {
+        beat: asString(r.beat),
+        prospect_mindset: asString(r.prospect_mindset),
+        phrasing_options: options,
+        recommended,
+      }
+    })
+    .filter((b) => b.beat.trim().length > 0 && (b.phrasing_options.length > 0 || b.recommended.trim().length > 0))
+    .slice(0, SALES_SCRIPT_BEATS.length)
+}
+
+const OBJECTION_LOOP_SET = new Set<string>(OBJECTION_LOOPS)
+
+// Coerce the objection set. loop is snapped to a valid loop; rows with an
+// unrecognized loop fall back to 'commitment' so a stray label never drops a
+// real objection.
+export function coerceObjections(v: unknown): MtObjection[] {
+  if (!Array.isArray(v)) return []
+  return v
+    .map((r) => (r && typeof r === 'object' ? (r as Record<string, unknown>) : {}))
+    .map((r) => {
+      const rawLoop = asString(r.loop).trim().toLowerCase()
+      const loop = (OBJECTION_LOOP_SET.has(rawLoop) ? rawLoop : 'commitment') as ObjectionLoop
+      return { objection: asString(r.objection), handling: asString(r.handling), loop }
+    })
+    .filter((o) => o.objection.trim().length > 0)
+}
+
+export function coerceAnglePreviews(v: unknown): MtAnglePreview[] {
+  if (!Array.isArray(v)) return []
+  return v
+    .map((r) => (r && typeof r === 'object' ? (r as Record<string, unknown>) : {}))
+    .map((r) => ({
+      title: asString(r.title),
+      angle: asString(r.angle),
+      landing_headline: asString(r.landing_headline),
+      landing_subheadline: asString(r.landing_subheadline),
+    }))
+    .filter((p) => p.title.trim().length > 0 || p.landing_headline.trim().length > 0)
+    .slice(0, 5)
+}
+
 // One Anthropic call for a unit: logs cost and returns its text + whether the
 // model stopped at max_tokens (a genuine truncation, distinct from control-char
 // parse issues which extractJson repairs).
@@ -449,6 +613,12 @@ async function runUnit(
       return { emails: coerceEmails(parsed.emails) }
     case 'book_a_call':
       return { book_a_call_emails: coerceEmails(parsed.book_a_call_emails) }
+    case 'sales_script':
+      return { sales_script: coerceSalesScript(parsed.sales_script) }
+    case 'objections':
+      return { objections: coerceObjections(parsed.objections) }
+    case 'angle_previews':
+      return { angle_previews: coerceAnglePreviews(parsed.angle_previews) }
   }
 }
 
@@ -463,10 +633,17 @@ export async function generateMicroTraining(userId: string, inputs: GeneratorInp
 
   const metaPart = await runUnit(userId, 'meta', grounding, inputs.voiceContext)
   const chosenTopic = typeof metaPart.chosen_topic === 'string' ? metaPart.chosen_topic : ''
+  const topics = Array.isArray(metaPart.topics) ? metaPart.topics : []
 
-  const rest: AssetUnit[] = ['slides', 'workbook', 'recording_tips', 'emails', 'book_a_call']
+  // Wave 2: the remaining full-length units, plus the two net-new sales assets,
+  // all aligned to the final title. angle_previews is grounded on the meta unit's
+  // topic options (withTopics), so it runs in the same wave with that grounding.
+  const rest: AssetUnit[] = ['slides', 'workbook', 'recording_tips', 'emails', 'book_a_call', 'sales_script', 'objections']
   const titledGrounding = withTitle(grounding, chosenTopic)
-  const restParts = await Promise.all(rest.map((u) => runUnit(userId, u, titledGrounding, inputs.voiceContext)))
+  const restParts = await Promise.all([
+    ...rest.map((u) => runUnit(userId, u, titledGrounding, inputs.voiceContext)),
+    runUnit(userId, 'angle_previews', withTopics(titledGrounding, topics), inputs.voiceContext),
+  ])
 
   const merged = Object.assign({}, metaPart, ...restParts) as Partial<MicroTraining>
   return {
@@ -481,6 +658,9 @@ export async function generateMicroTraining(userId: string, inputs: GeneratorInp
     emails: merged.emails ?? [],
     book_a_call_emails: merged.book_a_call_emails ?? [],
     recording_tips: merged.recording_tips ?? [],
+    sales_script: merged.sales_script ?? [],
+    objections: merged.objections ?? [],
+    angle_previews: merged.angle_previews ?? [],
   }
 }
 
@@ -499,6 +679,27 @@ function withTitle(grounding: string, chosenTopic: string): string {
   return chosenTopic.trim().length > 0
     ? `${grounding}\nCURRENT TRAINING TITLE (align this asset to it): ${JSON.stringify(chosenTopic)}`
     : grounding
+}
+
+// Appends the candidate angle options to the grounding for the angle_previews
+// unit. The previews are one-per-option, so the unit needs the exact options.
+function withTopics(grounding: string, topics: MtTopic[]): string {
+  return `${grounding}
+ANGLE OPTIONS (produce one light preview per option, in this order, keeping each option's title and angle): ${JSON.stringify(topics)}`
+}
+
+// Regenerate just the lightweight angle previews from the current topic options.
+// Used by the Angle step so switching angles is instant without regenerating the
+// whole training. Returns only the angle_previews partial.
+export async function generateAnglePreviews(
+  userId: string,
+  inputs: GeneratorInputs,
+  chosenTopic: string,
+  topics: MtTopic[]
+): Promise<MtAnglePreview[]> {
+  const grounding = withTopics(withTitle(buildGrounding(inputs), chosenTopic), topics)
+  const part = await runUnit(userId, 'angle_previews', grounding, inputs.voiceContext)
+  return part.angle_previews ?? []
 }
 
 const SCRIPT_PROMPT = `You rewrite ONLY the spoken script for each slide of an existing micro-training deck. Keep every slide's title, timing, and section exactly as given — you are refreshing the words the coach speaks on camera in this recorded video, not restructuring the deck.

@@ -12,9 +12,11 @@ import {
   generateMicroTraining,
   regenerateAsset,
   regenerateScript,
+  generateAnglePreviews,
   DeliveryInput,
   GeneratorInputs,
   MtSlide,
+  MtTopic,
   PersonalHook,
   CtaType,
   coerceSlides,
@@ -23,6 +25,9 @@ import {
   coerceRecordingTips,
   coerceOutline,
   coerceTopics,
+  coerceSalesScript,
+  coerceObjections,
+  coerceAnglePreviews,
 } from '../../lib/microTrainingGenerator'
 
 // POST /api/generate — the unified Micro-Training generator. From ONE validated
@@ -48,7 +53,13 @@ const REGEN_TARGETS = new Set([
   'script',
   'topics',
   'outline',
+  'sales_script',
+  'objections',
+  'angle_previews',
 ])
+
+// The wizard steps a coach can approve, driving the Build progress rail.
+const VALID_BUILD_STEPS = new Set(['angle', 'slides', 'emails', 'script', 'objections'])
 
 function parsePersonalHook(raw: unknown): PersonalHook | undefined {
   if (!raw || typeof raw !== 'object') return undefined
@@ -117,6 +128,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    // Approve a wizard step — flip its flag in the build_steps jsonb (read →
+    // merge → write) so the Build progress rail advances. No regeneration. One of
+    // angle | slides | emails | script | objections.
+    if (typeof body.approve_step === 'string') {
+      const step = body.approve_step.trim()
+      if (!VALID_BUILD_STEPS.has(step)) {
+        return res.status(400).json({ error: `approve_step must be one of: ${[...VALID_BUILD_STEPS].join(', ')}` })
+      }
+      if (!(await requireCapability(userId, 'toolkits', res))) return
+      try {
+        const { data: cur, error: readErr } = await supabase
+          .from('mtm_generations')
+          .select('build_steps')
+          .eq('user_id', userId)
+          .eq('card_id', card_id)
+          .maybeSingle()
+        if (readErr) throw readErr
+        if (!cur) return res.status(404).json({ error: 'No generation for this card yet' })
+        const existingSteps = (cur.build_steps && typeof cur.build_steps === 'object' ? cur.build_steps : {}) as Record<string, unknown>
+        const build_steps = { ...existingSteps, [step]: { approved: true, approved_at: new Date().toISOString() } }
+        const { data, error } = await supabase
+          .from('mtm_generations')
+          .update({ build_steps, updated_at: new Date().toISOString() })
+          .eq('user_id', userId)
+          .eq('card_id', card_id)
+          .select()
+          .maybeSingle()
+        if (error) throw error
+        if (!data) return res.status(404).json({ error: 'No generation for this card yet' })
+        return res.status(200).json(data)
+      } catch (err) {
+        console.error('[generate] POST approve_step', err)
+        return res.status(500).json({ error: 'Failed to approve step' })
+      }
+    }
+
     // Inline-edit SAVE — persist the coach's manual edits to an EXISTING
     // generation. No LLM call. delivery is left untouched and sync_snapshot is NOT
     // re-stamped: a manual edit is the coach's own change, not a rebuild from
@@ -134,6 +181,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if ('recording_tips' in save) update.recording_tips = coerceRecordingTips(save.recording_tips)
       if ('outline' in save) update.outline = coerceOutline(save.outline)
       if ('topics' in save) update.topics = coerceTopics(save.topics)
+      if ('sales_script' in save) update.sales_script = coerceSalesScript(save.sales_script)
+      if ('objections' in save) update.objections = coerceObjections(save.objections)
+      if ('angle_previews' in save) update.angle_previews = coerceAnglePreviews(save.angle_previews)
       if ('subtitle' in save) update.subtitle = typeof save.subtitle === 'string' ? save.subtitle.trim() : ''
       if ('chosen_topic' in save) {
         const t = typeof save.chosen_topic === 'string' ? save.chosen_topic.trim() : ''
@@ -173,7 +223,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (regenerate) {
       if (!REGEN_TARGETS.has(regenerate)) {
         return res.status(400).json({
-          error: 'regenerate must be one of: slides, emails, book_a_call, workbook, recording_tips, script, topics, outline',
+          error: `regenerate must be one of: ${[...REGEN_TARGETS].join(', ')}`,
         })
       }
     } else {
@@ -196,7 +246,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         getSavedOutput(userId, 'transformation'),
         supabase
           .from('mtm_generations')
-          .select('chosen_topic, delivery, slides')
+          .select('chosen_topic, delivery, slides, topics')
           .eq('user_id', userId)
           .eq('card_id', card_id)
           .maybeSingle(),
@@ -262,6 +312,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             update.slides = await regenerateScript(userId, inputs, cur, chosenTopic)
             break
           }
+          case 'sales_script':
+            update.sales_script = (await regenerateAsset(userId, 'sales_script', inputs, chosenTopic)).sales_script
+            break
+          case 'objections':
+            update.objections = (await regenerateAsset(userId, 'objections', inputs, chosenTopic)).objections
+            break
+          case 'angle_previews': {
+            const topics = Array.isArray(existing.topics) ? (existing.topics as MtTopic[]) : []
+            update.angle_previews = await generateAnglePreviews(userId, inputs, chosenTopic, topics)
+            break
+          }
         }
         // Rebuilding the slides re-stamps the 'slides' staleness snapshot.
         if (regenerate === 'slides' || regenerate === 'script') {
@@ -318,6 +379,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             emails: generated.emails,
             book_a_call_emails: generated.book_a_call_emails,
             recording_tips: generated.recording_tips,
+            sales_script: generated.sales_script,
+            objections: generated.objections,
+            angle_previews: generated.angle_previews,
             delivery: resolvedDelivery,
             sync_snapshot,
             updated_at: new Date().toISOString(),
