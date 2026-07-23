@@ -34,9 +34,9 @@ async function countLeads(funnelId: string, w?: Window): Promise<number> {
 
 type WindowKpis = { visits: number; leads: number; appointments: number; closed: number; revenue: number }
 
-// Windowed KPIs. closed + revenue come from 'closed' engagement events in the
-// window (so they have a timestamp) → the distinct leads → their close_amount.
-// (Closed-event logging starts with this phase, so period revenue is forward-looking.)
+// Windowed KPIs. closed + revenue come from WON engagement events (sold/closed)
+// in the window (so they have a timestamp) → the distinct leads → their
+// close_amount. Deduped by lead, so a lead with both events counts once.
 async function windowKpis(funnelId: string, w: Window): Promise<WindowKpis> {
   const [visits, appointments, leads, closedEvents] = await Promise.all([
     countEvents(funnelId, 'landing_view', w),
@@ -46,7 +46,7 @@ async function windowKpis(funnelId: string, w: Window): Promise<WindowKpis> {
       .from('funnel_events')
       .select('lead_id')
       .eq('funnel_id', funnelId)
-      .eq('event_type', 'closed')
+      .in('event_type', ['sold', 'closed'])
       .gte('created_at', w.start)
       .lt('created_at', w.end),
   ])
@@ -82,8 +82,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       countEvents(id, 'landing_view'),
       countEvents(id, 'booked'),
       countLeads(id),
-      // All-time revenue rollup — sum of close_amount over currently-closed leads.
-      supabase.from('funnel_leads').select('close_amount').eq('funnel_id', id).eq('status', 'closed'),
+      // All-time revenue rollup — sum of close_amount over WON leads (sold or
+      // closed). A lead only ever holds one status, so no double-count.
+      supabase.from('funnel_leads').select('close_amount').eq('funnel_id', id).in('status', ['sold', 'closed']),
       windowKpis(id, windows.current),
       windowKpis(id, windows.previous),
     ])

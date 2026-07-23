@@ -66,12 +66,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!funnel) return res.status(404).json({ error: 'Funnel not found' })
   const { data: prior } = await supabase
     .from('funnel_leads')
-    .select('status')
+    .select('status, close_amount')
     .eq('id', leadId)
     .eq('funnel_id', id)
     .maybeSingle()
   if (!prior) return res.status(404).json({ error: 'Lead not found' })
   const priorStatus = (prior as { status: string | null }).status
+  const priorCloseAmount = (prior as { close_amount: unknown }).close_amount
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
 
@@ -107,6 +108,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     updates.notes = body.notes === null ? null : (body.notes as string)
   }
 
+  // 'sold' is a won status that requires a positive close amount — use the
+  // incoming close_amount if present, else the lead's existing value.
+  if (updates.status === 'sold') {
+    const effective = 'close_amount' in body ? updates.close_amount : priorCloseAmount
+    if (typeof effective !== 'number' || !Number.isFinite(effective) || effective <= 0) {
+      return res.status(400).json({ error: 'invalid_field', field: 'close_amount', message: 'sold requires a close amount' })
+    }
+  }
+
   if (Object.keys(updates).length === 0) {
     return res.status(400).json({ error: 'No updatable fields provided' })
   }
@@ -128,9 +138,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // PATCH on the log. Only on a real change (idempotent re-PATCH logs nothing).
     const newStatus = updates.status as string | undefined
     const changed = !!newStatus && newStatus !== priorStatus
-    // funnel_events CHECK only permits booked/closed, so only those transitions
-    // are logged as events (closed also carries revenue). Best-effort.
-    if (changed && (newStatus === 'booked' || newStatus === 'closed')) {
+    // funnel_events permits booked/closed/sold — log those transitions as events
+    // (closed + sold carry revenue). Best-effort.
+    if (changed && (newStatus === 'booked' || newStatus === 'closed' || newStatus === 'sold')) {
       const { error: evErr } = await supabase
         .from('funnel_events')
         .insert({ funnel_id: id, lead_id: leadId, event_type: newStatus })
