@@ -11,7 +11,7 @@ import { loadUserAvailability } from '../../lib/availabilitySettings'
 import { isSlotOpen } from '../../lib/funnelAvailability'
 import { getValidAccessToken, createCalendarEvent, deleteCalendarEvent, ValidToken } from '../../lib/googleCalendar'
 import { loadBusinessSettings } from '../../lib/businessSettings'
-import { cancelLeadQueue, scheduleBookingReminders } from '../../lib/funnelNurture'
+import { cancelLeadOutreach, scheduleBookingReminders } from '../../lib/funnelNurture'
 import { buildManageUrl } from '../../lib/bookingManage'
 
 // POST /api/calendar/book
@@ -246,7 +246,7 @@ async function bookGooglePath(
   // Nurture suppression (Phase 5b): a booked lead exits the sequence — cancel any
   // still-scheduled nurture/book-a-call sends — and gets 24h/1h call reminders.
   if (leadId) {
-    await cancelLeadQueue(leadId)
+    await cancelLeadOutreach(leadId)
     await scheduleBookingReminders(funnelRow, leadId, email, startIso, meetingUrl, reserved.id as string, manageUrl)
   }
 
@@ -337,7 +337,7 @@ async function bookLegacyPath(
 
   // Nurture suppression + reminders when this legacy booking came from a funnel.
   if (funnelRow && leadId) {
-    await cancelLeadQueue(leadId)
+    await cancelLeadOutreach(leadId)
     await scheduleBookingReminders(funnelRow, leadId, email, startIso, meeting.join_url, reserved.id as string)
   }
 

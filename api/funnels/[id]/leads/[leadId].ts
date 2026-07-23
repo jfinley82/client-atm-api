@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../../lib/supabase'
 import { setCors, noStore } from '../../../../lib/cors'
 import { requireFunnelBuilder, getOwnedFunnel, getOwnedLead, ENGAGEMENT_EVENT_TYPES } from '../../../../lib/funnels'
-import { cancelLeadQueue } from '../../../../lib/funnelNurture'
+import { cancelLeadOutreach } from '../../../../lib/funnelNurture'
 
 // GET/PATCH /api/funnels/[id]/leads/[leadId] — owner-scoped single-lead detail
 // and management.
@@ -147,9 +147,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (evErr) console.error('[funnels/[id]/leads/[leadId]] status event log', evErr)
     }
     // Any move into a post-booking status takes the lead out of the nurture
-    // flow — cancel any still-scheduled sends (Phase 5b). Best-effort.
+    // flow — cancel their queued outreach (nurture + book-a-call), but NOT their
+    // booking reminders, which are per booking. Best-effort.
     if (changed && POST_BOOKING_STATUS.has(newStatus as string)) {
-      await cancelLeadQueue(leadId)
+      await cancelLeadOutreach(leadId)
     }
 
     return res.status(200).json({ lead: data })
