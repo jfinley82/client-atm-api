@@ -1,48 +1,57 @@
 // Canonical house sales methodology — the grounding for the call-script and
 // objection generators, mirroring how lib/slidesCanonical.ts grounds the slide
-// generator. It encodes the 6-Step High Ticket Selling Framework and the four
-// Objection Loops as house doctrine so generated scripts stay on-method.
+// generator. It encodes Jamaul's taught implementation-call method (the six
+// beats) and the four Objection Loops as house doctrine so generated scripts
+// stay on-method.
 //
-// AUTHORING NOTE: this was drafted from the framework's beat + loop names and the
-// MTM house style (consultative, transformation-first, A→B, never a hard pitch).
-// It is the single place to refine the methodology wording — replace the text
-// below with the authoritative claude/sales-frameworks-canonical.md content when
-// available and both generators pick it up with no code change.
+// This is mandatory grounding with the same standing as the Anti-AI style guide;
+// the coach's own voice guide still wins on wording conflicts. It is the single
+// place to refine the methodology wording — both generators pick up any change
+// here with no code change.
 
 // The six beats, in order. The generator MUST produce exactly these six, in this
 // sequence, using the coach's own offer/audience language.
 export const SALES_SCRIPT_BEATS = [
-  'Confirm Intentions',
-  'Measure the Gap',
-  'Expose Opportunities',
-  'Build the Bridge',
-  'Sell A→B',
-  'Invite/Ask',
+  'Confirm intentions',
+  'Measure the gap',
+  'Help and expand',
+  'Bridge to agreement',
+  'Without a shadow of doubt',
+  'The logical next step',
 ] as const
 
-// The four objection loops. Every captured objection maps to exactly one.
+// The four objection loops. Every captured objection maps to exactly one. They
+// are the proactive handling toolkit used in beat 5 — not a close-the-no mechanic.
 export const OBJECTION_LOOPS = ['commitment', 'fear_of_failure', 'self_doubt', 'bad_timing'] as const
 export type ObjectionLoop = (typeof OBJECTION_LOOPS)[number]
 
 // Injected verbatim into the sales-script + objection unit prompts.
-export const SALES_FRAMEWORK_CANONICAL = `HOUSE SALES METHODOLOGY (ground the script and objections in this — it is the method, not a suggestion):
+export const SALES_FRAMEWORK_CANONICAL = `HOUSE SALES METHODOLOGY — Jamaul's taught implementation-call method. Ground the script and objections in this. It is the method, not a suggestion, and carries the same standing as the style guide.
 
-THE 6-STEP HIGH TICKET SELLING FRAMEWORK — a consultative, transformation-first call. It is never a hard pitch; it helps the prospect see the gap between where they are and where they want to be, and decide for themselves. Produce the six beats IN THIS ORDER:
+WHAT THIS CALL IS: an implementation / next-steps call, NOT a cold pitch. The prospect already watched the micro-training and started applying it. The coach shows up to HELP: review what happened when they acted, add clarity, hand them something concrete, and offer the logical next step. Spirit: lead, don't beg; selling is sharing. The call COLLECTS A YES — it does not chase a no. Never a hard pitch, no pressure, no false scarcity.
 
-1. Confirm Intentions — open by confirming why they took the call and what they hope to walk away with. Prospect mindset: guarded, wondering if this is worth their time. The coach's line sets a collaborative frame and gets a clear yes on the goal.
-2. Measure the Gap — get specific about where they are now versus where they want to be. Prospect mindset: starting to name the real problem out loud. The coach's line draws out the current state and the desired state so the distance is concrete and felt.
-3. Expose Opportunities — surface what's actually possible for them and what's been in the way. Prospect mindset: realizing the problem is solvable and they've been stuck on the wrong thing. The coach's line reframes the obstacle using the coach's framework and points at the leverage they've been missing.
-4. Build the Bridge — connect the gap to a clear path across it, grounded in the coach's framework and transformation. Prospect mindset: seeing a credible route from A to B for the first time. The coach's line lays out the path in the coach's own method language, so the offer becomes the obvious vehicle.
-5. Sell A→B — present the offer as the vehicle from their current state (A) to their desired state (B), in terms of the outcome, not features. Prospect mindset: weighing whether this is the right vehicle for them. The coach's line names the offer and ties it directly to the B they just described.
-6. Invite/Ask — invite them to take the next step with a clear, low-pressure ask. Prospect mindset: ready to decide, wanting permission and clarity. The coach's line makes the ask directly and warmly, then gets out of the way.
+THE SIX BEATS, IN ORDER:
 
-For each beat return: a one-line PROSPECT MINDSET for that moment (their internal state), and 2-3 PHRASING OPTIONS the coach could actually say — in the coach's real offer and audience language — plus a recommended DEFAULT (the strongest of the options, or a blend). Phrasings are things the coach says out loud on the call: warm, plain, specific to this offer and audience. No scripts that sound canned or manipulative.
+1. Confirm intentions — state why you're both on the call and gain agreement on it. Sets the tone. Prospect mindset: checking whether this is worth their time and what it's really about.
+2. Measure the gap — open-ended questions about where they are now, their pains and challenges. Notice whether they speak in NUMBERS or in VISION, and match that later. Prospect mindset: naming out loud where they actually are and what's hard.
+3. Help and expand — the VALUE MOMENT. Show up ready to give: review their results from acting on the video, help them refine, clear up where they're stuck, and hand them something concrete. This is NOT "expose pain to set up a sell" — it is genuine help. Prospect mindset: feeling helped, seeing progress and what's next.
+4. Bridge to agreement — get on the same page BEFORE any offer talk. Make sure you both see their situation the same way. Clarity before is what turns a conversation into a closing. Prospect mindset: agreeing on where they are and where they want to be.
+5. Without a shadow of doubt — proactively handle the objections they haven't raised yet, show more results and proof, and gain their agreement to look at something. The objection work happens HERE, on the front foot, not as damage control at the end. This is where the four Objection Loops get used. Prospect mindset: quiet doubts surfacing and being answered before they harden.
+6. The logical next step — lay out the logical next step and collect the yes. This is NOT an emotional invite that stings on a no. Some will, some won't, and that's fine. Present the next step cleanly and let them choose. Prospect mindset: ready to decide, wanting a clear, pressure-free next step.
 
-THE OBJECTION LOOPS — every real objection is one of four underlying loops. Handle by naming the true concern with empathy, reframing through the transformation, and returning the decision to the prospect. Never argue or pressure.
+For each beat return: a one-line PROSPECT MINDSET for that moment (their internal state), and 2-3 PHRASING OPTIONS the coach could actually say — in the coach's real offer and audience language — plus a recommended DEFAULT (the strongest option, or a blend). Phrasings are things the coach says out loud on the call: warm, plain, share-not-sell, specific to this offer and audience. Never canned or manipulative.
 
-- commitment — price / money / "is it worth it": the objection is really about certainty of return. Handle by anchoring cost against the cost of staying at A and the value of reaching B.
-- fear_of_failure — "what if it doesn't work for me": fear of investing and not getting the result. Handle by de-risking with the framework, proof, and the specific reason it will work for their situation.
-- self_doubt — "I'm not sure I can do this / I'm different": doubt in themselves, not the offer. Handle by reframing their capability and showing the path is built for people exactly like them.
-- bad_timing — "not right now / later": avoidance dressed as timing. Handle by surfacing the real cost of waiting and the compounding gap, gently.
+BUYER TYPES (optional tone layer, DISC-style reference — do not force, use only where it sharpens a phrasing):
+- Analytical: data-focused. Answer questions, be patient, stay literal, consider a 2-step close.
+- Amiable: empathy and trust. Build rapport, lead as a trusted advisor, share the story and others' results.
+- Assertive: decisive, results-focused. Professionalism, get to the crux fast, competitive advantage.
+- Expressive: relationship and intuition. Extend the relationship, emphasize impact on others, streamline the facts.
 
-For each captured audience objection: phrase the OBJECTION in the PROSPECT'S OWN WORDS (how they'd actually say it), give the HANDLING grounded in this coach's offer and transformation, and map it to exactly one LOOP from: commitment | fear_of_failure | self_doubt | bad_timing.`
+THE OBJECTION LOOPS — the handling toolkit, used PROACTIVELY in beat 5. Premise: an objection is an invitation to investigate further, a SOFT YES waiting to be validated, not a hard no. Surface and handle them before they harden. Do NOT build a "loop back to convert the no" mechanic at the close — beat 6 stays a clean offer of the next step.
+
+- commitment — price / cost. Usually the REAL issue; it does not mean the price is too high and you do not lower it. Handle by: compare the cost of the program to the cost of NOT acting; reconfirm any guarantee; lower the initial investment or start when paid in full.
+- fear_of_failure — theirs and yours. Past failures make them doubt THEMSELVES, not you. Handle by: reconfirm their desired result and the promise; clarify the transition from A to B; clarify the milestones and how they'll recognize progress.
+- self_doubt — they're ready but the gap feels too big to cross in the time given. Handle by: chunk it into smaller steps; show examples of people like them who made it; explain your support and community as a safe place to fail.
+- bad_timing — they haven't made the problem a real pain point. Handle by: get them to name the time they've already spent trying to fix this; relate time to money and total up what they've already spent of both.
+
+For each captured audience objection: phrase the OBJECTION in the PROSPECT'S OWN WORDS (how they'd actually say it), give the HANDLING grounded in this coach's offer and transformation using the matching loop's tactics above (proactive, warm, share-not-sell — an invitation to look closer, never a pressure play), and map it to exactly one LOOP from: commitment | fear_of_failure | self_doubt | bad_timing.`

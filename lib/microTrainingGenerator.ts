@@ -369,7 +369,7 @@ Output shape:
 Rules:
 - Draw the objections from the REAL objections in the AUDIENCE INTELLIGENCE — do not invent generic ones. Cover each distinct captured objection.
 - objection is in the prospect's own voice; handling is grounded in THIS coach's offer and transformation; loop is exactly one of ${OBJECTION_LOOPS.join(' | ')}.
-- Never argue or pressure — handle by naming the true concern, reframing through the transformation, and returning the decision to the prospect.
+- These are handled PROACTIVELY (beat 5, "Without a shadow of doubt") — treat each objection as a soft yes to validate, not a no to beat. Use the matching loop's specific tactics from the methodology. Warm, share-not-sell; never argue, pressure, or build a close-the-no mechanic.
 ${SHARED_RULES}`,
   },
   angle_previews: {
