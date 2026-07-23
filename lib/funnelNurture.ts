@@ -293,6 +293,32 @@ export async function cancelNurtureQueue(leadId: string): Promise<void> {
   await cancelByFilter(leadId, 'nurture')
 }
 
+// Cancel a lead's queued OUTREACH — nurture + book-a-call, but NOT booking
+// reminders (kind NOT LIKE 'reminder%'). Used when a lead books or moves to a
+// post-booking status: they exit the sequence, but their per-booking reminders
+// must survive, since a lead can hold multiple bookings (those are canceled per
+// booking by cancelBookingReminders).
+export async function cancelLeadOutreach(leadId: string): Promise<void> {
+  try {
+    const { data } = await supabase
+      .from('funnel_email_sends')
+      .select('resend_message_id')
+      .eq('lead_id', leadId)
+      .eq('status', 'queued')
+      .not('kind', 'like', 'reminder%')
+    const ids = (data || []).map((r) => (r as { resend_message_id: string | null }).resend_message_id).filter((x): x is string => !!x)
+    if (ids.length) await cancelFunnelSends(ids)
+    await supabase
+      .from('funnel_email_sends')
+      .update({ status: 'canceled' })
+      .eq('lead_id', leadId)
+      .eq('status', 'queued')
+      .not('kind', 'like', 'reminder%')
+  } catch (err) {
+    console.error('[nurture] cancelLeadOutreach', err)
+  }
+}
+
 // Cancel the 24h/1h reminders for ONE booking (by booking_id, so a lead's other
 // bookings are untouched). Used on cancel and before re-scheduling on a move.
 export async function cancelBookingReminders(bookingId: string): Promise<void> {
