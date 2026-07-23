@@ -396,8 +396,8 @@ For each ANGLE OPTION, keep its title and angle as the INTERNAL positioning conc
     {
       "title": "the training title for this angle (from the option — the internal concept, unchanged)",
       "angle": "the angle/hook for this option (from the option — the internal concept, unchanged)",
-      "landing_headline": "the public opt-in headline built FROM this angle — the transformation/outcome, never the raw angle title",
-      "landing_subheadline": "names WHO it is for, clarifies the promise, teases the mechanism without teaching it",
+      "landing_headline": "the public opt-in headline built FROM this angle, spoken to the reader as 'you' — the transformation/outcome, never the raw angle title",
+      "landing_subheadline": "speaks to the reader as 'you', clarifies the promise, teases the mechanism without teaching it",
       "curiosity_bullets": ["bullet 1", "bullet 2", "bullet 3"],
       "cta_label": "a first-person, action CTA that references the training"
     }
@@ -406,9 +406,10 @@ For each ANGLE OPTION, keep its title and angle as the INTERNAL positioning conc
 
 Rules:
 - One preview per ANGLE OPTION given, in the same order, keeping each option's title and angle exactly as the internal concept.
-- landing_headline is built FROM the angle and MUST NOT equal the angle's title (or a trivial restatement of it) — promise the outcome, not the training, in this audience's real language.
-- landing_subheadline names the audience explicitly and teases the mechanism without teaching it.
-- curiosity_bullets: EXACTLY 3, declarative, selling the watching experience — no rhetorical-question openers, no "most [X]" opener, no "not X, it's Y" split, no em-dash splitting a clause.
+- Speak to ONE person as "you" throughout the headline, subheadline, and bullets — never name or label the segment (no "coaches," "most coaches," any niche/group). Describe their exact situation back to them in "you" language. The internal title/angle may stay a third-person label; the public copy may not.
+- landing_headline is built FROM the angle and MUST NOT equal the angle's title (or a trivial restatement of it) — promise the outcome, not the training, spoken to the reader as "you".
+- landing_subheadline speaks to the reader as "you" and teases the mechanism without teaching it.
+- curiosity_bullets: EXACTLY 3, declarative, second person, selling the watching experience — no rhetorical-question openers, no "most [X]" opener, no "not X, it's Y" split, no em-dash splitting a clause.
 - cta_label: first person, an action, references the training (e.g. "Yes! Send me the free training").
 - Honest, non-guru: no manufactured scarcity, no inflated or guaranteed promises, no hype vocabulary.
 ${SHARED_RULES}`,
