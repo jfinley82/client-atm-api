@@ -10,7 +10,7 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
   res.setHeader('Content-Type', 'text/html; charset=utf-8')
   try {
     const listings = await loadPublishedListings()
-    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=600')
+    res.setHeader('Cache-Control', 'public, max-age=15, s-maxage=15, stale-while-revalidate=60')
     return res.status(200).send(renderHub(listings))
   } catch (err) {
     console.error('[hub/render]', err)

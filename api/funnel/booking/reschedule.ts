@@ -97,9 +97,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const meetingUrl = booking.meeting_url || ''
     const manageUrl = ctx.funnel?.subdomain ? buildManageUrl(String(ctx.funnel.subdomain), booking.id) : undefined
 
+    await cancelBookingReminders(booking.id)
     if (ctx.leadId && ctx.funnel) {
-      await cancelBookingReminders(ctx.leadId)
-      await scheduleBookingReminders(ctx.funnel, ctx.leadId, booking.email, newStartIso, meetingUrl, manageUrl)
+      await scheduleBookingReminders(ctx.funnel, ctx.leadId, booking.email, newStartIso, meetingUrl, booking.id, manageUrl)
     }
 
     const { data: conn } = await supabase

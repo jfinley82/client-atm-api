@@ -123,6 +123,7 @@ async function recordFunnelEmailSend(row: {
   messageId: string | null
   status: 'queued' | 'sent' | 'failed'
   scheduledAt?: string | null
+  bookingId?: string | null
 }): Promise<void> {
   try {
     const { error } = await supabase.from('funnel_email_sends').insert({
@@ -132,6 +133,7 @@ async function recordFunnelEmailSend(row: {
       resend_message_id: row.messageId,
       status: row.status,
       scheduled_at: row.scheduledAt ?? null,
+      booking_id: row.bookingId ?? null,
     })
     if (error) console.error('[email] funnel_email_sends record failed', error)
   } catch (err) {
@@ -276,6 +278,7 @@ export async function scheduleFunnelEmail(opts: {
   subject: string
   html: string
   scheduledAt?: string
+  bookingId?: string
 }): Promise<string | null> {
   try {
     const { data, error } = await resend.emails.send({
@@ -295,6 +298,7 @@ export async function scheduleFunnelEmail(opts: {
       messageId: data?.id ?? null,
       status,
       scheduledAt: opts.scheduledAt ?? null,
+      bookingId: opts.bookingId ?? null,
     })
     if (error) {
       console.error('[email] scheduleFunnelEmail send failed', opts.kind, error)

@@ -120,7 +120,7 @@ export async function resolveGenerationCard(
 // type can never leak into the feed). Page reaches (landing_view, training_view,
 // booking_click) are deliberately absent: they stay in the aggregate KPI counts
 // only. Video/email types are appended by Phases 4/5 when those events exist.
-export const ENGAGEMENT_EVENT_TYPES = ['signup', 'booked', 'closed', 'video_watched', 'video_completed', 'email_opened', 'email_clicked'] as const
+export const ENGAGEMENT_EVENT_TYPES = ['signup', 'booked', 'closed', 'sold', 'video_watched', 'video_completed', 'email_opened', 'email_clicked'] as const
 
 /**
  * Load a lead scoped to an owned funnel: confirms the funnel is owned AND the

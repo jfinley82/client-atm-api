@@ -11,7 +11,11 @@ import { cancelLeadQueue } from '../../../../lib/funnelNurture'
 //   PATCH → update status (lead|booked|closed) / close_amount / notes. A status
 //           transition to booked or closed is also logged as a funnel_event, so
 //           the timeline shows the transition with a timestamp.
-const ALLOWED_STATUS = ['lead', 'booked', 'closed']
+// Full pipeline the DB funnel_leads_status_check already permits.
+const ALLOWED_STATUS = ['lead', 'watching', 'booked', 'showed', 'no_show', 'sold', 'closed']
+// Statuses that mean the lead has progressed past the funnel — take them out of
+// the nurture flow.
+const POST_BOOKING_STATUS = new Set(['booked', 'showed', 'no_show', 'sold', 'closed'])
 const EDITABLE_KEYS = new Set(['status', 'close_amount', 'notes'])
 const LEAD_COLUMNS = 'id, first_name, email, phone, status, close_amount, notes, opted_in_at, created_at'
 
@@ -62,12 +66,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!funnel) return res.status(404).json({ error: 'Funnel not found' })
   const { data: prior } = await supabase
     .from('funnel_leads')
-    .select('status')
+    .select('status, close_amount')
     .eq('id', leadId)
     .eq('funnel_id', id)
     .maybeSingle()
   if (!prior) return res.status(404).json({ error: 'Lead not found' })
   const priorStatus = (prior as { status: string | null }).status
+  const priorCloseAmount = (prior as { close_amount: unknown }).close_amount
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
 
@@ -103,6 +108,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     updates.notes = body.notes === null ? null : (body.notes as string)
   }
 
+  // 'sold' is a won status that requires a positive close amount — use the
+  // incoming close_amount if present, else the lead's existing value.
+  if (updates.status === 'sold') {
+    const effective = 'close_amount' in body ? updates.close_amount : priorCloseAmount
+    if (typeof effective !== 'number' || !Number.isFinite(effective) || effective <= 0) {
+      return res.status(400).json({ error: 'invalid_field', field: 'close_amount', message: 'sold requires a close amount' })
+    }
+  }
+
   if (Object.keys(updates).length === 0) {
     return res.status(400).json({ error: 'No updatable fields provided' })
   }
@@ -123,13 +137,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // the lead timeline shows it with a timestamp. Best-effort — never fail the
     // PATCH on the log. Only on a real change (idempotent re-PATCH logs nothing).
     const newStatus = updates.status as string | undefined
-    if (newStatus && newStatus !== priorStatus && (newStatus === 'booked' || newStatus === 'closed')) {
+    const changed = !!newStatus && newStatus !== priorStatus
+    // funnel_events permits booked/closed/sold — log those transitions as events
+    // (closed + sold carry revenue). Best-effort.
+    if (changed && (newStatus === 'booked' || newStatus === 'closed' || newStatus === 'sold')) {
       const { error: evErr } = await supabase
         .from('funnel_events')
         .insert({ funnel_id: id, lead_id: leadId, event_type: newStatus })
       if (evErr) console.error('[funnels/[id]/leads/[leadId]] status event log', evErr)
-      // Booked/closed leaves the nurture flow — cancel any still-scheduled
-      // sends (Phase 5b). Best-effort; never fails the PATCH.
+    }
+    // Any move into a post-booking status takes the lead out of the nurture
+    // flow — cancel any still-scheduled sends (Phase 5b). Best-effort.
+    if (changed && POST_BOOKING_STATUS.has(newStatus as string)) {
       await cancelLeadQueue(leadId)
     }
 

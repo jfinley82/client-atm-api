@@ -217,6 +217,7 @@ export async function scheduleBookingReminders(
   email: string,
   startIso: string,
   joinUrl: string,
+  bookingId: string,
   manageUrl?: string,
   nowMs: number = Date.now()
 ): Promise<void> {
@@ -252,6 +253,7 @@ export async function scheduleBookingReminders(
           subject: r.heading,
           html,
           scheduledAt: new Date(r.at).toISOString(),
+          bookingId,
         })
       )
     }
@@ -291,8 +293,19 @@ export async function cancelNurtureQueue(leadId: string): Promise<void> {
   await cancelByFilter(leadId, 'nurture')
 }
 
-// Cancel only the 24h/1h booking reminders (used when a booking is rescheduled;
-// scheduleBookingReminders then lays down fresh ones for the new time).
-export async function cancelBookingReminders(leadId: string): Promise<void> {
-  await cancelByFilter(leadId, 'reminder')
+// Cancel the 24h/1h reminders for ONE booking (by booking_id, so a lead's other
+// bookings are untouched). Used on cancel and before re-scheduling on a move.
+export async function cancelBookingReminders(bookingId: string): Promise<void> {
+  try {
+    const { data } = await supabase
+      .from('funnel_email_sends')
+      .select('resend_message_id')
+      .eq('booking_id', bookingId)
+      .eq('status', 'queued')
+    const ids = (data || []).map((r) => (r as { resend_message_id: string | null }).resend_message_id).filter((x): x is string => !!x)
+    if (ids.length) await cancelFunnelSends(ids)
+    await supabase.from('funnel_email_sends').update({ status: 'canceled' }).eq('booking_id', bookingId).eq('status', 'queued')
+  } catch (err) {
+    console.error('[nurture] cancelBookingReminders', err)
+  }
 }
