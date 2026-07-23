@@ -3,18 +3,17 @@
   "redirects": [
     {
       "source": "/(.*)",
-      "has": [{ "type": "host", "value": "freeminiworkshop\\.com" }],
-      "destination": "https://microtrainingmethod.com",
-      "permanent": false
-    },
-    {
-      "source": "/(.*)",
       "has": [{ "type": "host", "value": "www\\.freeminiworkshop\\.com" }],
-      "destination": "https://microtrainingmethod.com",
+      "destination": "https://freeminiworkshop.com/$1",
       "permanent": false
     }
   ],
   "rewrites": [
+    {
+      "source": "/((?!api/).*)",
+      "has": [{ "type": "host", "value": "freeminiworkshop\\.com" }],
+      "destination": "/api/hub/render"
+    },
     {
       "source": "/((?!api/).*)",
       "has": [{ "type": "host", "value": "([^.]+)\\.freeminiworkshop\\.com" }],
