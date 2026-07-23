@@ -1,10 +1,10 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
 import { verifyManageToken } from '../../../lib/funnelLeadToken'
-import { loadBooking, resolveFunnelAndLead, formatInTz, MANAGE_CUTOFF_MS } from '../../../lib/bookingManage'
+import { loadBooking, formatInTz, MANAGE_CUTOFF_MS } from '../../../lib/bookingManage'
 import { deleteCalendarEvent } from '../../../lib/googleCalendar'
 import { loadUserAvailability } from '../../../lib/availabilitySettings'
-import { cancelLeadQueue } from '../../../lib/funnelNurture'
+import { cancelBookingReminders } from '../../../lib/funnelNurture'
 import { sendCoachBookingChange } from '../../../lib/email'
 
 // POST /api/funnel/booking/cancel — body { token }. PUBLIC, keyed by the manage
@@ -34,15 +34,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { error: updErr } = await supabase.from('bookings').update({ status: 'canceled' }).eq('id', booking.id).eq('status', 'active')
     if (updErr) throw updErr
 
-    // 3) Cancel the lead's pending reminders (cancelLeadQueue cancels every
-    // still-queued send for the lead at Resend; for a booked lead that is the
-    // 24h/1h reminders). Skip if no lead resolves.
-    const [settings, ctx, coachRes] = await Promise.all([
+    // 3) Cancel THIS booking's pending reminders (by booking_id, so the lead's
+    // other bookings keep theirs). Nurture was already canceled at booking time.
+    const [settings, coachRes] = await Promise.all([
       loadUserAvailability(booking.coach_user_id),
-      resolveFunnelAndLead(booking.coach_user_id, booking.email),
       supabase.from('users').select('email').eq('id', booking.coach_user_id).maybeSingle(),
     ])
-    if (ctx.leadId) await cancelLeadQueue(ctx.leadId)
+    await cancelBookingReminders(booking.id)
 
     // 4) Notify the coach (best-effort).
     const coachEmail = (coachRes.data as { email?: string } | null)?.email || ''

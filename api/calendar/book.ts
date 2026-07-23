@@ -247,7 +247,7 @@ async function bookGooglePath(
   // still-scheduled nurture/book-a-call sends — and gets 24h/1h call reminders.
   if (leadId) {
     await cancelLeadQueue(leadId)
-    await scheduleBookingReminders(funnelRow, leadId, email, startIso, meetingUrl, manageUrl)
+    await scheduleBookingReminders(funnelRow, leadId, email, startIso, meetingUrl, reserved.id as string, manageUrl)
   }
 
   return res.status(200).json({ booking_id: reserved.id, join_url: meetingUrl, meeting_url: meetingUrl, start_time: startIso })
@@ -338,7 +338,7 @@ async function bookLegacyPath(
   // Nurture suppression + reminders when this legacy booking came from a funnel.
   if (funnelRow && leadId) {
     await cancelLeadQueue(leadId)
-    await scheduleBookingReminders(funnelRow, leadId, email, startIso, meeting.join_url)
+    await scheduleBookingReminders(funnelRow, leadId, email, startIso, meeting.join_url, reserved.id as string)
   }
 
   return res.status(200).json({ booking_id: reserved.id, join_url: meeting.join_url, start_time: startIso })

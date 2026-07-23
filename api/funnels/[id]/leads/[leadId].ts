@@ -11,7 +11,11 @@ import { cancelLeadQueue } from '../../../../lib/funnelNurture'
 //   PATCH → update status (lead|booked|closed) / close_amount / notes. A status
 //           transition to booked or closed is also logged as a funnel_event, so
 //           the timeline shows the transition with a timestamp.
-const ALLOWED_STATUS = ['lead', 'booked', 'closed']
+// Full pipeline the DB funnel_leads_status_check already permits.
+const ALLOWED_STATUS = ['lead', 'watching', 'booked', 'showed', 'no_show', 'sold', 'closed']
+// Statuses that mean the lead has progressed past the funnel — take them out of
+// the nurture flow.
+const POST_BOOKING_STATUS = new Set(['booked', 'showed', 'no_show', 'sold', 'closed'])
 const EDITABLE_KEYS = new Set(['status', 'close_amount', 'notes'])
 const LEAD_COLUMNS = 'id, first_name, email, phone, status, close_amount, notes, opted_in_at, created_at'
 
@@ -123,13 +127,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // the lead timeline shows it with a timestamp. Best-effort — never fail the
     // PATCH on the log. Only on a real change (idempotent re-PATCH logs nothing).
     const newStatus = updates.status as string | undefined
-    if (newStatus && newStatus !== priorStatus && (newStatus === 'booked' || newStatus === 'closed')) {
+    const changed = !!newStatus && newStatus !== priorStatus
+    // funnel_events CHECK only permits booked/closed, so only those transitions
+    // are logged as events (closed also carries revenue). Best-effort.
+    if (changed && (newStatus === 'booked' || newStatus === 'closed')) {
       const { error: evErr } = await supabase
         .from('funnel_events')
         .insert({ funnel_id: id, lead_id: leadId, event_type: newStatus })
       if (evErr) console.error('[funnels/[id]/leads/[leadId]] status event log', evErr)
-      // Booked/closed leaves the nurture flow — cancel any still-scheduled
-      // sends (Phase 5b). Best-effort; never fails the PATCH.
+    }
+    // Any move into a post-booking status takes the lead out of the nurture
+    // flow — cancel any still-scheduled sends (Phase 5b). Best-effort.
+    if (changed && POST_BOOKING_STATUS.has(newStatus as string)) {
       await cancelLeadQueue(leadId)
     }
 
