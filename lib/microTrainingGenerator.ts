@@ -410,7 +410,7 @@ Output shape:
   "objections": [
     {
       "objection": "the objection in the PROSPECT'S OWN WORDS — how they would actually say it out loud",
-      "handling": "how the coach handles it — name the true concern with empathy, reframe through this coach's transformation and offer, return the decision to the prospect",
+      "handling": "the words the coach actually says to the prospect, first person, spoken to one prospect ('I hear you — is this a cash-flow question, or…?'). Name the real concern with empathy, reframe through this coach's transformation and offer, then hand the decision back. Never narrate in third person ('the coach…', use the presenter name) and never refer to the prospect as a named persona or as 'she/he/they.'",
       "loop": "one of: ${OBJECTION_LOOPS.join(' | ')}"
     }
   ]
