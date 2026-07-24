@@ -215,7 +215,7 @@ const UNIT_SPECS: Record<AssetUnit, UnitSpec> = {
     prompt: `You design the framing for a coach's pre-recorded micro-training video. Produce the title options, the recommended primary title, a subtitle, the run time, and a section outline.
 
 {
-  "topics": [ { "title": "title option", "angle": "the specific hook or framing", "why": "why this angle resonates with THIS audience", "score": 8.4 } ],
+  "topics": [ { "title": "title option", "angle": "the specific hook or framing", "why": "one sentence, spoken TO the coach, on why this hook lands — name the specific belief, fear, or phrase it echoes in their audience. Address the coach as 'you/your audience.' Never refer to the audience as a named persona or as 'she/he/they,' and never mention 'data,' scores, matching, or any internal system.", "score": 8.4 } ],
   "chosen_topic": "the ONE recommended primary title (may match one of the topics or be a sharper version of the strongest) — this is the working title",
   "subtitle": "a one-line subtitle that clarifies the promise",
   "total_duration": "the video run time in words — always in the 15-20 minute range (e.g. '15-20 minutes')",
@@ -224,7 +224,7 @@ const UNIT_SPECS: Record<AssetUnit, UnitSpec> = {
 
 Rules:
 - topics: exactly 5 distinct options, each grounded in this blueprint's problem and this audience's language.
-- score each topic 0-10 (one decimal) on how well its hook FITS this audience — higher when the hook mirrors the audience's OWN language from the audience data and pulls them into watching the training, lower when it's generic or off-angle. Make the scores genuinely DIFFERENTIATE across the 5 options (spread them out — do not cluster them all near the same value); the weakest option should score clearly below the strongest.
+- score each topic 0-10 (one decimal) on how well its hook FITS this audience — higher when the hook mirrors the audience's OWN language and beliefs and pulls them into watching the training, lower when it's generic or off-angle. Make the scores genuinely DIFFERENTIATE across the 5 options (spread them out — do not cluster them all near the same value); the weakest option should score clearly below the strongest.
 - chosen_topic must never be empty — pick the strongest, sharpened for this audience.
 - total_duration is always a 15-20 minute recorded video — do not invent a longer run time.
 - outline: the sections a viewer moves through in the recording, mapped to the framework's phases in order (hook, the teaching phases applied to this problem, the key insight, a soft next step). One entry per section.
