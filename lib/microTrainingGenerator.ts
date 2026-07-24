@@ -383,8 +383,8 @@ Output shape — exactly ${SALES_SCRIPT_BEATS.length} beats, in this order: ${JS
   "sales_script": [
     {
       "beat": "${SALES_SCRIPT_BEATS[0]}",
-      "prospect_mindset": "one line describing the prospect's internal state at this moment of the call",
-      "phrasing_options": ["a line the coach could actually say here, in their own offer/audience language", "a second option", "an optional third"],
+      "prospect_mindset": "one line in the prospect's own internal voice at this moment of the call — refer to the coach as 'you'/'them' from the prospect's POV, never name the coach in third person",
+      "phrasing_options": ["a line the coach says live to a real prospect (whose name is unknown), in their own offer/audience language — a neutral opener or a bracketed [name] placeholder, never a fabricated or persona prospect name", "a second option", "an optional third"],
       "recommended": "the strongest of the phrasing options (or a blend) — the default the coach starts from"
     }
   ]
@@ -394,6 +394,8 @@ Rules:
 - Exactly ${SALES_SCRIPT_BEATS.length} beats, using these beat names in this order: ${SALES_SCRIPT_BEATS.join(' → ')}.
 - Each beat: one prospect_mindset line, 2-3 phrasing_options, and a recommended default (which should be one of the options or a blend of them).
 - Phrasings are what the coach says OUT LOUD on the call — warm, plain, specific to THIS offer, transformation, and audience. Never canned or manipulative.
+- The prospect on this call is a REAL person whose name we do not know: never insert a fabricated or persona prospect name (no "Sarah") into phrasing_options or recommended. Use a neutral opener ("Hey, thanks for making time…") or a clearly bracketed [name] placeholder the coach fills in.
+- prospect_mindset is the prospect's OWN internal state: never name the coach in third person (no "Jamaul"). Refer to the coach as "you" or "them" from the prospect's point of view.
 - Ground the language in the coach's real framework, transformation, and this blueprint's offer — no generic sales-script filler.
 ${SHARED_RULES}`,
   },
