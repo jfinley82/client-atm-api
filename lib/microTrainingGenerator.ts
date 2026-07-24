@@ -33,8 +33,9 @@ export type MtSlide = {
   sectionName: string
 }
 // recommended marks the default subset the frontend pre-selects from the pool of
-// candidate exercises; the coach can add or remove the rest.
-export type MtExercise = { prompt: string; lines: number; recommended: boolean }
+// candidate exercises; the coach can add or remove the rest. collects/why_fits are
+// per-question guidance (what the question surfaces, how it fits the phase).
+export type MtExercise = { prompt: string; lines: number; recommended: boolean; collects: string; why_fits: string }
 export type MtWorkbookSection = { sectionTitle: string; keyInsight: string; exercises: MtExercise[]; reflection: string }
 // Both CTA variants are generated so the frontend can show whichever the coach's
 // cta_type selects; book_call ends with [BOOK_A_CALL_LINK], sell_program with [OFFER_LINK].
@@ -288,30 +289,32 @@ ${SALES_FRAMEWORK_CANONICAL}
   "workbook": {
     "title": "guide title",
     "intro": "a short intro paragraph orienting the lead to the guide, self-contained (does not reference a video)",
-    "problem_intro": "page-1 opener that frames the ONE problem in second person, self-contained — name the problem in the lead's world, addressed to 'you'",
-    "understanding": "page-2 empathetic, second-person 'here's where you're at' section drawn from the audience intelligence, in the lead's OWN language ('You've probably felt X, caught yourself saying Y…'). This is credibility-through-understanding for a coach without testimonials.",
+    "problem_intro": "page-1 opener written as a PERSONAL LETTER from the coach to the reader — warm, first person, addressed to 'you', framing the ONE problem through that personal lens. Short paragraphs separated by blank lines. Not a detached synopsis.",
+    "understanding": "page-2 empathetic, second-person 'here's where you're at' section drawn from the audience intelligence, in the lead's OWN language ('You've probably felt X, caught yourself saying Y…'). Credibility-through-understanding for a coach without testimonials. Short paragraphs separated by blank lines.",
     "sections": [
-      { "sectionTitle": "section title (mapped to a framework phase)", "keyInsight": "the one key insight of this section", "exercises": [ { "prompt": "an apply-it prompt the lead works through on their own", "lines": 4, "recommended": true } ], "reflection": "a reflection question to close the section" }
+      { "sectionTitle": "section title (mapped to a framework phase)", "keyInsight": "the one key insight of this section", "exercises": [ { "prompt": "an apply-it prompt the lead works through on their own", "lines": 4, "recommended": true, "collects": "one line: what information this question surfaces from the reader", "why_fits": "one line: how it fits this phase and what it sets up next" } ], "reflection": "a reflection question to close the section" }
     ],
     "keyTakeaways": ["a concrete takeaway", "another"],
     "closing_invite": {
-      "book_call": "the coach speaking to the lead in FIRST person ('On it, I'll look at…', 'I built this for…') — an honest, bounded invitation to book a call, addressing the lead as 'you': what the next step is, who it's for, one honest disqualifier. Not a pitch. Ends with [BOOK_A_CALL_LINK].",
-      "sell_program": "the same first-person, honest, bounded invitation but to get the program directly. Ends with [OFFER_LINK]."
+      "book_call": "the coach speaking to the lead in FIRST person ('On it, I'll look at…', 'I built this for…') — an honest, bounded invitation to book a call, addressing the lead as 'you': what the next step is, who it's for, one honest disqualifier. Not a pitch. Short paragraphs separated by blank lines. Ends with [BOOK_A_CALL_LINK].",
+      "sell_program": "the same first-person, honest, bounded invitation but to get the program directly. Short paragraphs separated by blank lines. Ends with [OFFER_LINK]."
     }
   }
 }
 
 Rules:
 - Self-contained lead-facing guide given at opt-in. NEVER assume the lead watched the video; drop all "after watching / you just watched" framing. It works before or after the training.
-- problem_intro: page 1, second person, frames the ONE blueprint problem in the lead's world, standing alone.
+- problem_intro: page 1, written as a PERSONAL LETTER from the coach to the reader — warm, first person, addressed to "you," framing the ONE blueprint problem through that personal lens. Not a detached synopsis.
 - understanding: page 2, empathetic second-person "here's where you're at," drawn from the audience intelligence and written in the lead's own language. Do NOT expose a labeled profile or a "language patterns" list — weave it into natural prose. Follow the coach-facing rules: no persona/avatar names (no "Sarah"), no internal jargon.
 - sections mirror the framework phases in order.
-- exercises are a POOL of candidate apply-it prompts: generate a FEW MORE than needed per section (4-6), and set "recommended": true on the default subset (about half, the strongest) and false on the rest, so the coach can pre-select a default and add/remove the others. "lines" is how many blank lines to leave for the answer (an integer 2-8).
+- exercises are a POOL of candidate apply-it prompts: generate a few candidates per section (3-4), and set "recommended": true on ONLY the ONE strongest question per section, false on all the rest, so the coach starts from a lean default and can add the others. "lines" is how many blank lines to leave for the answer (an integer 2-8).
+- each exercise carries "collects" (one line: what information this question surfaces from the reader) and "why_fits" (one line: how it fits this phase and what it sets up next).
 - keyInsight, prompts, and reflection are specific to this blueprint's problem and this audience — no generic worksheet filler.
 - keyTakeaways: 3-5 concrete takeaways.
 - closing_invite: generate BOTH variants. Each is an honest, bounded invitation grounded in the sales methodology (collect a yes, don't chase a no) — state what the next step is, who it's for, and one honest disqualifier. Not a pitch, no false scarcity, no hype.
 - closing_invite is the COACH speaking directly to the lead: write both variants in FIRST person ("On it, I'll look at…", "I built this for…"), addressing the lead as "you". Never refer to the coach in third person or by name in the closing invite.
 - Per the BOTH CTA LINKS block in the grounding, the book_call copy ends with [BOOK_A_CALL_LINK] and the sell_program copy ends with [OFFER_LINK]. Do not cross the tokens.
+- Write problem_intro, understanding, and BOTH closing_invite variants as SHORT paragraphs separated by a blank line (\\n\\n) — never one solid block.
 ${SHARED_RULES}`,
   },
   recording_tips: {
@@ -561,7 +564,13 @@ export function coerceWorkbook(v: unknown): MtWorkbook {
         .map((e) => (e && typeof e === 'object' ? (e as Record<string, unknown>) : {}))
         .map((e) => {
           const lines = typeof e.lines === 'number' && Number.isFinite(e.lines) ? Math.round(e.lines) : 4
-          return { prompt: asString(e.prompt), lines: Math.min(12, Math.max(1, lines)), recommended: e.recommended === true }
+          return {
+            prompt: asString(e.prompt),
+            lines: Math.min(12, Math.max(1, lines)),
+            recommended: e.recommended === true,
+            collects: asString(e.collects),
+            why_fits: asString(e.why_fits),
+          }
         })
         .filter((e) => e.prompt.trim().length > 0)
       return {
