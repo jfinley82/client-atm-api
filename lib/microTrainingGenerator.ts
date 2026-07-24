@@ -32,9 +32,25 @@ export type MtSlide = {
   timing: string
   sectionName: string
 }
-export type MtExercise = { prompt: string; lines: number }
+// recommended marks the default subset the frontend pre-selects from the pool of
+// candidate exercises; the coach can add or remove the rest.
+export type MtExercise = { prompt: string; lines: number; recommended: boolean }
 export type MtWorkbookSection = { sectionTitle: string; keyInsight: string; exercises: MtExercise[]; reflection: string }
-export type MtWorkbook = { title: string; intro: string; sections: MtWorkbookSection[]; keyTakeaways: string[] }
+// Both CTA variants are generated so the frontend can show whichever the coach's
+// cta_type selects; book_call ends with [BOOK_A_CALL_LINK], sell_program with [OFFER_LINK].
+export type MtClosingInvite = { book_call: string; sell_program: string }
+// The lead-facing Guide (given at opt-in — stands alone, does NOT assume the lead
+// watched the video). problem_intro/understanding/closing_invite are the new
+// self-contained fields; title/intro/sections/keyTakeaways are kept for back-compat.
+export type MtWorkbook = {
+  title: string
+  intro: string
+  problem_intro: string
+  understanding: string
+  sections: MtWorkbookSection[]
+  keyTakeaways: string[]
+  closing_invite: MtClosingInvite
+}
 export type MtEmail = { email_number: number; send_timing: string; subject: string; body: string }
 export type MtRecordingTip = { category: string; tip: string }
 
@@ -177,6 +193,12 @@ function buildGrounding(inputs: GeneratorInputs): string {
 - cta_type: book_call — the closing invites booking a call.
 - target link: use the token [BOOK_A_CALL_LINK] (resolves to ${callUrl}) in the closing email sequence and the closing slide. Do NOT use the offer link.`
 
+  // For an asset that generates BOTH cta variants (e.g. the guide's closing
+  // invite), both token→URL mappings must be present so each variant resolves.
+  const bothCtaBlock = `BOTH CTA LINKS (only for an asset that generates BOTH a book_call and a sell_program variant):
+- book_call variant → end with the token [BOOK_A_CALL_LINK] (resolves to ${callUrl}).
+- sell_program variant → end with the token [OFFER_LINK] (resolves to ${sellUrl}).`
+
   return `AUDIENCE INTELLIGENCE: ${JSON.stringify(inputs.audience)}
 TRANSFORMATION DATA: ${JSON.stringify(inputs.transformation)}
 RESULTS FRAMEWORK (the recorded teaching arc — use these phase names in order): ${JSON.stringify(inputs.framework)}
@@ -190,6 +212,7 @@ AUTHORSHIP (the coach's own inputs — preserve their words, frame around them):
 ${storyLine}
 ${exampleLine}
 ${ctaBlock}
+${bothCtaBlock}
 RECORDING DETAILS:
 - presenter name (use when signing / referring to the coach): ${JSON.stringify(presenter)}
 - coach's soft CTA line: ${ctaLine}`
@@ -254,26 +277,39 @@ ${SHARED_RULES}`,
   },
   workbook: {
     key: 'workbook',
-    maxTokens: 5000,
-    prompt: `You build the companion worksheet a viewer downloads AFTER watching the recorded micro-training, to apply the teaching on their own. It follows the same arc as the video and gives the viewer prompts and reflection space.
+    maxTokens: 6500,
+    prompt: `You build the lead-facing GUIDE — a self-contained downloadable a lead receives AT OPT-IN. It must stand ALONE: do NOT assume they have watched the video. It works before or after the training. Never use "after watching," "you just watched," or "as you saw in the video" framing. It walks the lead through the ONE problem, meets them where they are, gives them apply-it prompts, and ends with an honest invitation. Ground the copy in the copywriting canonical and, for the closing invite, the sales methodology below.
+
+${COPYWRITING_CANONICAL}
+
+${SALES_FRAMEWORK_CANONICAL}
 
 {
   "workbook": {
-    "title": "worksheet title",
-    "intro": "a short intro paragraph orienting the viewer to applying what they just watched",
+    "title": "guide title",
+    "intro": "a short intro paragraph orienting the lead to the guide, self-contained (does not reference a video)",
+    "problem_intro": "page-1 opener that frames the ONE problem in second person, self-contained — name the problem in the lead's world, addressed to 'you'",
+    "understanding": "page-2 empathetic, second-person 'here's where you're at' section drawn from the audience intelligence, in the lead's OWN language ('You've probably felt X, caught yourself saying Y…'). This is credibility-through-understanding for a coach without testimonials.",
     "sections": [
-      { "sectionTitle": "section title (mapped to a framework phase)", "keyInsight": "the one key insight of this section", "exercises": [ { "prompt": "an apply-it prompt the viewer works through on their own", "lines": 4 } ], "reflection": "a reflection question to close the section" }
+      { "sectionTitle": "section title (mapped to a framework phase)", "keyInsight": "the one key insight of this section", "exercises": [ { "prompt": "an apply-it prompt the lead works through on their own", "lines": 4, "recommended": true } ], "reflection": "a reflection question to close the section" }
     ],
-    "keyTakeaways": ["a concrete takeaway", "another"]
+    "keyTakeaways": ["a concrete takeaway", "another"],
+    "closing_invite": {
+      "book_call": "an honest, bounded invitation to book a call — what the next step is, who it's for, one honest disqualifier. Not a pitch. Ends with [BOOK_A_CALL_LINK].",
+      "sell_program": "the same honest, bounded invitation but to get the program directly. Ends with [OFFER_LINK]."
+    }
   }
 }
 
 Rules:
-- This is a solo takeaway worksheet, not live workshop exercises — frame everything as the viewer applying the teaching after watching.
-- sections mirror the framework phases in order, same arc as the video.
-- Each section has 1-3 exercises; "lines" is how many blank lines to leave for the answer (an integer 2-8).
+- Self-contained lead-facing guide given at opt-in. NEVER assume the lead watched the video; drop all "after watching / you just watched" framing. It works before or after the training.
+- problem_intro: page 1, second person, frames the ONE blueprint problem in the lead's world, standing alone.
+- understanding: page 2, empathetic second-person "here's where you're at," drawn from the audience intelligence and written in the lead's own language. Do NOT expose a labeled profile or a "language patterns" list — weave it into natural prose. Follow the coach-facing rules: no persona/avatar names (no "Sarah"), no internal jargon.
+- sections mirror the framework phases in order.
+- exercises are a POOL of candidate apply-it prompts: generate a FEW MORE than needed per section (4-6), and set "recommended": true on the default subset (about half, the strongest) and false on the rest, so the coach can pre-select a default and add/remove the others. "lines" is how many blank lines to leave for the answer (an integer 2-8).
 - keyInsight, prompts, and reflection are specific to this blueprint's problem and this audience — no generic worksheet filler.
-- keyTakeaways: 3-5 concrete takeaways the viewer leaves with.
+- keyTakeaways: 3-5 concrete takeaways.
+- closing_invite: generate BOTH variants. Each is an honest, bounded invitation grounded in the sales methodology (collect a yes, don't chase a no) — state what the next step is, who it's for, and one honest disqualifier. Not a pitch, no false scarcity, no hype. Per the BOTH CTA LINKS block in the grounding, the book_call copy ends with [BOOK_A_CALL_LINK] and the sell_program copy ends with [OFFER_LINK]. Do not cross the tokens.
 ${SHARED_RULES}`,
   },
   recording_tips: {
@@ -523,7 +559,7 @@ export function coerceWorkbook(v: unknown): MtWorkbook {
         .map((e) => (e && typeof e === 'object' ? (e as Record<string, unknown>) : {}))
         .map((e) => {
           const lines = typeof e.lines === 'number' && Number.isFinite(e.lines) ? Math.round(e.lines) : 4
-          return { prompt: asString(e.prompt), lines: Math.min(12, Math.max(1, lines)) }
+          return { prompt: asString(e.prompt), lines: Math.min(12, Math.max(1, lines)), recommended: e.recommended === true }
         })
         .filter((e) => e.prompt.trim().length > 0)
       return {
@@ -534,11 +570,15 @@ export function coerceWorkbook(v: unknown): MtWorkbook {
       }
     })
     .filter((s) => s.sectionTitle.trim().length > 0)
+  const ci = (o.closing_invite && typeof o.closing_invite === 'object' ? o.closing_invite : {}) as Record<string, unknown>
   return {
     title: asString(o.title),
     intro: asString(o.intro),
+    problem_intro: asString(o.problem_intro),
+    understanding: asString(o.understanding),
     sections,
     keyTakeaways: asStringArray(o.keyTakeaways),
+    closing_invite: { book_call: asString(ci.book_call), sell_program: asString(ci.sell_program) },
   }
 }
 
@@ -746,7 +786,7 @@ export async function generateMicroTraining(userId: string, inputs: GeneratorInp
     total_duration: merged.total_duration ?? '15-20 minutes',
     outline: merged.outline ?? [],
     slides: merged.slides ?? [],
-    workbook: merged.workbook ?? { title: '', intro: '', sections: [], keyTakeaways: [] },
+    workbook: merged.workbook ?? { title: '', intro: '', problem_intro: '', understanding: '', sections: [], keyTakeaways: [], closing_invite: { book_call: '', sell_program: '' } },
     warm_invite_emails: merged.warm_invite_emails ?? [],
     emails: merged.emails ?? [],
     book_a_call_emails: merged.book_a_call_emails ?? [],
