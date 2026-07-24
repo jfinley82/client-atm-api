@@ -295,8 +295,8 @@ ${SALES_FRAMEWORK_CANONICAL}
     ],
     "keyTakeaways": ["a concrete takeaway", "another"],
     "closing_invite": {
-      "book_call": "an honest, bounded invitation to book a call — what the next step is, who it's for, one honest disqualifier. Not a pitch. Ends with [BOOK_A_CALL_LINK].",
-      "sell_program": "the same honest, bounded invitation but to get the program directly. Ends with [OFFER_LINK]."
+      "book_call": "the coach speaking to the lead in FIRST person ('On it, I'll look at…', 'I built this for…') — an honest, bounded invitation to book a call, addressing the lead as 'you': what the next step is, who it's for, one honest disqualifier. Not a pitch. Ends with [BOOK_A_CALL_LINK].",
+      "sell_program": "the same first-person, honest, bounded invitation but to get the program directly. Ends with [OFFER_LINK]."
     }
   }
 }
@@ -309,7 +309,9 @@ Rules:
 - exercises are a POOL of candidate apply-it prompts: generate a FEW MORE than needed per section (4-6), and set "recommended": true on the default subset (about half, the strongest) and false on the rest, so the coach can pre-select a default and add/remove the others. "lines" is how many blank lines to leave for the answer (an integer 2-8).
 - keyInsight, prompts, and reflection are specific to this blueprint's problem and this audience — no generic worksheet filler.
 - keyTakeaways: 3-5 concrete takeaways.
-- closing_invite: generate BOTH variants. Each is an honest, bounded invitation grounded in the sales methodology (collect a yes, don't chase a no) — state what the next step is, who it's for, and one honest disqualifier. Not a pitch, no false scarcity, no hype. Per the BOTH CTA LINKS block in the grounding, the book_call copy ends with [BOOK_A_CALL_LINK] and the sell_program copy ends with [OFFER_LINK]. Do not cross the tokens.
+- closing_invite: generate BOTH variants. Each is an honest, bounded invitation grounded in the sales methodology (collect a yes, don't chase a no) — state what the next step is, who it's for, and one honest disqualifier. Not a pitch, no false scarcity, no hype.
+- closing_invite is the COACH speaking directly to the lead: write both variants in FIRST person ("On it, I'll look at…", "I built this for…"), addressing the lead as "you". Never refer to the coach in third person or by name in the closing invite.
+- Per the BOTH CTA LINKS block in the grounding, the book_call copy ends with [BOOK_A_CALL_LINK] and the sell_program copy ends with [OFFER_LINK]. Do not cross the tokens.
 ${SHARED_RULES}`,
   },
   recording_tips: {
