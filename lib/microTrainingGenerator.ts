@@ -368,7 +368,7 @@ ${EMAIL_CANONICAL}
 
 {
   "emails": [
-    { "email_number": 1, "send_timing": "immediately after registration", "subject": "subject line", "body": "the confirmation — warm thanks, they're in, what they'll get (specific), one watch CTA using [TRAINING_LINK], a short 'here's what to expect', and prime the next email. Add a P.S. with a backup [TRAINING_LINK]." },
+    { "email_number": 1, "send_timing": "immediately after registration", "subject": "subject line", "body": "the confirmation — warm thanks, they're in, what they'll get (specific), one watch CTA using [TRAINING_LINK], a short 'here's what to expect', a brief companion line offering the Guide as a bonus resource (a few honest words on what it is) with the [GUIDE_LINK] token, and prime the next email. Add a P.S. with a backup [TRAINING_LINK]." },
     { "email_number": 2, "send_timing": "1 day after registration if not yet watched", "subject": "subject line", "body": "name that they registered and haven't watched yet, give ONE specific reason to watch now tied to the problem this training solves. One CTA, end with [TRAINING_LINK]." },
     { "email_number": 3, "send_timing": "final reminder if still not watched", "subject": "subject line", "body": "a final watch-nudge to someone who registered but still hasn't watched — one clear reason to watch now. One CTA, end with [TRAINING_LINK]." }
   ]
@@ -377,6 +377,7 @@ ${EMAIL_CANONICAL}
 Rules:
 - Exactly 3 emails, grounded in this blueprint's problem and this audience's language. Do NOT sign the body or append the coach's name — the signature is added by the render. End each body at its final line.
 - Email 1 is the confirmation (deliver the watch link, set the expectation to watch now, prime the next email, P.S. backup link); emails 2-3 explicitly nudge someone who opted in but hasn't watched (name that they registered and haven't watched yet). Teaching-first, honest, non-guru.
+- Email 1 (and ONLY email 1) may also offer the Guide as a bonus companion resource using the [GUIDE_LINK] token — one brief, honest line on what it is. It is a bonus, positioned BELOW the primary watch CTA and must NOT compete with it: [TRAINING_LINK] stays the main action. Do not use [GUIDE_LINK] in emails 2-3.
 - These emails are about WATCHING the recorded video — no live-session language (no "attend", "seat", "join us live"). Do not pitch the offer or a call here.
 - Format each body per the email canonical: short paragraphs of 2-3 sentences, each separated by a blank line. Never one block.
 ${SHARED_RULES}`,
