@@ -60,7 +60,9 @@ const REGEN_TARGETS = new Set([
 ])
 
 // The wizard steps a coach can approve, driving the Build progress rail.
-const VALID_BUILD_STEPS = new Set(['angle', 'slides', 'emails', 'script', 'objections'])
+// Objections are not their own approvable step — they're approved as part of the
+// script (they feed the beat-5 panel), so 'objections' is not listed here.
+const VALID_BUILD_STEPS = new Set(['angle', 'slides', 'emails', 'script'])
 
 function parsePersonalHook(raw: unknown): PersonalHook | undefined {
   if (!raw || typeof raw !== 'object') return undefined

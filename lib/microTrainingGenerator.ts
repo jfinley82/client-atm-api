@@ -288,6 +288,8 @@ ${SHARED_RULES}`,
 Rules:
 - 5-8 tips, each grounded in this specific video's arc and this coach's material.
 - Tips are for recording a solo teaching video (delivery, energy on camera, framing, keeping momentum through the arc), not for facilitating a live session or public speaking generalities.
+- Never name the audience by a persona or avatar name (no "Sarah"). Refer to them as "your audience," "your viewer," or "them."
+- Address the coach as "you," never by their name.
 ${SHARED_RULES}`,
   },
   warm_invite: {
