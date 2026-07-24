@@ -308,7 +308,7 @@ ${EMAIL_CANONICAL}
 }
 
 Rules:
-- Exactly 3 emails, signed by the coach (use the presenter name). These go to an EXISTING warm audience who have NOT opted in yet, so the job is to earn the registration — do not talk as if they already registered.
+- Exactly 3 emails. Do NOT sign the body or append the coach's name — the signature is added by the render. End each body at its final line. These go to an EXISTING warm audience who have NOT opted in yet, so the job is to earn the registration — do not talk as if they already registered.
 - Reference the training's promise/angle and the offer's transformation, grounded in this blueprint and this audience. Second person, honest, non-guru: no manufactured scarcity, no inflated or guaranteed promises, no hype vocabulary.
 - One CTA per email, to the opt-in page, using the token [REGISTER_LINK]. Do not use the training/watch link or the call/offer link here — this is pre-opt-in.
 - Format each body per the email canonical: short paragraphs of 2-3 sentences, each separated by a blank line. Never one block.
@@ -332,7 +332,7 @@ ${EMAIL_CANONICAL}
 }
 
 Rules:
-- Exactly 3 emails, grounded in this blueprint's problem and this audience's language, signed by the coach (use the presenter name).
+- Exactly 3 emails, grounded in this blueprint's problem and this audience's language. Do NOT sign the body or append the coach's name — the signature is added by the render. End each body at its final line.
 - Email 1 is the confirmation (deliver the watch link, set the expectation to watch now, prime the next email, P.S. backup link); emails 2-3 explicitly nudge someone who opted in but hasn't watched (name that they registered and haven't watched yet). Teaching-first, honest, non-guru.
 - These emails are about WATCHING the recorded video — no live-session language (no "attend", "seat", "join us live"). Do not pitch the offer or a call here.
 - Format each body per the email canonical: short paragraphs of 2-3 sentences, each separated by a blank line. Never one block.
@@ -364,7 +364,7 @@ Branch on the CTA TYPE in the grounding:
 - cta_type = sell_program: 3 emails that invite the viewer to GET THE PROGRAM DIRECTLY. Email 1 names the specific transformation and the confident next step; email 2 names the real cost of staying stuck and reframes the main objection to buying; email 3 a clear, direct final call to get the program. EVERY email ends with the token [OFFER_LINK].
 
 Rules for BOTH variants:
-- Exactly 3 emails, grounded in this blueprint's problem/solution, naming the specific transformation and the blueprint's suggested_offer, signed by the coach (use the presenter name).
+- Exactly 3 emails, grounded in this blueprint's problem/solution, naming the specific transformation and the blueprint's suggested_offer. Do NOT sign the body or append the coach's name — the signature is added by the render. End each body at its final line.
 - Bring umph: stronger and more direct than the watch-nudges. Name the specific transformation, the real cost of staying stuck, and a confident, clear next step to book. Still honest and non-guru: no manufactured scarcity, no hype, no false urgency, no inflated or guaranteed promises.
 - One CTA per email. Use ONLY the target link the CTA block designates — do not include the other link.
 - Format each body per the email canonical: short paragraphs of 2-3 sentences, each separated by a blank line. Never one block.
