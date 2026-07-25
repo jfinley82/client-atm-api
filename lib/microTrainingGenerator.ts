@@ -242,6 +242,16 @@ Ground EVERYTHING in the specific data provided — the coach's real audience la
 ${GENDER_NEUTRAL_INSTRUCTION}
 ${STYLE_GUIDELINES}`
 
+// A sharp, LOCAL reminder injected at the exact points hooks / titles / angles /
+// subject lines are written. The distant style block loses to the punchy-hook
+// ask, so name the shapes that keep slipping through and show a recast for each —
+// the model needs the pattern, not just the prohibition. All recast examples are
+// themselves style-compliant (direct claim or concrete image).
+const HOOK_STYLE_REMINDER = `NO BANNED CONTRAST/NEGATION SHAPES — RECAST. A punchy hook pulls straight into these banned templates; if a hook, title, angle, or subject line is landing on any of them, recast it as a direct claim or a concrete image before returning:
+- "It's not X, it's Y" / "not X, but Y" → state the claim or the concrete situation directly. "It's not a marketing problem, it's the friend zone" → "Your warmest followers ask you for advice, then pay someone else."
+- "You don't need another X" → name what actually moves the needle, or the real situation. "You don't need another script or more traffic" → "The people who already trust you are the ones you never ask."
+- "You don't have an X problem, you have a Y problem" / "That's not an X problem" → state the real dynamic as a direct line. "You don't have a marketing problem, you have a friend-zone problem" → "Your audience likes you and still buys from someone else."`
+
 // ── Per-unit prompts ────────────────────────────────────────────────────────
 // Each unit's system prompt carries only its own schema + rules. max_tokens is
 // sized per unit. On the full generate all six run in parallel; regenerate runs
@@ -268,6 +278,8 @@ Rules:
 - score each topic 0-10 (one decimal) on how well its hook FITS this audience — higher when the hook mirrors the audience's OWN language and beliefs and pulls them into watching the training, lower when it's generic or off-angle. Make the scores genuinely DIFFERENTIATE across the 5 options (spread them out — do not cluster them all near the same value); the weakest option should score clearly below the strongest.
 - chosen_topic must never be empty — pick the strongest, sharpened for this audience.
 - chosen_angle must never be empty — it is the hook chosen_topic opens from, in the audience's language, and every other asset opens from it.
+- The titles, every topic "angle", and chosen_angle are hooks, so check them against this before returning:
+${HOOK_STYLE_REMINDER}
 - total_duration is always a 15-20 minute recorded video — do not invent a longer run time.
 - outline: the sections a viewer moves through in the recording, mapped to the framework's phases in order (hook, the teaching phases applied to this problem, the key insight, a soft next step). One entry per section.
 ${SHARED_RULES}`,
@@ -295,6 +307,8 @@ Rules:
 - If a COACH'S OWN OPENING STORY is provided in the AUTHORSHIP block, the opening (the Cover/Qualify area) MUST weave it in as the coach's own opening — in their voice, teaching-first, preserving their words (frame around them, do not paraphrase them away). If none is provided, write a strong opening and do NOT fabricate a personal story.
 - If a COACH'S SIGNATURE EXAMPLE is provided, work it into a teaching slide where it fits naturally, preserving their words.
 - On "The call" beat, reflect the CTA in the grounding: for book_call, invite the viewer to book a call and use the token [BOOK_A_CALL_LINK]; for sell_program, invite them to get the program directly and use the token [OFFER_LINK]. Use only the applicable link. The CTA token ([BOOK_A_CALL_LINK] / [OFFER_LINK]) must appear INSIDE The call slide's script — never as its own slide and never as a slide title.
+- The Cover slide's title and opening script are the deck's hook, so check them against this before returning:
+${HOOK_STYLE_REMINDER}
 ${SHARED_RULES}`,
   },
   workbook: {
@@ -376,6 +390,8 @@ Rules:
 - Reference the training's promise/angle and the offer's transformation, grounded in this blueprint and this audience. Second person, honest, non-guru: no manufactured scarcity, no inflated or guaranteed promises, no hype vocabulary.
 - One CTA per email, to the opt-in page, using the token [REGISTER_LINK]. Do not use the training/watch link or the call/offer link here — this is pre-opt-in.
 - Format each body per the email canonical: short paragraphs of 2-3 sentences, each separated by a blank line. Never one block.
+- Subject lines are hooks, so check each against this before returning:
+${HOOK_STYLE_REMINDER}
 ${SHARED_RULES}`,
   },
   emails: {
@@ -401,6 +417,8 @@ Rules:
 - Email 1 (and ONLY email 1) may also offer the Guide as a bonus companion resource using the [GUIDE_LINK] token — one brief, honest line on what it is. It is a bonus, positioned BELOW the primary watch CTA and must NOT compete with it: [TRAINING_LINK] stays the main action. Do not use [GUIDE_LINK] in emails 2-3.
 - These emails are about WATCHING the recorded video — no live-session language (no "attend", "seat", "join us live"). Do not pitch the offer or a call here.
 - Format each body per the email canonical: short paragraphs of 2-3 sentences, each separated by a blank line. Never one block.
+- Subject lines are hooks, so check each against this before returning:
+${HOOK_STYLE_REMINDER}
 ${SHARED_RULES}`,
   },
   book_a_call: {
@@ -433,6 +451,8 @@ Rules for BOTH variants:
 - Bring umph: stronger and more direct than the watch-nudges. Name the specific transformation, the real cost of staying stuck, and a confident, clear next step to book. Still honest and non-guru: no manufactured scarcity, no hype, no false urgency, no inflated or guaranteed promises.
 - One CTA per email. Use ONLY the target link the CTA block designates — do not include the other link.
 - Format each body per the email canonical: short paragraphs of 2-3 sentences, each separated by a blank line. Never one block.
+- Subject lines are hooks, so check each against this before returning:
+${HOOK_STYLE_REMINDER}
 ${SHARED_RULES}`,
   },
   sales_script: {
