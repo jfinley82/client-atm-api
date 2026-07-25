@@ -5,6 +5,7 @@ import { logApiCost } from './apiCostLog'
 import { SALES_FRAMEWORK_CANONICAL, SALES_SCRIPT_BEATS, OBJECTION_LOOPS, type ObjectionLoop } from './salesFrameworksCanonical'
 import { COPYWRITING_CANONICAL } from './copywritingCanonical'
 import { EMAIL_CANONICAL } from './emailCanonical'
+import { SLIDES_CANONICAL } from './slideDeckCanonical'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -257,23 +258,25 @@ ${SHARED_RULES}`,
   slides: {
     key: 'slides',
     maxTokens: 8000,
-    prompt: `You build the slide deck the coach records the micro-training video from. Each slide has the script the coach speaks on camera, a short speaker note/cue, its timing, and the framework section it belongs to.
+    prompt: `You build the slide deck the coach records the micro-training video from. Each slide has the script the coach speaks on camera, a short speaker note/cue, its timing, and the beat it belongs to. Build the deck to the slide-deck doctrine below.
+
+${SLIDES_CANONICAL}
 
 {
   "slides": [
-    { "slideNumber": 1, "slideTitle": "slide title", "script": "what the coach actually says on this slide, written to be read or paraphrased on camera", "speakerNote": "a short delivery cue for this slide", "timing": "minutes for this slide, e.g. '2 min'", "sectionName": "the framework phase name this slide belongs to" }
+    { "slideNumber": 1, "slideTitle": "slide title", "script": "what the coach actually says on this slide, written to be read or paraphrased on camera", "speakerNote": "a short delivery cue for this slide", "timing": "minutes for this slide, e.g. '2 min'", "sectionName": "the beat name this slide belongs to" }
   ]
 }
 
 Rules:
-- Produce 10 to 12 slides, numbered 1..N in order. This is a fixed 15-20 minute recorded video — do NOT scale the count to any run time.
-- The arc MUST follow the framework's ACTUAL phases in order: open with a hook slide, move through the teaching phases applied to this blueprint's problem, surface the key insight, and close with a soft next-step slide.
-- sectionName MUST be a real framework phase name (or "Hook" for the opening slide and "Next step" for the closing slide).
+- NO fixed slide count — size the deck to the ONE problem, never pad to a target and never compress a problem that needs teaching. Keep the whole thing inside the 15-20 minute window (usually 8-14 slides). Number slides 1..N in order.
+- Generate the beats in the doctrine's ORDER (Cover, Qualify, Hidden bottleneck, Why the old way fails, Teaching, Framework reveal, Proof, Implementation gap, The call). A beat may take multiple slides (the teaching section flexes to the problem) and may merge with a neighbor or split in two if the problem calls for it, as long as the order holds and no beat is dropped.
+- sectionName is the BEAT NAME the slide belongs to, exactly as named in the doctrine.
 - The per-slide timing values must sum to roughly 15-20 minutes.
 - script is the spoken content grounded in this blueprint and the audience's language — specific teaching, not vague restatements of the title. No live-audience or "welcome to today's session" language; this is recorded solo.
-- If a COACH'S OWN OPENING STORY is provided in the AUTHORSHIP block, the opening hook slide's script MUST weave it in as the coach's own opening — in their voice, teaching-first, preserving their words (frame around them, do not paraphrase them away). If none is provided, write a strong hook and do NOT fabricate a personal story.
+- If a COACH'S OWN OPENING STORY is provided in the AUTHORSHIP block, the opening (the Cover/Qualify area) MUST weave it in as the coach's own opening — in their voice, teaching-first, preserving their words (frame around them, do not paraphrase them away). If none is provided, write a strong opening and do NOT fabricate a personal story.
 - If a COACH'S SIGNATURE EXAMPLE is provided, work it into a teaching slide where it fits naturally, preserving their words.
-- The final slide is a soft next-step slide, teaching-first, no hard pitch, grounded in the blueprint's suggested_offer. Reflect the CTA in the grounding: for book_call, invite the viewer to book a call and use the token [BOOK_A_CALL_LINK]; for sell_program, invite them to get the program directly and use the token [OFFER_LINK]. Use only the applicable link.
+- On "The call" beat, reflect the CTA in the grounding: for book_call, invite the viewer to book a call and use the token [BOOK_A_CALL_LINK]; for sell_program, invite them to get the program directly and use the token [OFFER_LINK]. Use only the applicable link.
 ${SHARED_RULES}`,
   },
   workbook: {
