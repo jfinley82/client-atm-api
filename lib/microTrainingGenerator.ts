@@ -59,7 +59,9 @@ export type MtWorkbook = {
   keyTakeaways: string[]
   closing_invite: MtClosingInvite
 }
-export type MtEmail = { email_number: number; send_timing: string; subject: string; body: string }
+// original is the as-generated snapshot the editor stamps on load, so a coach
+// edit to subject/body can be detected on read (mirrors MtSlide.original).
+export type MtEmail = { email_number: number; send_timing: string; subject: string; body: string; original?: { subject: string; body: string } }
 export type MtRecordingTip = { category: string; tip: string }
 
 // ── Build-wizard net-new assets ─────────────────────────────────────────────
@@ -655,12 +657,18 @@ export function coerceEmails(v: unknown): MtEmail[] {
     .map((r, i) => {
       const o = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>
       const n = typeof o.email_number === 'number' && Number.isFinite(o.email_number) ? o.email_number : i + 1
-      return {
+      const email: MtEmail = {
         email_number: n,
         send_timing: asString(o.send_timing),
         subject: asString(o.subject),
         body: asString(o.body),
       }
+      // Preserve the editor's as-generated snapshot so a coach edit is detectable.
+      if (o.original && typeof o.original === 'object') {
+        const orig = o.original as Record<string, unknown>
+        email.original = { subject: asString(orig.subject), body: asString(orig.body) }
+      }
+      return email
     })
     .filter((e) => e.subject.trim().length > 0 || e.body.trim().length > 0)
 }
@@ -947,6 +955,15 @@ export async function scrubEmailSubjectHooks(userId: string, emails: MtEmail[], 
   return emails
 }
 
+// Stamp the as-generated { subject, body } snapshot on freshly generated emails
+// so a later coach edit is detectable on read (mirrors slides' `original`). Called
+// at generation time (full generate + regenerate), after any hook repair, so the
+// snapshot is the final shipped copy. Does not touch an email that already carries
+// an original, so a coach's stored snapshot is never overwritten.
+export function stampEmailOriginals(emails: MtEmail[]): MtEmail[] {
+  return emails.map((e) => (e.original ? e : { ...e, original: { subject: e.subject, body: e.body } }))
+}
+
 // Full generate — two waves so the downstream assets align to the FINAL title.
 // Wave 1: meta first, fixing chosen_topic (+ subtitle). Wave 2: the remaining
 // five units in parallel, grounded through withTitle(grounding, chosen_topic) —
@@ -958,7 +975,11 @@ export async function generateMicroTraining(
   inputs: GeneratorInputs,
   // When keep_title pins the coach's angle, pass the pinned title + hook so the
   // whole training is generated on that angle (not the meta unit's fresh pick).
-  pinned?: { chosen_topic: string; chosen_angle: string }
+  pinned?: { chosen_topic: string; chosen_angle: string },
+  // 'coach' when the pinned angle is a hook the coach wrote themselves — its
+  // chosen_angle is then excluded from the banned-shape auto-repair so a
+  // coach-authored hook is never silently rewritten. Defaults to 'ai'.
+  angleSource: 'ai' | 'coach' = 'ai'
 ): Promise<MicroTraining> {
   const grounding = buildGrounding(inputs)
 
@@ -1024,7 +1045,16 @@ The training title is fixed to: ${JSON.stringify(pinnedTitle)}. Return chosen_to
   }
   // Deterministic safety net on the shipped hook fields — guarantees title,
   // angle, cover, topic titles/angles, and subjects are clean whatever the run did.
-  await repairHookSlots(userId, collectFullHookSlots(result), { chosen_topic: result.chosen_topic, audience: inputs.audience })
+  // When the coach authored the pinned angle, its chosen_angle is left out so a
+  // hook they typed is never auto-rewritten; every AI-generated hook still repairs.
+  const repairSlots = collectFullHookSlots(result).filter(
+    (s) => !(angleSource === 'coach' && s.label === 'chosen_angle')
+  )
+  await repairHookSlots(userId, repairSlots, { chosen_topic: result.chosen_topic, audience: inputs.audience })
+  // Snapshot the final email copy so a later coach edit is detectable on read.
+  result.emails = stampEmailOriginals(result.emails)
+  result.warm_invite_emails = stampEmailOriginals(result.warm_invite_emails)
+  result.book_a_call_emails = stampEmailOriginals(result.book_a_call_emails)
   return result
 }
 

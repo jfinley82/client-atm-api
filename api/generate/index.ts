@@ -19,6 +19,8 @@ import {
   scrubTopicHooks,
   scrubSlideCoverHook,
   scrubEmailSubjectHooks,
+  stampEmailOriginals,
+  matchHookShapes,
   DeliveryInput,
   GeneratorInputs,
   MtSlide,
@@ -99,14 +101,27 @@ const REGEN_ANGLE_KEY: Record<string, string> = {
   outline: 'outline',
 }
 
-// Computed, read-only fields for the GET response — never stored.
+// The three email arrays, by their stored column name, for the hook-flag scan.
+const EMAIL_LISTS = ['emails', 'warm_invite_emails', 'book_a_call_emails'] as const
+
+// Computed, read-only fields for the GET response — never stored. Purely signals;
+// nothing here rewrites content.
 //  - angle_sync: per-asset (asset_angles[key] === chosen_angle); an UNSTAMPED
 //    asset counts as in-sync so legacy rows don't false-alarm.
 //  - customized_slides: slides whose content differs from their `original`
 //    snapshot, or that were hand-added (no original).
+//  - hook_flags: quiet "reads like generic ad copy" nudges the frontend can show.
+//    chosen_angle is flagged only when the coach owns the hook (angle_source
+//    'coach'); email subjects only when coach-edited (differ from their original).
+//    A true value means a banned shape is present; the coach can accept or ignore.
 function computeAngleFields(row: Record<string, unknown>): {
   angle_sync: { current_angle: string; assets: Record<string, boolean>; all_in_sync: boolean }
   customized_slides: number
+  customized_emails: number
+  hook_flags: {
+    chosen_angle: boolean | null
+    email_subjects: Array<{ list: string; index: number; banned_shape: boolean }>
+  }
 } {
   const chosenAngle = typeof row.chosen_angle === 'string' ? row.chosen_angle : ''
   const stamps = (row.asset_angles && typeof row.asset_angles === 'object' ? row.asset_angles : {}) as Record<string, unknown>
@@ -138,7 +153,36 @@ function computeAngleFields(row: Record<string, unknown>): {
     }
   }
 
-  return { angle_sync: { current_angle: chosenAngle, assets, all_in_sync: allInSync }, customized_slides: customized }
+  // Email edit-detection + hook_flags in one pass over the three email arrays.
+  // customized_emails: subject OR body differs from the as-generated snapshot; an
+  // email with no original (legacy rows) counts as not customized. hook_flags:
+  // flag-only banned-shape signals for coach-owned hook text.
+  const angleSource = typeof row.angle_source === 'string' ? row.angle_source : 'ai'
+  const chosenAngleFlag = angleSource === 'coach' ? matchHookShapes(chosenAngle).length > 0 : null
+  const emailSubjectFlags: Array<{ list: string; index: number; banned_shape: boolean }> = []
+  let customizedEmails = 0
+  for (const list of EMAIL_LISTS) {
+    const arr = Array.isArray(row[list]) ? (row[list] as unknown[]) : []
+    arr.forEach((e, index) => {
+      const email = (e && typeof e === 'object' ? e : {}) as Record<string, unknown>
+      const orig = (email.original && typeof email.original === 'object' ? email.original : null) as Record<string, unknown> | null
+      if (!orig) return // legacy email with no snapshot — never false-alarm
+      const subject = typeof email.subject === 'string' ? email.subject : ''
+      const body = typeof email.body === 'string' ? email.body : ''
+      if (subject !== orig.subject || body !== orig.body) customizedEmails++
+      // Coach-edited subject: surface whether it trips a banned shape.
+      if (subject !== orig.subject) {
+        emailSubjectFlags.push({ list, index, banned_shape: matchHookShapes(subject).length > 0 })
+      }
+    })
+  }
+
+  return {
+    angle_sync: { current_angle: chosenAngle, assets, all_in_sync: allInSync },
+    customized_slides: customized,
+    customized_emails: customizedEmails,
+    hook_flags: { chosen_angle: chosenAngleFlag, email_subjects: emailSubjectFlags },
+  }
 }
 
 // Attach the computed angle-sync fields to a generation row for a GET response.
@@ -213,7 +257,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // existing chosen_angle untouched — never clear the hook with an empty ''.
         const resolvedAngle = resolveAngle(Array.isArray(cur.topics) ? (cur.topics as MtTopic[]) : [], title)
         const titleUpdate: Record<string, unknown> = { chosen_topic: title, updated_at: new Date().toISOString() }
-        if (resolvedAngle.trim().length > 0) titleUpdate.chosen_angle = resolvedAngle
+        // Picking one of the AI-suggested titles pins that topic's AI angle;
+        // typing a custom title (no match) is the coach owning the hook, so mark
+        // it 'coach' and leave the existing chosen_angle untouched. Coach-owned
+        // hooks are then excluded from the banned-shape auto-repair.
+        if (resolvedAngle.trim().length > 0) {
+          titleUpdate.chosen_angle = resolvedAngle
+          titleUpdate.angle_source = 'ai'
+        } else {
+          titleUpdate.angle_source = 'coach'
+        }
         const { data, error } = await supabase
           .from('mtm_generations')
           .update(titleUpdate)
@@ -294,8 +347,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         update.chosen_topic = t
       }
       // Apply chosen_angle only when the request sends a non-empty string — never
-      // clear a good hook with ''.
-      if (typeof save.chosen_angle === 'string' && save.chosen_angle.trim().length > 0) update.chosen_angle = save.chosen_angle
+      // clear a good hook with ''. An inline angle edit is the coach writing their
+      // own hook, so mark it 'coach' — that hook is then never auto-rewritten.
+      if (typeof save.chosen_angle === 'string' && save.chosen_angle.trim().length > 0) {
+        update.chosen_angle = save.chosen_angle
+        update.angle_source = 'coach'
+      }
 
       if (Object.keys(update).length === 0) {
         return res.status(400).json({ error: 'save had no editable fields' })
@@ -352,7 +409,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         getSavedOutput(userId, 'transformation'),
         supabase
           .from('mtm_generations')
-          .select('chosen_topic, chosen_angle, delivery, slides, topics, asset_angles')
+          .select('chosen_topic, chosen_angle, delivery, slides, topics, asset_angles, angle_source')
           .eq('user_id', userId)
           .eq('card_id', card_id)
           .maybeSingle(),
@@ -433,13 +490,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             update.slides = await scrubSlideCoverHook(userId, (await regenerateAsset(userId, 'slides', inputs, chosenTopic, chosenAngle)).slides ?? [], chosenTopic, baseInputs.audience)
             break
           case 'warm_invite':
-            update.warm_invite_emails = await scrubEmailSubjectHooks(userId, (await regenerateAsset(userId, 'warm_invite', inputs, chosenTopic, chosenAngle)).warm_invite_emails ?? [], chosenTopic, baseInputs.audience)
+            update.warm_invite_emails = stampEmailOriginals(await scrubEmailSubjectHooks(userId, (await regenerateAsset(userId, 'warm_invite', inputs, chosenTopic, chosenAngle)).warm_invite_emails ?? [], chosenTopic, baseInputs.audience))
             break
           case 'emails':
-            update.emails = await scrubEmailSubjectHooks(userId, (await regenerateAsset(userId, 'emails', inputs, chosenTopic, chosenAngle)).emails ?? [], chosenTopic, baseInputs.audience)
+            update.emails = stampEmailOriginals(await scrubEmailSubjectHooks(userId, (await regenerateAsset(userId, 'emails', inputs, chosenTopic, chosenAngle)).emails ?? [], chosenTopic, baseInputs.audience))
             break
           case 'book_a_call':
-            update.book_a_call_emails = await scrubEmailSubjectHooks(userId, (await regenerateAsset(userId, 'book_a_call', inputs, chosenTopic, chosenAngle)).book_a_call_emails ?? [], chosenTopic, baseInputs.audience)
+            update.book_a_call_emails = stampEmailOriginals(await scrubEmailSubjectHooks(userId, (await regenerateAsset(userId, 'book_a_call', inputs, chosenTopic, chosenAngle)).book_a_call_emails ?? [], chosenTopic, baseInputs.audience))
             break
           case 'workbook':
             update.workbook = (await regenerateAsset(userId, 'workbook', inputs, chosenTopic, chosenAngle)).workbook
@@ -521,7 +578,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                   : resolveAngle(Array.isArray(existing?.topics) ? (existing!.topics as MtTopic[]) : [], existingChosen),
             }
           : undefined
-      const generated = await generateMicroTraining(userId, inputs, pinned)
+      // When keep_title pins a coach-authored angle, carry that authorship into
+      // the rebuild: the coach's hook is preserved (excluded from the banned-shape
+      // auto-repair) and the row stays flagged 'coach'. A fresh generate, or a
+      // pinned AI angle, is 'ai'.
+      const angleSource: 'ai' | 'coach' =
+        keepTitle &&
+        existing?.angle_source === 'coach' &&
+        typeof existing?.chosen_angle === 'string' &&
+        existing.chosen_angle.trim().length > 0
+          ? 'coach'
+          : 'ai'
+      const generated = await generateMicroTraining(userId, inputs, pinned, angleSource)
       // generateMicroTraining returns the effective (pinned-aware) title + angle.
       const chosen_topic = generated.chosen_topic
       // Never overwrite a good stored angle with an empty one — keep the previous
@@ -561,6 +629,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             delivery: resolvedDelivery,
             sync_snapshot,
             asset_angles,
+            angle_source: angleSource,
             updated_at: new Date().toISOString(),
           },
           { onConflict: 'user_id,card_id' }
