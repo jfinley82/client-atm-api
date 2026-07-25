@@ -21,6 +21,7 @@ import {
   scrubEmailSubjectHooks,
   stampEmailOriginals,
   stampSlideGenSnapshots,
+  stampScriptGenSnapshots,
   matchHookShapes,
   DeliveryInput,
   GeneratorInputs,
@@ -150,6 +151,21 @@ function emailSetCustomized(arr: unknown): boolean {
   return Array.isArray(arr) && arr.some(isEmailCustomized)
 }
 
+// A call-script beat counts as coach-customized when its content differs from the
+// generator-owned gen_snapshot, or when it was hand-added (no snapshot).
+// phrasing_options is an array, so compare it structurally.
+function isBeatCustomized(b: unknown): boolean {
+  const beat = (b && typeof b === 'object' ? b : {}) as Record<string, unknown>
+  const gen = (beat.gen_snapshot && typeof beat.gen_snapshot === 'object' ? beat.gen_snapshot : null) as Record<string, unknown> | null
+  if (!gen) return true // hand-added beat (no generator snapshot)
+  return (
+    beat.beat !== gen.beat ||
+    beat.prospect_mindset !== gen.prospect_mindset ||
+    beat.recommended !== gen.recommended ||
+    JSON.stringify(beat.phrasing_options ?? []) !== JSON.stringify(gen.phrasing_options ?? [])
+  )
+}
+
 // Computed, read-only fields for the GET response — never stored. Purely signals;
 // nothing here rewrites content.
 //  - angle_sync: per-asset (asset_angles[key] === chosen_angle); an UNSTAMPED
@@ -164,6 +180,7 @@ function computeAngleFields(row: Record<string, unknown>): {
   angle_sync: { current_angle: string; assets: Record<string, boolean>; all_in_sync: boolean }
   customized_slides: number
   customized_emails: number
+  customized_script: number
   can_restore: boolean
   hook_flags: {
     chosen_angle: boolean | null
@@ -187,6 +204,11 @@ function computeAngleFields(row: Record<string, unknown>): {
   // differs from its snapshot, and a hand-added slide has no snapshot — both count.
   const slides = Array.isArray(row.slides) ? row.slides : []
   const customized = slides.filter(isSlideCustomized).length
+
+  // customized_script: call-script beats edited from, or added without, their
+  // gen_snapshot. A freshly generated script reads 0.
+  const scriptBeats = Array.isArray(row.sales_script) ? row.sales_script : []
+  const customizedScript = scriptBeats.filter(isBeatCustomized).length
 
   // Email edit-detection + hook_flags in one pass over the three email arrays.
   // customized_emails: subject OR body differs from the as-generated snapshot; an
@@ -215,6 +237,7 @@ function computeAngleFields(row: Record<string, unknown>): {
     angle_sync: { current_angle: chosenAngle, assets, all_in_sync: allInSync },
     customized_slides: customized,
     customized_emails: customizedEmails,
+    customized_script: customizedScript,
     // A rebuild captures the pre-state; present until a restore clears it (one
     // level of undo). Lets the frontend enable the undo control.
     can_restore: row.pre_rebuild_snapshot != null,
@@ -555,7 +578,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             break
           }
           case 'sales_script':
-            update.sales_script = (await regenerateAsset(userId, 'sales_script', inputs, chosenTopic, chosenAngle)).sales_script
+            update.sales_script = stampScriptGenSnapshots((await regenerateAsset(userId, 'sales_script', inputs, chosenTopic, chosenAngle)).sales_script ?? [])
             break
           case 'objections':
             update.objections = (await regenerateAsset(userId, 'objections', inputs, chosenTopic, chosenAngle)).objections
@@ -644,21 +667,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           warm_invite: { column: 'warm_invite_emails', run: async () => stampEmailOriginals(await scrubEmailSubjectHooks(userId, (await regenerateAsset(userId, 'warm_invite', inputs, chosenTopic, chosenAngle)).warm_invite_emails ?? [], chosenTopic, baseInputs.audience)) },
           emails: { column: 'emails', run: async () => stampEmailOriginals(await scrubEmailSubjectHooks(userId, (await regenerateAsset(userId, 'emails', inputs, chosenTopic, chosenAngle)).emails ?? [], chosenTopic, baseInputs.audience)) },
           book_a_call: { column: 'book_a_call_emails', run: async () => stampEmailOriginals(await scrubEmailSubjectHooks(userId, (await regenerateAsset(userId, 'book_a_call', inputs, chosenTopic, chosenAngle)).book_a_call_emails ?? [], chosenTopic, baseInputs.audience)) },
-          sales_script: { column: 'sales_script', run: async () => (await regenerateAsset(userId, 'sales_script', inputs, chosenTopic, chosenAngle)).sales_script },
+          sales_script: { column: 'sales_script', run: async () => stampScriptGenSnapshots((await regenerateAsset(userId, 'sales_script', inputs, chosenTopic, chosenAngle)).sales_script ?? []) },
           objections: { column: 'objections', run: async () => (await regenerateAsset(userId, 'objections', inputs, chosenTopic, chosenAngle)).objections },
           workbook: { column: 'workbook', run: async () => (await regenerateAsset(userId, 'workbook', inputs, chosenTopic, chosenAngle)).workbook },
           outline: { column: 'outline', run: async () => (await regenerateAsset(userId, 'meta', inputs, chosenTopic, chosenAngle)).outline },
         }
 
         // keep_edited drops the editable assets the coach customized (they stay,
-        // still out-of-sync — the coach chose to keep them). The non-editable
-        // assets (script, guide, objections, outline) are always rebuilt.
+        // still out-of-sync — the coach chose to keep them). The remaining
+        // non-editable assets (guide, objections, outline) are always rebuilt.
         const isKept = (key: string): boolean => {
           if (scope !== 'keep_edited') return false
           if (key === 'slides') return Array.isArray(existing.slides) && (existing.slides as unknown[]).some(isSlideCustomized)
           if (key === 'warm_invite') return emailSetCustomized(existing.warm_invite_emails)
           if (key === 'emails') return emailSetCustomized(existing.emails)
           if (key === 'book_a_call') return emailSetCustomized(existing.book_a_call_emails)
+          if (key === 'sales_script') return Array.isArray(existing.sales_script) && (existing.sales_script as unknown[]).some(isBeatCustomized)
           return false
         }
         const targets = (ANGLE_SYNC_ASSETS as readonly string[]).filter((k) => !isKept(k))
