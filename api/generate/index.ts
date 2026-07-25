@@ -70,7 +70,8 @@ function parsePersonalHook(raw: unknown): PersonalHook | undefined {
   const hook: PersonalHook = {}
   if (typeof h.opening_story === 'string' && h.opening_story.trim().length > 0) hook.opening_story = h.opening_story.trim()
   if (typeof h.signature_example === 'string' && h.signature_example.trim().length > 0) hook.signature_example = h.signature_example.trim()
-  return hook.opening_story || hook.signature_example ? hook : undefined
+  if (typeof h.proof === 'string' && h.proof.trim().length > 0) hook.proof = h.proof.trim()
+  return hook.opening_story || hook.signature_example || hook.proof ? hook : undefined
 }
 
 function parseCtaType(raw: unknown): CtaType | undefined {

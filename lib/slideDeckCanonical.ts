@@ -23,20 +23,15 @@ BEAT ORDER (sectionName = the beat name, exactly as below):
 4. Why the old way fails — the causal chain of why the old approach leaves them stuck; bridge to the teaching.
 5. Teaching — as many slides as it takes (commonly 2-3): a diagnostic they can run, the belief that must shift, the action to take. Assertion-evidence each.
 6. Framework reveal — the coach's complete named framework as the bigger method (include whenever a framework is present).
-7. Proof — see PROOF LADDER below.
+7. Proof — only if coach-provided proof exists; otherwise omit this beat (see PROOF below).
 8. Implementation gap — honest fork: apply it alone vs apply it with guidance. No "you'll fail without us."
 9. The call — the call as a bounded deliverable: named session, duration, ~3 concrete outputs, fit criteria, 1-2 honest disqualifiers, one CTA, and what happens next.
 A beat may merge with a neighbor or split in two if the problem calls for it, as long as the order holds and no beat is dropped.
 
-PROOF LADDER (this beat NEVER fabricates). Two hard rules govern it:
-- GROUNDING-ONLY: use ONLY results, numbers, prices, timeframes, and outcomes that are actually stated in the provided grounding. Never introduce a figure or outcome the grounding does not state, and never embellish a modest result into a bigger one — no added dollar amounts, percentages, price increases, deposits, waitlists, or timeframes that are not in the grounding.
-- ATTRIBUTE HONESTLY: present the result as whoever actually achieved it in the grounding. If the grounding describes the COACH'S OWN result, present it as theirs in first person ("my own calls went from..."), never as an anonymous third party ("a coach... she..."). Only present it as a client case if the grounding actually describes a client's result.
-Use the HIGHEST real rung available:
-1. A real client result stated in the grounding (baseline -> part of the method applied -> result -> timeframe -> source).
-2. The coach's OWN result stated in the grounding — presented as theirs, in first person. Founder proof is legitimate.
-3. Mechanism proof — walk the first-principles reason this necessarily works, so the viewer reaches "of course that works" on their own.
-4. Demonstration — teach the one thing well enough that the viewer gets a small real win inside the video itself.
-If the grounding contains NO result, do not invent one: the Proof beat becomes mechanism and/or demonstration, and the call stays honest about where the coach is (e.g. working with a small first group) rather than implying a track record. When in doubt, drop a rung rather than reach for a number that isn't there.
+PROOF (conditional beat — driven ONLY by coach-provided proof):
+- Include the Proof beat ONLY when the grounding contains COACH-PROVIDED PROOF. When present, build the Proof slide grounded SOLELY in that text: use only the results, numbers, names, timeframes, and outcomes the coach actually wrote, attributed exactly as they wrote them (their own result stays first person; a client's result stays that client's). Invent nothing beyond their words — no added numbers, prices, timeframes, deposits, waitlists, or embellishment.
+- When NO coach-provided proof is present, OMIT the Proof beat entirely: go straight from Framework reveal to Implementation gap. Do not fabricate a result, do not substitute an anonymous client case, and do not manufacture a mechanism-only "proof" slide. The deck simply has no Proof beat.
+- Proof appears on the slides ONLY if the coach supplied it. Never fabricate proof under any circumstance.
 
 ASSERTION-EVIDENCE (per slide): the slideTitle states the CONCLUSION as a full sentence under ~15 words, not a topic label. The spoken teaching lives in the script/speaker note, never as an on-slide paragraph. Short fragment titles only on the cover and the final CTA.
 

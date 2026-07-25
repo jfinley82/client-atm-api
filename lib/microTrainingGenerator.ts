@@ -108,7 +108,10 @@ export type MicroTraining = {
 // The coach's own authorship material from the Build studio's guided prompts.
 // Both optional; when present these are the coach's WORDS and are preserved,
 // framed around, never paraphrased away.
-export type PersonalHook = { opening_story?: string; signature_example?: string }
+// proof is the coach's real result or testimonial in their own words (who,
+// starting point, result, timeframe, source — whatever they actually have). It is
+// the ONLY basis for the slides Proof beat; absent it, the Proof beat is omitted.
+export type PersonalHook = { opening_story?: string; signature_example?: string; proof?: string }
 export type CtaType = 'book_call' | 'sell_program'
 
 // The coach's optional recording + authorship inputs. No duration/format — the
@@ -176,6 +179,7 @@ function buildGrounding(inputs: GeneratorInputs): string {
   // The coach's own authorship inputs.
   const story = d.personal_hook?.opening_story?.trim()
   const example = d.personal_hook?.signature_example?.trim()
+  const proof = d.personal_hook?.proof?.trim()
   const ctaType: CtaType = d.cta_type === 'sell_program' ? 'sell_program' : 'book_call'
   const storyLine = story
     ? `- COACH'S OWN OPENING STORY (their words — weave into the hook, preserve them, do not paraphrase them away): ${JSON.stringify(story)}`
@@ -183,6 +187,9 @@ function buildGrounding(inputs: GeneratorInputs): string {
   const exampleLine = example
     ? `- COACH'S SIGNATURE EXAMPLE (their words — work into the teaching where it fits naturally, preserve them): ${JSON.stringify(example)}`
     : `- COACH'S SIGNATURE EXAMPLE: (none provided)`
+  const proofLine = proof
+    ? `- COACH-PROVIDED PROOF (the ONLY basis for the Proof beat; use it verbatim in substance and invent nothing beyond it): ${JSON.stringify(proof)}`
+    : `- PROOF: (none provided — OMIT the Proof beat entirely; do not fabricate a result, do not substitute an anonymous client case, and do not create a mechanism-only proof slide)`
 
   // The CTA toggle. Exactly ONE target link applies; the closing email sequence
   // and the closing slide use THAT link (written as the token below).
@@ -213,6 +220,7 @@ FORMAT: a single 15-20 minute pre-recorded teaching video the coach records solo
 AUTHORSHIP (the coach's own inputs — preserve their words, frame around them):
 ${storyLine}
 ${exampleLine}
+${proofLine}
 ${ctaBlock}
 ${bothCtaBlock}
 RECORDING DETAILS:
@@ -272,12 +280,12 @@ Rules:
 - NO fixed slide count — size the deck to the ONE problem, never pad to a target and never compress a problem that needs teaching. Keep the whole thing inside the 15-20 minute window (usually 8-14 slides). Number slides 1..N in order.
 - Generate the beats in the doctrine's ORDER (Cover, Qualify, Hidden bottleneck, Why the old way fails, Teaching, Framework reveal, Proof, Implementation gap, The call). A beat may take multiple slides (the teaching section flexes to the problem) and may merge with a neighbor or split in two if the problem calls for it, as long as the order holds and no beat is dropped.
 - sectionName is the BEAT NAME the slide belongs to, exactly as named in the doctrine.
-- The Proof beat uses ONLY figures and outcomes actually present in the grounding, attributed to whoever truly achieved them — the coach's own result is presented in first person, never as an anonymous client. Invent nothing: no added numbers, prices, timeframes, deposits, or waitlists. If the grounding states no result, make the Proof beat mechanism and/or demonstration instead.
+- The Proof beat is CONDITIONAL: include it ONLY if COACH-PROVIDED PROOF appears in the grounding, and ground it solely in that text — use only what the coach wrote, attribute it exactly as they wrote it, and invent no numbers or outcomes beyond their words. If no coach-provided proof is present, OMIT the Proof beat entirely (Framework reveal is followed directly by Implementation gap); never fabricate a result or a client case.
 - The per-slide timing values must sum to roughly 15-20 minutes.
 - script is the spoken content grounded in this blueprint and the audience's language — specific teaching, not vague restatements of the title. No live-audience or "welcome to today's session" language; this is recorded solo.
 - If a COACH'S OWN OPENING STORY is provided in the AUTHORSHIP block, the opening (the Cover/Qualify area) MUST weave it in as the coach's own opening — in their voice, teaching-first, preserving their words (frame around them, do not paraphrase them away). If none is provided, write a strong opening and do NOT fabricate a personal story.
 - If a COACH'S SIGNATURE EXAMPLE is provided, work it into a teaching slide where it fits naturally, preserving their words.
-- On "The call" beat, reflect the CTA in the grounding: for book_call, invite the viewer to book a call and use the token [BOOK_A_CALL_LINK]; for sell_program, invite them to get the program directly and use the token [OFFER_LINK]. Use only the applicable link.
+- On "The call" beat, reflect the CTA in the grounding: for book_call, invite the viewer to book a call and use the token [BOOK_A_CALL_LINK]; for sell_program, invite them to get the program directly and use the token [OFFER_LINK]. Use only the applicable link. The CTA token ([BOOK_A_CALL_LINK] / [OFFER_LINK]) must appear INSIDE The call slide's script — never as its own slide and never as a slide title.
 ${SHARED_RULES}`,
   },
   workbook: {
