@@ -933,4 +933,77 @@ EXISTING DECK (rewrite the script for each, keep everything else): ${JSON.string
   return currentSlides.map((s) => ({ ...s, script: byNumber.get(s.slideNumber) ?? s.script }))
 }
 
+// ── Add one slide ───────────────────────────────────────────────────────────
+// Generates ONE polished slide from a coach personalize input, following the
+// slide-deck doctrine for its beat and grounded in the coach's audience/framework
+// so it fits the deck. Returns just the slide fields; no slideNumber (the editor
+// assigns position on insert). Never touches the stored deck.
+export type SingleSlideKind = 'proof' | 'opening_story' | 'signature_example'
+type SingleSlide = Pick<MtSlide, 'slideTitle' | 'script' | 'speakerNote' | 'timing' | 'sectionName'>
+
+const SINGLE_SLIDE_SPECS: Record<SingleSlideKind, { sectionName: string; label: string; instruction: string }> = {
+  proof: {
+    sectionName: 'Proof',
+    label: 'PROOF TEXT',
+    instruction: `Build an HONEST Proof slide built ONLY from the coach's PROOF TEXT below. Use only the results, names, numbers, and timeframes they wrote; invent nothing beyond their words. Attribute it exactly as they wrote it — the coach's own result stays first person, a client's result stays that client's.`,
+  },
+  opening_story: {
+    sectionName: 'Cover',
+    label: 'OPENING STORY',
+    instruction: `Build an opening slide in the coach's OWN voice from their OPENING STORY below — weave it in as their own opening, teaching-first, preserving their words (frame around them, do not paraphrase them away).`,
+  },
+  signature_example: {
+    sectionName: 'Teaching',
+    label: 'SIGNATURE EXAMPLE',
+    instruction: `Build a teaching slide that features the coach's SIGNATURE EXAMPLE below, worked in where it fits naturally, preserving their words. The slide must TEACH — the viewer can act on their own problem differently after it.`,
+  },
+}
+
+export async function generateSingleSlide(
+  userId: string,
+  kind: SingleSlideKind,
+  text: string,
+  inputs: GeneratorInputs
+): Promise<SingleSlide> {
+  const spec = SINGLE_SLIDE_SPECS[kind]
+  const grounding = buildGrounding(inputs)
+
+  const prompt = `You write ONE polished slide for a coach's pre-recorded micro-training deck, following the slide-deck doctrine below. Produce a single slide that FITS the existing deck — grounded in the coach's audience and framework.
+
+${SLIDES_CANONICAL}
+
+${spec.instruction}
+
+Return exactly ONE slide object (NO slideNumber — the editor assigns position):
+{
+  "slideTitle": "a full-sentence CONCLUSION under ~15 words (assertion-evidence), not a topic label",
+  "script": "the spoken content the coach says on camera — the teaching lives here, not on the slide",
+  "speakerNote": "a short delivery cue",
+  "timing": "minutes for this slide, e.g. '2 min'",
+  "sectionName": "${spec.sectionName}"
+}
+
+Rules:
+- Assertion-evidence: slideTitle is a full-sentence conclusion; the spoken content lives in script, never as an on-slide paragraph.
+- sectionName MUST be exactly "${spec.sectionName}".
+- Ground the slide in this blueprint and the audience's language so it fits the deck; recorded solo, no live-audience or "welcome to today's session" language.
+${SHARED_RULES}`
+
+  const system = inputs.voiceContext ? `${prompt}\n\n${inputs.voiceContext}` : prompt
+  const userMessage = `${grounding}
+COACH'S ${spec.label} (their words — the ONLY basis for the slide's substance): ${JSON.stringify(text)}
+
+Generate the one slide now.`
+
+  const parsed = await callAndParse(userId, system, userMessage, 2000)
+  const sectionName = asString(parsed.sectionName).trim().length > 0 ? asString(parsed.sectionName) : spec.sectionName
+  return {
+    slideTitle: asString(parsed.slideTitle),
+    script: asString(parsed.script),
+    speakerNote: asString(parsed.speakerNote),
+    timing: asString(parsed.timing),
+    sectionName,
+  }
+}
+
 export { GenerationParseError }
