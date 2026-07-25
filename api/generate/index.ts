@@ -286,10 +286,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // delivery, writing back only that asset's column(s).
       if (regenerate) {
         if (!existing) return res.status(404).json({ error: 'No generation to regenerate — run a full generate first' })
-        const inputs: GeneratorInputs = { ...baseInputs, delivery: withPresenter(parseDelivery(existing.delivery)) }
         const chosenTopic = typeof existing.chosen_topic === 'string' ? existing.chosen_topic : ''
 
+        // Mirror the full-generate path: personalize inputs (opening_story /
+        // signature_example / proof) may arrive at the top level of the request
+        // (the Slides editor's "Apply & rebuild"). When present, fold them over
+        // the stored delivery so the regenerated asset reflects them; otherwise
+        // use the stored delivery exactly as before.
+        const storedDelivery = parseDelivery(existing.delivery)
+        const reqHook = parsePersonalHook(body.personal_hook)
+        const resolvedDelivery = withPresenter({
+          ...storedDelivery,
+          personal_hook: reqHook ?? storedDelivery.personal_hook,
+        })
+        const inputs: GeneratorInputs = { ...baseInputs, delivery: resolvedDelivery }
+
         const update: Record<string, unknown> = { updated_at: new Date().toISOString() }
+        // Persist the new personalize inputs only when the request actually
+        // provided them, so a plain regenerate never rewrites stored delivery.
+        if (reqHook) update.delivery = resolvedDelivery
         switch (regenerate) {
           case 'slides':
             update.slides = (await regenerateAsset(userId, 'slides', inputs, chosenTopic)).slides
