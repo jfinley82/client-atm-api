@@ -129,10 +129,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .maybeSingle()
         if (readErr) throw readErr
         if (!cur) return res.status(404).json({ error: 'No generation for this card yet' })
-        const chosen_angle = resolveAngle(Array.isArray(cur.topics) ? (cur.topics as MtTopic[]) : [], title)
+        // If the picked title matches a stored topic, pin that topic's hook too.
+        // If it's a free-text reword (no match), set the title only and LEAVE the
+        // existing chosen_angle untouched — never clear the hook with an empty ''.
+        const resolvedAngle = resolveAngle(Array.isArray(cur.topics) ? (cur.topics as MtTopic[]) : [], title)
+        const titleUpdate: Record<string, unknown> = { chosen_topic: title, updated_at: new Date().toISOString() }
+        if (resolvedAngle.trim().length > 0) titleUpdate.chosen_angle = resolvedAngle
         const { data, error } = await supabase
           .from('mtm_generations')
-          .update({ chosen_topic: title, chosen_angle, updated_at: new Date().toISOString() })
+          .update(titleUpdate)
           .eq('user_id', userId)
           .eq('card_id', card_id)
           .select()
@@ -209,7 +214,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (!t) return res.status(400).json({ error: 'chosen_topic cannot be empty' })
         update.chosen_topic = t
       }
-      if ('chosen_angle' in save) update.chosen_angle = typeof save.chosen_angle === 'string' ? save.chosen_angle : ''
+      // Apply chosen_angle only when the request sends a non-empty string — never
+      // clear a good hook with ''.
+      if (typeof save.chosen_angle === 'string' && save.chosen_angle.trim().length > 0) update.chosen_angle = save.chosen_angle
 
       if (Object.keys(update).length === 0) {
         return res.status(400).json({ error: 'save had no editable fields' })
@@ -431,6 +438,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const generated = await generateMicroTraining(userId, inputs, pinned)
       // generateMicroTraining returns the effective (pinned-aware) title + angle.
       const chosen_topic = generated.chosen_topic
+      // Never overwrite a good stored angle with an empty one — keep the previous
+      // value if the fresh generation somehow came back without a hook.
+      const storedAngle = typeof existing?.chosen_angle === 'string' ? existing.chosen_angle : ''
+      const chosen_angle = generated.chosen_angle.trim().length > 0 ? generated.chosen_angle : storedAngle
 
       // A full generate builds the slides, so it stamps the 'slides' staleness snapshot.
       const sync_snapshot = await stampSyncSnapshot(userId, 'slides', card_id)
@@ -443,7 +454,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             card_id,
             topics: generated.topics,
             chosen_topic,
-            chosen_angle: generated.chosen_angle,
+            chosen_angle,
             subtitle: generated.subtitle,
             total_duration: generated.total_duration,
             outline: generated.outline,
