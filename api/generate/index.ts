@@ -13,6 +13,8 @@ import {
   regenerateAsset,
   regenerateScript,
   generateAnglePreviews,
+  generateSingleSlide,
+  SingleSlideKind,
   DeliveryInput,
   GeneratorInputs,
   MtSlide,
@@ -280,6 +282,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           suggested_offer: blueprintGate.card.suggested_offer,
         },
         voiceContext,
+      }
+
+      // ── Add one slide ── generate ONE polished slide from a coach personalize
+      // input and return it; never touches the stored deck (the editor inserts +
+      // saves it). Uses the same grounding the slides unit does.
+      if (body.add_slide && typeof body.add_slide === 'object') {
+        const add = body.add_slide as Record<string, unknown>
+        const kind = add.kind
+        const text = typeof add.text === 'string' ? add.text.trim() : ''
+        if (kind !== 'proof' && kind !== 'opening_story' && kind !== 'signature_example') {
+          return res.status(400).json({ error: 'add_slide.kind must be one of: proof, opening_story, signature_example' })
+        }
+        if (!text) return res.status(400).json({ error: 'add_slide.text required' })
+        const inputs: GeneratorInputs = { ...baseInputs, delivery: withPresenter(parseDelivery(existing?.delivery)) }
+        const slide = await generateSingleSlide(userId, kind as SingleSlideKind, text, inputs)
+        return res.status(200).json({ ok: true, slide })
       }
 
       // ── Regenerate one asset ── conditioned on the stored chosen_topic +
