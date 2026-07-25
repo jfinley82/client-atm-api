@@ -15,6 +15,7 @@ import {
   generateAnglePreviews,
   generateSingleSlide,
   SingleSlideKind,
+  resolveAngle,
   DeliveryInput,
   GeneratorInputs,
   MtSlide,
@@ -118,9 +119,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!title) return res.status(400).json({ error: 'choose_title must be a non-empty string' })
       if (!(await requireCapability(userId, 'toolkits', res))) return
       try {
+        // Resolve the picked title's angle hook from the stored topics and pin it
+        // as chosen_angle, so every later regenerate stays on this angle.
+        const { data: cur, error: readErr } = await supabase
+          .from('mtm_generations')
+          .select('topics')
+          .eq('user_id', userId)
+          .eq('card_id', card_id)
+          .maybeSingle()
+        if (readErr) throw readErr
+        if (!cur) return res.status(404).json({ error: 'No generation for this card yet' })
+        const chosen_angle = resolveAngle(Array.isArray(cur.topics) ? (cur.topics as MtTopic[]) : [], title)
         const { data, error } = await supabase
           .from('mtm_generations')
-          .update({ chosen_topic: title, updated_at: new Date().toISOString() })
+          .update({ chosen_topic: title, chosen_angle, updated_at: new Date().toISOString() })
           .eq('user_id', userId)
           .eq('card_id', card_id)
           .select()
@@ -197,6 +209,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (!t) return res.status(400).json({ error: 'chosen_topic cannot be empty' })
         update.chosen_topic = t
       }
+      if ('chosen_angle' in save) update.chosen_angle = typeof save.chosen_angle === 'string' ? save.chosen_angle : ''
 
       if (Object.keys(update).length === 0) {
         return res.status(400).json({ error: 'save had no editable fields' })
@@ -253,7 +266,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         getSavedOutput(userId, 'transformation'),
         supabase
           .from('mtm_generations')
-          .select('chosen_topic, delivery, slides, topics')
+          .select('chosen_topic, chosen_angle, delivery, slides, topics')
           .eq('user_id', userId)
           .eq('card_id', card_id)
           .maybeSingle(),
@@ -305,6 +318,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (regenerate) {
         if (!existing) return res.status(404).json({ error: 'No generation to regenerate — run a full generate first' })
         const chosenTopic = typeof existing.chosen_topic === 'string' ? existing.chosen_topic : ''
+        // The angle every regenerated asset stays inside: the stored chosen_angle,
+        // or (interim, for rows saved before it existed) resolved from the topics.
+        const storedAngle = typeof existing.chosen_angle === 'string' ? existing.chosen_angle : ''
+        const chosenAngle = storedAngle.trim().length > 0
+          ? storedAngle
+          : resolveAngle(Array.isArray(existing.topics) ? (existing.topics as MtTopic[]) : [], chosenTopic)
 
         // Mirror the full-generate path: personalize inputs (opening_story /
         // signature_example / proof) may arrive at the top level of the request
@@ -325,39 +344,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (reqHook) update.delivery = resolvedDelivery
         switch (regenerate) {
           case 'slides':
-            update.slides = (await regenerateAsset(userId, 'slides', inputs, chosenTopic)).slides
+            update.slides = (await regenerateAsset(userId, 'slides', inputs, chosenTopic, chosenAngle)).slides
             break
           case 'warm_invite':
-            update.warm_invite_emails = (await regenerateAsset(userId, 'warm_invite', inputs, chosenTopic)).warm_invite_emails
+            update.warm_invite_emails = (await regenerateAsset(userId, 'warm_invite', inputs, chosenTopic, chosenAngle)).warm_invite_emails
             break
           case 'emails':
-            update.emails = (await regenerateAsset(userId, 'emails', inputs, chosenTopic)).emails
+            update.emails = (await regenerateAsset(userId, 'emails', inputs, chosenTopic, chosenAngle)).emails
             break
           case 'book_a_call':
-            update.book_a_call_emails = (await regenerateAsset(userId, 'book_a_call', inputs, chosenTopic)).book_a_call_emails
+            update.book_a_call_emails = (await regenerateAsset(userId, 'book_a_call', inputs, chosenTopic, chosenAngle)).book_a_call_emails
             break
           case 'workbook':
-            update.workbook = (await regenerateAsset(userId, 'workbook', inputs, chosenTopic)).workbook
+            update.workbook = (await regenerateAsset(userId, 'workbook', inputs, chosenTopic, chosenAngle)).workbook
             break
           case 'recording_tips':
-            update.recording_tips = (await regenerateAsset(userId, 'recording_tips', inputs, chosenTopic)).recording_tips
+            update.recording_tips = (await regenerateAsset(userId, 'recording_tips', inputs, chosenTopic, chosenAngle)).recording_tips
             break
           case 'topics':
-            update.topics = (await regenerateAsset(userId, 'meta', inputs, chosenTopic)).topics
+            update.topics = (await regenerateAsset(userId, 'meta', inputs, chosenTopic, chosenAngle)).topics
             break
           case 'outline':
-            update.outline = (await regenerateAsset(userId, 'meta', inputs, chosenTopic)).outline
+            update.outline = (await regenerateAsset(userId, 'meta', inputs, chosenTopic, chosenAngle)).outline
             break
           case 'script': {
             const cur = Array.isArray(existing.slides) ? (existing.slides as MtSlide[]) : []
-            update.slides = await regenerateScript(userId, inputs, cur, chosenTopic)
+            update.slides = await regenerateScript(userId, inputs, cur, chosenTopic, chosenAngle)
             break
           }
           case 'sales_script':
-            update.sales_script = (await regenerateAsset(userId, 'sales_script', inputs, chosenTopic)).sales_script
+            update.sales_script = (await regenerateAsset(userId, 'sales_script', inputs, chosenTopic, chosenAngle)).sales_script
             break
           case 'objections':
-            update.objections = (await regenerateAsset(userId, 'objections', inputs, chosenTopic)).objections
+            update.objections = (await regenerateAsset(userId, 'objections', inputs, chosenTopic, chosenAngle)).objections
             break
           case 'angle_previews': {
             const topics = Array.isArray(existing.topics) ? (existing.topics as MtTopic[]) : []
@@ -394,12 +413,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         cta_type: reqCta ?? stored.cta_type ?? 'book_call',
       })
       const inputs: GeneratorInputs = { ...baseInputs, delivery: resolvedDelivery }
-      const generated = await generateMicroTraining(userId, inputs)
 
-      // chosen_topic is never null on success. Keep the coach's existing title
-      // only when keep_title was passed and a non-empty one is already stored.
+      // keep_title pins the coach's chosen title AND its angle hook, so the whole
+      // training is generated on that angle rather than the meta unit's fresh pick.
+      // The stored chosen_angle wins; interim fallback resolves it from the topics.
       const existingChosen = (existing?.chosen_topic ?? '') as string
-      const chosen_topic = keepTitle && existingChosen.trim().length > 0 ? existingChosen : generated.chosen_topic
+      const pinned =
+        keepTitle && existingChosen.trim().length > 0
+          ? {
+              chosen_topic: existingChosen,
+              chosen_angle:
+                typeof existing?.chosen_angle === 'string' && existing.chosen_angle.trim().length > 0
+                  ? existing.chosen_angle
+                  : resolveAngle(Array.isArray(existing?.topics) ? (existing!.topics as MtTopic[]) : [], existingChosen),
+            }
+          : undefined
+      const generated = await generateMicroTraining(userId, inputs, pinned)
+      // generateMicroTraining returns the effective (pinned-aware) title + angle.
+      const chosen_topic = generated.chosen_topic
 
       // A full generate builds the slides, so it stamps the 'slides' staleness snapshot.
       const sync_snapshot = await stampSyncSnapshot(userId, 'slides', card_id)
@@ -412,6 +443,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             card_id,
             topics: generated.topics,
             chosen_topic,
+            chosen_angle: generated.chosen_angle,
             subtitle: generated.subtitle,
             total_duration: generated.total_duration,
             outline: generated.outline,
