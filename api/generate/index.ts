@@ -70,6 +70,82 @@ const REGEN_TARGETS = new Set([
 // script (they feed the beat-5 panel), so 'objections' is not listed here.
 const VALID_BUILD_STEPS = new Set(['angle', 'slides', 'emails', 'script'])
 
+// ── Angle-sync state ─────────────────────────────────────────────────────────
+// The downstream assets whose angle-sync is shown (also the full-generate stamp
+// set). asset_angles[key] holds the chosen_angle each was generated on.
+const ANGLE_SYNC_ASSETS = [
+  'slides',
+  'workbook',
+  'warm_invite',
+  'emails',
+  'book_a_call',
+  'sales_script',
+  'objections',
+  'outline',
+] as const
+
+// Which asset_angles key a regenerate target stamps (topics / angle_previews
+// stamp nothing; 'script' stamps the slides key).
+const REGEN_ANGLE_KEY: Record<string, string> = {
+  slides: 'slides',
+  script: 'slides',
+  warm_invite: 'warm_invite',
+  emails: 'emails',
+  book_a_call: 'book_a_call',
+  workbook: 'workbook',
+  recording_tips: 'recording_tips',
+  sales_script: 'sales_script',
+  objections: 'objections',
+  outline: 'outline',
+}
+
+// Computed, read-only fields for the GET response — never stored.
+//  - angle_sync: per-asset (asset_angles[key] === chosen_angle); an UNSTAMPED
+//    asset counts as in-sync so legacy rows don't false-alarm.
+//  - customized_slides: slides whose content differs from their `original`
+//    snapshot, or that were hand-added (no original).
+function computeAngleFields(row: Record<string, unknown>): {
+  angle_sync: { current_angle: string; assets: Record<string, boolean>; all_in_sync: boolean }
+  customized_slides: number
+} {
+  const chosenAngle = typeof row.chosen_angle === 'string' ? row.chosen_angle : ''
+  const stamps = (row.asset_angles && typeof row.asset_angles === 'object' ? row.asset_angles : {}) as Record<string, unknown>
+  const assets: Record<string, boolean> = {}
+  let allInSync = true
+  for (const key of ANGLE_SYNC_ASSETS) {
+    const stamp = typeof stamps[key] === 'string' ? (stamps[key] as string) : undefined
+    const inSync = stamp === undefined || stamp === chosenAngle
+    assets[key] = inSync
+    if (!inSync) allInSync = false
+  }
+
+  const slides = Array.isArray(row.slides) ? row.slides : []
+  let customized = 0
+  for (const s of slides) {
+    const slide = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>
+    const orig = (slide.original && typeof slide.original === 'object' ? slide.original : null) as Record<string, unknown> | null
+    if (!orig) {
+      customized++ // hand-added slide (no original snapshot)
+      continue
+    }
+    if (
+      slide.slideTitle !== orig.slideTitle ||
+      slide.script !== orig.script ||
+      slide.speakerNote !== orig.speakerNote ||
+      slide.sectionName !== orig.sectionName
+    ) {
+      customized++
+    }
+  }
+
+  return { angle_sync: { current_angle: chosenAngle, assets, all_in_sync: allInSync }, customized_slides: customized }
+}
+
+// Attach the computed angle-sync fields to a generation row for a GET response.
+function withAngleFields<T extends Record<string, unknown>>(row: T): T & ReturnType<typeof computeAngleFields> {
+  return { ...row, ...computeAngleFields(row) }
+}
+
 function parsePersonalHook(raw: unknown): PersonalHook | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   const h = raw as Record<string, unknown>
@@ -276,7 +352,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         getSavedOutput(userId, 'transformation'),
         supabase
           .from('mtm_generations')
-          .select('chosen_topic, chosen_angle, delivery, slides, topics')
+          .select('chosen_topic, chosen_angle, delivery, slides, topics, asset_angles')
           .eq('user_id', userId)
           .eq('card_id', card_id)
           .maybeSingle(),
@@ -398,6 +474,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (regenerate === 'slides' || regenerate === 'script') {
           update.sync_snapshot = await stampSyncSnapshot(userId, 'slides', card_id)
         }
+        // Stamp this asset with the angle it was just regenerated on — merge into
+        // the stored map so the other assets' stamps are untouched.
+        const regenKey = REGEN_ANGLE_KEY[regenerate]
+        if (regenKey) {
+          const stored = (existing.asset_angles && typeof existing.asset_angles === 'object' ? existing.asset_angles : {}) as Record<string, unknown>
+          update.asset_angles = { ...stored, [regenKey]: chosenAngle }
+        }
 
         const { data, error } = await supabase
           .from('mtm_generations')
@@ -407,7 +490,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .select()
           .single()
         if (error) throw error
-        return res.status(200).json(data)
+        return res.status(200).json(withAngleFields(data))
       }
 
       // ── Full generate ──
@@ -449,6 +532,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // A full generate builds the slides, so it stamps the 'slides' staleness snapshot.
       const sync_snapshot = await stampSyncSnapshot(userId, 'slides', card_id)
 
+      // A full generate builds every downstream asset on the effective angle, so
+      // stamp them all with it. This makes the whole training read as in-sync
+      // until the coach picks a different angle or regenerates a single asset.
+      const asset_angles = Object.fromEntries(ANGLE_SYNC_ASSETS.map((k) => [k, chosen_angle]))
+
       const { data, error } = await supabase
         .from('mtm_generations')
         .upsert(
@@ -472,6 +560,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             angle_previews: generated.angle_previews,
             delivery: resolvedDelivery,
             sync_snapshot,
+            asset_angles,
             updated_at: new Date().toISOString(),
           },
           { onConflict: 'user_id,card_id' }
@@ -480,7 +569,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .single()
 
       if (error) throw error
-      return res.status(200).json(data)
+      return res.status(200).json(withAngleFields(data))
     } catch (err) {
       if (err instanceof GenerationParseError) {
         console.error('[generate] POST generation_truncated', err.message, { rawTextLength: err.rawText.length })
@@ -507,7 +596,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         if (error) throw error
         if (!data) return res.status(404).json({ error: 'Generation not found' })
-        return res.status(200).json(data)
+        return res.status(200).json(withAngleFields(data))
       } catch (err) {
         console.error('[generate] GET one', err)
         return res.status(500).json({ error: 'Failed to load generation' })
@@ -527,7 +616,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .maybeSingle()
 
         if (error) throw error
-        return res.status(200).json(data ?? null)
+        return res.status(200).json(data ? withAngleFields(data) : null)
       } catch (err) {
         console.error('[generate] GET by card_id', err)
         return res.status(500).json({ error: 'Failed to load generation' })
@@ -546,7 +635,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const rows = (data || []).map((r: any) => {
         const { problem_solution_cards, ...rest } = r
-        return { ...rest, card_name: problem_solution_cards?.card_name ?? null }
+        return withAngleFields({ ...rest, card_name: problem_solution_cards?.card_name ?? null })
       })
 
       return res.status(200).json(rows)
