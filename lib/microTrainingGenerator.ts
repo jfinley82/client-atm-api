@@ -97,6 +97,7 @@ export type MtAnglePreview = {
 export type MicroTraining = {
   topics: MtTopic[]
   chosen_topic: string
+  chosen_angle: string
   subtitle: string
   total_duration: string
   outline: MtOutlineItem[]
@@ -804,27 +805,40 @@ async function runUnit(
 // the same helper the regenerate path uses. Merged exactly as before. If any
 // unit throws (including GenerationParseError), the whole generate fails so the
 // caller returns an error rather than persisting a half-populated record.
-export async function generateMicroTraining(userId: string, inputs: GeneratorInputs): Promise<MicroTraining> {
+export async function generateMicroTraining(
+  userId: string,
+  inputs: GeneratorInputs,
+  // When keep_title pins the coach's angle, pass the pinned title + hook so the
+  // whole training is generated on that angle (not the meta unit's fresh pick).
+  pinned?: { chosen_topic: string; chosen_angle: string }
+): Promise<MicroTraining> {
   const grounding = buildGrounding(inputs)
 
   const metaPart = await runUnit(userId, 'meta', grounding, inputs.voiceContext)
-  const chosenTopic = typeof metaPart.chosen_topic === 'string' ? metaPart.chosen_topic : ''
+  const metaTopic = typeof metaPart.chosen_topic === 'string' ? metaPart.chosen_topic : ''
   const topics = Array.isArray(metaPart.topics) ? metaPart.topics : []
 
+  // The angle every downstream asset stays inside. Pinned wins (keep_title);
+  // otherwise it's the meta unit's chosen title and the hook of the matching topic.
+  const chosenTopic = pinned?.chosen_topic?.trim() ? pinned.chosen_topic : metaTopic
+  const chosenAngle = pinned ? pinned.chosen_angle : resolveAngle(topics, metaTopic)
+
   // Wave 2: the remaining full-length units, plus the two net-new sales assets,
-  // all aligned to the final title. angle_previews is grounded on the meta unit's
-  // topic options (withTopics), so it runs in the same wave with that grounding.
+  // all bound to the selected ANGLE via withAngle. angle_previews is the one
+  // exception — it produces copy for ALL topic options, so it stays on the
+  // title-only grounding (withTitle) and must not be biased to the chosen angle.
   const rest: AssetUnit[] = ['slides', 'workbook', 'recording_tips', 'warm_invite', 'emails', 'book_a_call', 'sales_script', 'objections']
-  const titledGrounding = withTitle(grounding, chosenTopic)
+  const angledGrounding = withAngle(grounding, chosenTopic, chosenAngle)
   const restParts = await Promise.all([
-    ...rest.map((u) => runUnit(userId, u, titledGrounding, inputs.voiceContext)),
-    runUnit(userId, 'angle_previews', withTopics(titledGrounding, topics), inputs.voiceContext),
+    ...rest.map((u) => runUnit(userId, u, angledGrounding, inputs.voiceContext)),
+    runUnit(userId, 'angle_previews', withTopics(withTitle(grounding, chosenTopic), topics), inputs.voiceContext),
   ])
 
   const merged = Object.assign({}, metaPart, ...restParts) as Partial<MicroTraining>
   return {
     topics: merged.topics ?? [],
-    chosen_topic: merged.chosen_topic ?? '',
+    chosen_topic: chosenTopic,
+    chosen_angle: chosenAngle,
     subtitle: merged.subtitle ?? '',
     // The Micro-Training is always a 15-20 minute recorded video.
     total_duration: merged.total_duration ?? '15-20 minutes',
@@ -841,21 +855,48 @@ export async function generateMicroTraining(userId: string, inputs: GeneratorInp
   }
 }
 
-// Regenerate a single asset unit conditioned on the current chosen_topic. Used
-// by the per-asset regenerate path; returns only that unit's partial.
+// Regenerate a single asset unit bound to the current chosen angle (title +
+// hook). Used by the per-asset regenerate path; returns only that unit's partial.
 export async function regenerateAsset(
   userId: string,
   unit: AssetUnit,
   inputs: GeneratorInputs,
-  chosenTopic: string
+  chosenTopic: string,
+  chosenAngle: string
 ): Promise<Partial<MicroTraining>> {
-  return runUnit(userId, unit, withTitle(buildGrounding(inputs), chosenTopic), inputs.voiceContext)
+  return runUnit(userId, unit, withAngle(buildGrounding(inputs), chosenTopic, chosenAngle), inputs.voiceContext)
 }
 
 function withTitle(grounding: string, chosenTopic: string): string {
   return chosenTopic.trim().length > 0
     ? `${grounding}\nCURRENT TRAINING TITLE (align this asset to it): ${JSON.stringify(chosenTopic)}`
     : grounding
+}
+
+// Resolve the selected angle's hook text: the `angle` of the stored topic whose
+// title matches chosenTopic (trimmed, case-insensitive). '' when none matches —
+// the interim fallback for rows saved before chosen_angle was persisted.
+export function resolveAngle(topics: MtTopic[], chosenTopic: string): string {
+  const key = chosenTopic.trim().toLowerCase()
+  if (!key) return ''
+  const hit = topics.find((t) => t && typeof t.title === 'string' && t.title.trim().toLowerCase() === key)
+  return hit && typeof hit.angle === 'string' ? hit.angle : ''
+}
+
+// The binding angle grounding injected into every asset unit: the selected
+// title AND its hook/positioning text, with a firm instruction to open from and
+// stay inside this hook rather than re-framing the blueprint. The blueprint
+// supplies the problem/solution content; the angle is the fixed frame. Replaces
+// withTitle everywhere an asset should stay on the coach's chosen angle.
+function withAngle(grounding: string, chosenTopic: string, angleText: string): string {
+  const title = chosenTopic.trim()
+  const hook = angleText.trim()
+  if (!title && !hook) return grounding
+  return `${grounding}
+TRAINING ANGLE (the fixed hook every asset opens from and stays inside — do not reframe the blueprint on your own):
+- Title: ${title}
+- Hook: ${hook}
+The blueprint supplies the problem/solution content; the angle is the fixed frame you view it through. Open from this hook and keep the whole training on it.`
 }
 
 // Appends the candidate angle options to the grounding for the angle_previews
@@ -900,7 +941,8 @@ export async function regenerateScript(
   userId: string,
   inputs: GeneratorInputs,
   currentSlides: MtSlide[],
-  chosenTopic: string
+  chosenTopic: string,
+  chosenAngle: string
 ): Promise<MtSlide[]> {
   const deck = currentSlides.map((s) => ({
     slideNumber: s.slideNumber,
@@ -908,7 +950,7 @@ export async function regenerateScript(
     sectionName: s.sectionName,
     timing: s.timing,
   }))
-  const grounding = `${withTitle(buildGrounding(inputs), chosenTopic)}
+  const grounding = `${withAngle(buildGrounding(inputs), chosenTopic, chosenAngle)}
 EXISTING DECK (rewrite the script for each, keep everything else): ${JSON.stringify(deck)}`
 
   const message = await anthropic.messages.create({
