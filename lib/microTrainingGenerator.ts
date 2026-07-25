@@ -81,6 +81,10 @@ export type MtScriptBeat = {
   prospect_mindset: string
   phrasing_options: string[]
   recommended: string
+  // Generator-owned snapshot of the as-generated beat, stamped at generation time
+  // (full generate + sales_script regenerate) so a coach edit to the phrasing
+  // options / recommended line is detectable on read. Mirrors slides' gen_snapshot.
+  gen_snapshot?: { beat: string; prospect_mindset: string; phrasing_options: string[]; recommended: string }
 }
 export type MtObjection = {
   objection: string
@@ -701,12 +705,18 @@ export function coerceSalesScript(v: unknown): MtScriptBeat[] {
     .map((r) => {
       const options = asStringArray(r.phrasing_options).filter((o) => o.trim().length > 0).slice(0, 3)
       const recommended = asString(r.recommended).trim().length > 0 ? asString(r.recommended) : options[0] ?? ''
-      return {
+      const beat: MtScriptBeat = {
         beat: asString(r.beat),
         prospect_mindset: asString(r.prospect_mindset),
         phrasing_options: options,
         recommended,
       }
+      // The generator's as-generated snapshot (for customized_script): pass it
+      // through untouched so a save never drops the count baseline.
+      if (r.gen_snapshot && typeof r.gen_snapshot === 'object' && !Array.isArray(r.gen_snapshot)) {
+        beat.gen_snapshot = r.gen_snapshot as MtScriptBeat['gen_snapshot']
+      }
+      return beat
     })
     .filter((b) => b.beat.trim().length > 0 && (b.phrasing_options.length > 0 || b.recommended.trim().length > 0))
     .slice(0, SALES_SCRIPT_BEATS.length)
@@ -990,6 +1000,20 @@ export function stampSlideGenSnapshots(slides: MtSlide[]): MtSlide[] {
   )
 }
 
+// Stamp the as-generated snapshot on freshly generated call-script beats so a
+// coach edit to the phrasing options / recommended line is detectable on read
+// (customized_script). Called at generation time (full generate + sales_script
+// regenerate). Does not touch a beat that already carries a gen_snapshot, so a
+// prior baseline is never overwritten. A hand-added beat has none, so it reads as
+// customization. Mirrors stampSlideGenSnapshots.
+export function stampScriptGenSnapshots(beats: MtScriptBeat[]): MtScriptBeat[] {
+  return beats.map((b) =>
+    b.gen_snapshot
+      ? b
+      : { ...b, gen_snapshot: { beat: b.beat, prospect_mindset: b.prospect_mindset, phrasing_options: [...b.phrasing_options], recommended: b.recommended } }
+  )
+}
+
 // Full generate — two waves so the downstream assets align to the FINAL title.
 // Wave 1: meta first, fixing chosen_topic (+ subtitle). Wave 2: the remaining
 // five units in parallel, grounded through withTitle(grounding, chosen_topic) —
@@ -1082,6 +1106,7 @@ The training title is fixed to: ${JSON.stringify(pinnedTitle)}. Return chosen_to
   result.warm_invite_emails = stampEmailOriginals(result.warm_invite_emails)
   result.book_a_call_emails = stampEmailOriginals(result.book_a_call_emails)
   result.slides = stampSlideGenSnapshots(result.slides)
+  result.sales_script = stampScriptGenSnapshots(result.sales_script)
   return result
 }
 

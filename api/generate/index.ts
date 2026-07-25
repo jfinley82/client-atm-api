@@ -21,6 +21,7 @@ import {
   scrubEmailSubjectHooks,
   stampEmailOriginals,
   stampSlideGenSnapshots,
+  stampScriptGenSnapshots,
   matchHookShapes,
   DeliveryInput,
   GeneratorInputs,
@@ -87,6 +88,23 @@ const ANGLE_SYNC_ASSETS = [
   'outline',
 ] as const
 
+// The row fields captured in pre_rebuild_snapshot (and restored from it): the
+// rebuildable asset columns plus the angle-identity fields, for one level of undo.
+const REBUILD_SNAPSHOT_COLUMNS = [
+  'slides',
+  'emails',
+  'warm_invite_emails',
+  'book_a_call_emails',
+  'sales_script',
+  'objections',
+  'workbook',
+  'outline',
+  'asset_angles',
+  'chosen_topic',
+  'chosen_angle',
+  'angle_source',
+] as const
+
 // Which asset_angles key a regenerate target stamps (topics / angle_previews
 // stamp nothing; 'script' stamps the slides key).
 const REGEN_ANGLE_KEY: Record<string, string> = {
@@ -105,6 +123,49 @@ const REGEN_ANGLE_KEY: Record<string, string> = {
 // The three email arrays, by their stored column name, for the hook-flag scan.
 const EMAIL_LISTS = ['emails', 'warm_invite_emails', 'book_a_call_emails'] as const
 
+// A slide counts as coach-customized when its content differs from the
+// generator-owned gen_snapshot, or when it was hand-added (no snapshot).
+function isSlideCustomized(s: unknown): boolean {
+  const slide = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>
+  const gen = (slide.gen_snapshot && typeof slide.gen_snapshot === 'object' ? slide.gen_snapshot : null) as Record<string, unknown> | null
+  if (!gen) return true // hand-added slide (no generator snapshot) — lost on a rebuild
+  return (
+    slide.slideTitle !== gen.slideTitle ||
+    slide.script !== gen.script ||
+    slide.speakerNote !== gen.speakerNote ||
+    slide.sectionName !== gen.sectionName
+  )
+}
+
+// An email counts as coach-customized when its subject or body differs from the
+// as-generated `original`. An email with no original (legacy) never counts.
+function isEmailCustomized(e: unknown): boolean {
+  const email = (e && typeof e === 'object' ? e : {}) as Record<string, unknown>
+  const orig = (email.original && typeof email.original === 'object' ? email.original : null) as Record<string, unknown> | null
+  if (!orig) return false
+  return email.subject !== orig.subject || email.body !== orig.body
+}
+
+// Whether any email in a stored array is coach-customized.
+function emailSetCustomized(arr: unknown): boolean {
+  return Array.isArray(arr) && arr.some(isEmailCustomized)
+}
+
+// A call-script beat counts as coach-customized when its content differs from the
+// generator-owned gen_snapshot, or when it was hand-added (no snapshot).
+// phrasing_options is an array, so compare it structurally.
+function isBeatCustomized(b: unknown): boolean {
+  const beat = (b && typeof b === 'object' ? b : {}) as Record<string, unknown>
+  const gen = (beat.gen_snapshot && typeof beat.gen_snapshot === 'object' ? beat.gen_snapshot : null) as Record<string, unknown> | null
+  if (!gen) return true // hand-added beat (no generator snapshot)
+  return (
+    beat.beat !== gen.beat ||
+    beat.prospect_mindset !== gen.prospect_mindset ||
+    beat.recommended !== gen.recommended ||
+    JSON.stringify(beat.phrasing_options ?? []) !== JSON.stringify(gen.phrasing_options ?? [])
+  )
+}
+
 // Computed, read-only fields for the GET response — never stored. Purely signals;
 // nothing here rewrites content.
 //  - angle_sync: per-asset (asset_angles[key] === chosen_angle); an UNSTAMPED
@@ -119,6 +180,8 @@ function computeAngleFields(row: Record<string, unknown>): {
   angle_sync: { current_angle: string; assets: Record<string, boolean>; all_in_sync: boolean }
   customized_slides: number
   customized_emails: number
+  customized_script: number
+  can_restore: boolean
   hook_flags: {
     chosen_angle: boolean | null
     email_subjects: Array<{ list: string; index: number; banned_shape: boolean }>
@@ -140,23 +203,12 @@ function computeAngleFields(row: Record<string, unknown>): {
   // equal to its content, so an untouched deck reads 0. A slide the coach edited
   // differs from its snapshot, and a hand-added slide has no snapshot — both count.
   const slides = Array.isArray(row.slides) ? row.slides : []
-  let customized = 0
-  for (const s of slides) {
-    const slide = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>
-    const gen = (slide.gen_snapshot && typeof slide.gen_snapshot === 'object' ? slide.gen_snapshot : null) as Record<string, unknown> | null
-    if (!gen) {
-      customized++ // hand-added slide (no generator snapshot) — lost on a rebuild
-      continue
-    }
-    if (
-      slide.slideTitle !== gen.slideTitle ||
-      slide.script !== gen.script ||
-      slide.speakerNote !== gen.speakerNote ||
-      slide.sectionName !== gen.sectionName
-    ) {
-      customized++
-    }
-  }
+  const customized = slides.filter(isSlideCustomized).length
+
+  // customized_script: call-script beats edited from, or added without, their
+  // gen_snapshot. A freshly generated script reads 0.
+  const scriptBeats = Array.isArray(row.sales_script) ? row.sales_script : []
+  const customizedScript = scriptBeats.filter(isBeatCustomized).length
 
   // Email edit-detection + hook_flags in one pass over the three email arrays.
   // customized_emails: subject OR body differs from the as-generated snapshot; an
@@ -169,12 +221,11 @@ function computeAngleFields(row: Record<string, unknown>): {
   for (const list of EMAIL_LISTS) {
     const arr = Array.isArray(row[list]) ? (row[list] as unknown[]) : []
     arr.forEach((e, index) => {
+      if (isEmailCustomized(e)) customizedEmails++
       const email = (e && typeof e === 'object' ? e : {}) as Record<string, unknown>
       const orig = (email.original && typeof email.original === 'object' ? email.original : null) as Record<string, unknown> | null
       if (!orig) return // legacy email with no snapshot — never false-alarm
       const subject = typeof email.subject === 'string' ? email.subject : ''
-      const body = typeof email.body === 'string' ? email.body : ''
-      if (subject !== orig.subject || body !== orig.body) customizedEmails++
       // Coach-edited subject: surface whether it trips a banned shape.
       if (subject !== orig.subject) {
         emailSubjectFlags.push({ list, index, banned_shape: matchHookShapes(subject).length > 0 })
@@ -186,6 +237,10 @@ function computeAngleFields(row: Record<string, unknown>): {
     angle_sync: { current_angle: chosenAngle, assets, all_in_sync: allInSync },
     customized_slides: customized,
     customized_emails: customizedEmails,
+    customized_script: customizedScript,
+    // A rebuild captures the pre-state; present until a restore clears it (one
+    // level of undo). Lets the frontend enable the undo control.
+    can_restore: row.pre_rebuild_snapshot != null,
     hook_flags: { chosen_angle: chosenAngleFlag, email_subjects: emailSubjectFlags },
   }
 }
@@ -414,7 +469,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         getSavedOutput(userId, 'transformation'),
         supabase
           .from('mtm_generations')
-          .select('chosen_topic, chosen_angle, delivery, slides, topics, asset_angles, angle_source')
+          // Full row: the rebuild/restore actions need every asset column plus
+          // pre_rebuild_snapshot; the regenerate/full-generate paths read a subset.
+          .select('*')
           .eq('user_id', userId)
           .eq('card_id', card_id)
           .maybeSingle(),
@@ -521,7 +578,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             break
           }
           case 'sales_script':
-            update.sales_script = (await regenerateAsset(userId, 'sales_script', inputs, chosenTopic, chosenAngle)).sales_script
+            update.sales_script = stampScriptGenSnapshots((await regenerateAsset(userId, 'sales_script', inputs, chosenTopic, chosenAngle)).sales_script ?? [])
             break
           case 'objections':
             update.objections = (await regenerateAsset(userId, 'objections', inputs, chosenTopic, chosenAngle)).objections
@@ -543,6 +600,115 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const stored = (existing.asset_angles && typeof existing.asset_angles === 'object' ? existing.asset_angles : {}) as Record<string, unknown>
           update.asset_angles = { ...stored, [regenKey]: chosenAngle }
         }
+
+        const { data, error } = await supabase
+          .from('mtm_generations')
+          .update(update)
+          .eq('user_id', userId)
+          .eq('card_id', card_id)
+          .select()
+          .single()
+        if (error) throw error
+        return res.status(200).json(withAngleFields(data))
+      }
+
+      // ── Restore ── one level of undo: put the assets (and angle identity) back
+      // to the pre-rebuild snapshot and clear it. 400 when there is nothing stored.
+      if (body.restore_snapshot === true) {
+        if (!existing) return res.status(404).json({ error: 'No generation to restore' })
+        const snap = existing.pre_rebuild_snapshot
+        if (snap == null || typeof snap !== 'object') {
+          return res.status(400).json({ error: 'nothing to restore' })
+        }
+        const s = snap as Record<string, unknown>
+        const update: Record<string, unknown> = { pre_rebuild_snapshot: null, updated_at: new Date().toISOString() }
+        for (const col of REBUILD_SNAPSHOT_COLUMNS) {
+          if (!(col in s)) continue
+          // asset_angles / angle_source are NOT NULL — coalesce to their defaults.
+          if (col === 'asset_angles') update[col] = s[col] && typeof s[col] === 'object' ? s[col] : {}
+          else if (col === 'angle_source') update[col] = typeof s[col] === 'string' ? s[col] : 'ai'
+          else update[col] = s[col]
+        }
+        const { data, error } = await supabase
+          .from('mtm_generations')
+          .update(update)
+          .eq('user_id', userId)
+          .eq('card_id', card_id)
+          .select()
+          .single()
+        if (error) throw error
+        return res.status(200).json(withAngleFields(data))
+      }
+
+      // ── Scoped rebuild ── re-sync assets to the CURRENT chosen_angle.
+      // rebuild: { scope: 'all' | 'keep_edited' }. Each target asset is
+      // regenerated on the pinned current topic + angle via the same per-unit
+      // helpers the single regenerate uses, so chosen_angle is an INPUT and is
+      // never rewritten (coach-hook protection holds automatically). The pre-state
+      // is captured for one level of undo. If any unit throws, nothing is written.
+      if (body.rebuild && typeof body.rebuild === 'object') {
+        if (!existing) return res.status(404).json({ error: 'No generation to rebuild — run a full generate first' })
+        const scope = (body.rebuild as Record<string, unknown>).scope
+        if (scope !== 'all' && scope !== 'keep_edited') {
+          return res.status(400).json({ error: "rebuild.scope must be 'all' or 'keep_edited'" })
+        }
+
+        const chosenTopic = typeof existing.chosen_topic === 'string' ? existing.chosen_topic : ''
+        const storedAngle = typeof existing.chosen_angle === 'string' ? existing.chosen_angle : ''
+        const chosenAngle = storedAngle.trim().length > 0
+          ? storedAngle
+          : resolveAngle(Array.isArray(existing.topics) ? (existing.topics as MtTopic[]) : [], chosenTopic)
+        const inputs: GeneratorInputs = { ...baseInputs, delivery: withPresenter(parseDelivery(existing.delivery)) }
+
+        // Each rebuildable asset, keyed by its asset_angles key, with its column
+        // and how to regenerate it on the pinned angle (the single-regenerate calls).
+        const rebuildTasks: Record<string, { column: string; run: () => Promise<unknown> }> = {
+          slides: { column: 'slides', run: async () => stampSlideGenSnapshots(await scrubSlideCoverHook(userId, (await regenerateAsset(userId, 'slides', inputs, chosenTopic, chosenAngle)).slides ?? [], chosenTopic, baseInputs.audience)) },
+          warm_invite: { column: 'warm_invite_emails', run: async () => stampEmailOriginals(await scrubEmailSubjectHooks(userId, (await regenerateAsset(userId, 'warm_invite', inputs, chosenTopic, chosenAngle)).warm_invite_emails ?? [], chosenTopic, baseInputs.audience)) },
+          emails: { column: 'emails', run: async () => stampEmailOriginals(await scrubEmailSubjectHooks(userId, (await regenerateAsset(userId, 'emails', inputs, chosenTopic, chosenAngle)).emails ?? [], chosenTopic, baseInputs.audience)) },
+          book_a_call: { column: 'book_a_call_emails', run: async () => stampEmailOriginals(await scrubEmailSubjectHooks(userId, (await regenerateAsset(userId, 'book_a_call', inputs, chosenTopic, chosenAngle)).book_a_call_emails ?? [], chosenTopic, baseInputs.audience)) },
+          sales_script: { column: 'sales_script', run: async () => stampScriptGenSnapshots((await regenerateAsset(userId, 'sales_script', inputs, chosenTopic, chosenAngle)).sales_script ?? []) },
+          objections: { column: 'objections', run: async () => (await regenerateAsset(userId, 'objections', inputs, chosenTopic, chosenAngle)).objections },
+          workbook: { column: 'workbook', run: async () => (await regenerateAsset(userId, 'workbook', inputs, chosenTopic, chosenAngle)).workbook },
+          outline: { column: 'outline', run: async () => (await regenerateAsset(userId, 'meta', inputs, chosenTopic, chosenAngle)).outline },
+        }
+
+        // keep_edited drops the editable assets the coach customized (they stay,
+        // still out-of-sync — the coach chose to keep them). The remaining
+        // non-editable assets (guide, objections, outline) are always rebuilt.
+        const isKept = (key: string): boolean => {
+          if (scope !== 'keep_edited') return false
+          if (key === 'slides') return Array.isArray(existing.slides) && (existing.slides as unknown[]).some(isSlideCustomized)
+          if (key === 'warm_invite') return emailSetCustomized(existing.warm_invite_emails)
+          if (key === 'emails') return emailSetCustomized(existing.emails)
+          if (key === 'book_a_call') return emailSetCustomized(existing.book_a_call_emails)
+          if (key === 'sales_script') return Array.isArray(existing.sales_script) && (existing.sales_script as unknown[]).some(isBeatCustomized)
+          return false
+        }
+        const targets = (ANGLE_SYNC_ASSETS as readonly string[]).filter((k) => !isKept(k))
+
+        // Regenerate every target concurrently. If any throws, the whole rebuild
+        // aborts (outer catch) and NOTHING is written — coach data untouched.
+        const rebuilt = await Promise.all(
+          targets.map(async (key) => ({ key, column: rebuildTasks[key].column, value: await rebuildTasks[key].run() }))
+        )
+
+        // Capture the pre-rebuild state for one level of undo.
+        const pre_rebuild_snapshot: Record<string, unknown> = {}
+        for (const col of REBUILD_SNAPSHOT_COLUMNS) {
+          pre_rebuild_snapshot[col] = (existing as Record<string, unknown>)[col] ?? null
+        }
+
+        const update: Record<string, unknown> = { updated_at: new Date().toISOString(), pre_rebuild_snapshot }
+        const storedStamps = (existing.asset_angles && typeof existing.asset_angles === 'object' ? existing.asset_angles : {}) as Record<string, unknown>
+        const newStamps: Record<string, unknown> = { ...storedStamps }
+        for (const r of rebuilt) {
+          update[r.column] = r.value
+          newStamps[r.key] = chosenAngle // rebuilt asset now sits on the current angle
+        }
+        update.asset_angles = newStamps
+        // Rebuilding the deck re-stamps the slides staleness snapshot too.
+        if (targets.includes('slides')) update.sync_snapshot = await stampSyncSnapshot(userId, 'slides', card_id)
 
         const { data, error } = await supabase
           .from('mtm_generations')
