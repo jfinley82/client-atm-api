@@ -247,12 +247,10 @@ ${STYLE_GUIDELINES}`
 // ask, so name the shapes that keep slipping through and show a recast for each —
 // the model needs the pattern, not just the prohibition. All recast examples are
 // themselves style-compliant (direct claim or concrete image).
-const HOOK_STYLE_REMINDER = `NO BANNED CONTRAST/NEGATION SHAPES — RECAST. A punchy hook pulls straight into these banned templates; if a hook, title, angle, or subject line is landing on any of them, recast it as a direct claim or a concrete image before returning:
-- "It's not X, it's Y" / "not X, but Y" → state the claim or the concrete situation directly. "It's not a marketing problem, it's the friend zone" → "Your warmest followers ask you for advice, then pay someone else."
-- "You don't need another X" → name what actually moves the needle, or the real situation. "You don't need another script or more traffic" → "The people who already trust you are the ones you never ask."
-- "You don't have an X problem, you have a Y problem" / "That's not an X problem" → state the real dynamic as a direct line. "You don't have a marketing problem, you have a friend-zone problem" → "Your audience likes you and still buys from someone else."
-- "You don't have an X problem" as a STANDALONE opener (banned even without the "you have a Y problem" completion) → state a direct claim. "You don't have a marketing problem" → "Your audience likes your free advice and hires someone else for the work."
-- "X isn't broken" / "Your X isn't broken" → state the real dynamic plainly. "Your funnel isn't broken" → "Your funnel does its job; your audience just learned your advice is free."`
+const HOOK_STYLE_REMINDER = `HOOK CONSTRUCTION. Write every hook, title, angle, and subject line as ONE of two things: a CONCRETE SITUATION (a specific, observable thing the reader actually does or lives) or a DIRECT CLAIM (a plain statement of the real dynamic). State the true thing straight. Do NOT set up a wrong frame and flip it — the negation-then-reframe move ("it's not X, it's Y", "you don't have an X problem, you have a Y problem", "you don't need another X", "X isn't broken", "that's not an X problem") is generic ad copy that reads as AI. If a line lands on any negation / contrast / reframe frame, rewrite it as the concrete situation or direct claim underneath it.
+- "It's not a marketing problem, it's the friend zone" → "Your warmest followers ask you for advice, then pay someone else."
+- "You don't need another script or more traffic" → "The people who already trust you are the ones you never ask."
+- "Your funnel isn't broken" → "Your funnel does its job; your audience just learned your advice is free."`
 
 // ── Per-unit prompts ────────────────────────────────────────────────────────
 // Each unit's system prompt carries only its own schema + rules. max_tokens is
@@ -824,6 +822,131 @@ async function runUnit(
   }
 }
 
+// ── Hook-shape safety net ───────────────────────────────────────────────────
+// The prompt reminder complies most of the time, but the negation/contrast/
+// reframe class has infinite surface variants and is the model's default "good
+// hook", so the high-visibility shipped fields get a deterministic scan + a
+// single targeted repair call. Guarantees the fields that actually ship, whatever
+// the model does on a given run.
+
+// Structural signatures of the class, case-insensitive. Kept specific to limit
+// false positives; the {0,40} windows stay inside one clause (no . ? !).
+const HOOK_SHAPE_PATTERNS: { name: string; re: RegExp }[] = [
+  { name: 'isnt-x-its-y', re: /isn'?t\b[^.?!]{0,40},?\s*it'?s\b/i },
+  { name: 'not-x-but-y', re: /\bnot\b[^.?!]{0,40},\s*but\b/i },
+  { name: 'its-not-x-its-y', re: /\bit'?s not\b[^.?!]{0,40}\bit'?s\b/i },
+  { name: 'not-about-x-its-about-y', re: /\bnot about\b[^.?!]{0,40}\bit'?s about\b/i },
+  { name: 'dont-need-another', re: /\bdon'?t need another\b/i },
+  { name: 'dont-have-a-x-problem', re: /\bdon'?t have (a|an)\b[^.?!]{0,40}\bproblem\b/i },
+  { name: 'thats-a-x-problem', re: /\bthat'?s (a|an|not)\b[^.?!]{0,40}\bproblem\b/i },
+  { name: 'isnt-broken', re: /\bisn'?t broken\b/i },
+]
+
+// The class shapes present in a string (empty = clean). Exported for testing.
+export function matchHookShapes(s: string): string[] {
+  if (typeof s !== 'string' || s.length === 0) return []
+  return HOOK_SHAPE_PATTERNS.filter((p) => p.re.test(s)).map((p) => p.name)
+}
+
+// A field the scrubber can read and write back in place.
+type HookSlot = { label: string; value: string; apply: (v: string) => void }
+
+// Scan the slots; if any hit a class shape, make ONE targeted repair call that
+// rewrites just the offenders as concrete situations / direct claims, then apply
+// the repaired values. One pass only — a still-matching repair is kept, not
+// re-looped. A failed repair keeps the originals. Logs when it fires + what hit.
+async function repairHookSlots(
+  userId: string,
+  slots: HookSlot[],
+  context: { chosen_topic: string; audience: unknown }
+): Promise<void> {
+  const offenders = slots.filter((s) => matchHookShapes(s.value).length > 0)
+  if (offenders.length === 0) return
+
+  const shapes = Array.from(new Set(offenders.flatMap((s) => matchHookShapes(s.value))))
+  console.log('[microTraining] hook-shape repair firing', { fields: offenders.map((o) => o.label), shapes })
+
+  const system = `You repair marketing hook lines that fell into a generic-ad-copy pattern. Rewrite each so it keeps the SAME meaning but is written straight, following this rule:
+
+${HOOK_STYLE_REMINDER}
+
+Return ONLY JSON, no preamble: { "fields": [ { "field": "<the field id, unchanged>", "text": "<the rewritten line, same meaning, no negation/contrast/reframe frame>" } ] }. Rewrite every field you are given and keep its field id exactly.
+${GENDER_NEUTRAL_INSTRUCTION}
+${STYLE_GUIDELINES}`
+  const userMessage = `TRAINING TITLE: ${JSON.stringify(context.chosen_topic)}
+AUDIENCE: ${JSON.stringify(context.audience)}
+Rewrite these lines (keep each field's meaning, drop the banned frame):
+${JSON.stringify(offenders.map((o) => ({ field: o.label, text: o.value })))}`
+
+  let repaired: Record<string, string> = {}
+  try {
+    const parsed = await callAndParse(userId, system, userMessage, 1500)
+    const arr = Array.isArray(parsed.fields) ? parsed.fields : []
+    for (const r of arr) {
+      const o = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>
+      if (typeof o.field === 'string' && typeof o.text === 'string' && o.text.trim().length > 0) {
+        repaired[o.field] = o.text.trim()
+      }
+    }
+  } catch (err) {
+    console.error('[microTraining] hook-shape repair failed; keeping originals', err)
+    return
+  }
+
+  const stillHit: string[] = []
+  for (const o of offenders) {
+    const val = repaired[o.label]
+    if (!val) continue
+    o.apply(val)
+    if (matchHookShapes(val).length > 0) stillHit.push(o.label)
+  }
+  if (stillHit.length > 0) console.warn('[microTraining] hook-shape still present after one repair pass', { fields: stillHit })
+}
+
+// The shipped hook fields of a full MicroTraining, as writable slots.
+function collectFullHookSlots(mt: MicroTraining): HookSlot[] {
+  const slots: HookSlot[] = []
+  slots.push({ label: 'chosen_topic', value: mt.chosen_topic, apply: (v) => { mt.chosen_topic = v } })
+  slots.push({ label: 'chosen_angle', value: mt.chosen_angle, apply: (v) => { mt.chosen_angle = v } })
+  if (mt.slides[0]) slots.push({ label: 'cover_title', value: mt.slides[0].slideTitle, apply: (v) => { mt.slides[0].slideTitle = v } })
+  mt.topics.forEach((t, i) => {
+    slots.push({ label: `topic_${i}_title`, value: t.title, apply: (v) => { mt.topics[i].title = v } })
+    slots.push({ label: `topic_${i}_angle`, value: t.angle, apply: (v) => { mt.topics[i].angle = v } })
+  })
+  mt.emails.forEach((e, i) => slots.push({ label: `email_${i}_subject`, value: e.subject, apply: (v) => { mt.emails[i].subject = v } }))
+  mt.warm_invite_emails.forEach((e, i) => slots.push({ label: `warm_${i}_subject`, value: e.subject, apply: (v) => { mt.warm_invite_emails[i].subject = v } }))
+  mt.book_a_call_emails.forEach((e, i) => slots.push({ label: `booking_${i}_subject`, value: e.subject, apply: (v) => { mt.book_a_call_emails[i].subject = v } }))
+  return slots.filter((s) => typeof s.value === 'string' && s.value.length > 0)
+}
+
+// Regenerate-path scrubbers: each guarantees the hook fields of one asset the
+// per-unit regenerate produced, mutating + returning the same array.
+export async function scrubTopicHooks(userId: string, topics: MtTopic[], chosenTopic: string, audience: unknown): Promise<MtTopic[]> {
+  const slots: HookSlot[] = []
+  topics.forEach((t, i) => {
+    if (t.title) slots.push({ label: `topic_${i}_title`, value: t.title, apply: (v) => { topics[i].title = v } })
+    if (t.angle) slots.push({ label: `topic_${i}_angle`, value: t.angle, apply: (v) => { topics[i].angle = v } })
+  })
+  await repairHookSlots(userId, slots, { chosen_topic: chosenTopic, audience })
+  return topics
+}
+
+export async function scrubSlideCoverHook(userId: string, slides: MtSlide[], chosenTopic: string, audience: unknown): Promise<MtSlide[]> {
+  const slots: HookSlot[] = []
+  if (slides[0]?.slideTitle) slots.push({ label: 'cover_title', value: slides[0].slideTitle, apply: (v) => { slides[0].slideTitle = v } })
+  await repairHookSlots(userId, slots, { chosen_topic: chosenTopic, audience })
+  return slides
+}
+
+export async function scrubEmailSubjectHooks(userId: string, emails: MtEmail[], chosenTopic: string, audience: unknown): Promise<MtEmail[]> {
+  const slots: HookSlot[] = []
+  emails.forEach((e, i) => {
+    if (e.subject) slots.push({ label: `subject_${i}`, value: e.subject, apply: (v) => { emails[i].subject = v } })
+  })
+  await repairHookSlots(userId, slots, { chosen_topic: chosenTopic, audience })
+  return emails
+}
+
 // Full generate — two waves so the downstream assets align to the FINAL title.
 // Wave 1: meta first, fixing chosen_topic (+ subtitle). Wave 2: the remaining
 // five units in parallel, grounded through withTitle(grounding, chosen_topic) —
@@ -881,7 +1004,7 @@ The training title is fixed to: ${JSON.stringify(pinnedTitle)}. Return chosen_to
   ])
 
   const merged = Object.assign({}, metaPart, ...restParts) as Partial<MicroTraining>
-  return {
+  const result: MicroTraining = {
     topics: merged.topics ?? [],
     chosen_topic: chosenTopic,
     chosen_angle: chosenAngle,
@@ -899,6 +1022,10 @@ The training title is fixed to: ${JSON.stringify(pinnedTitle)}. Return chosen_to
     objections: merged.objections ?? [],
     angle_previews: merged.angle_previews ?? [],
   }
+  // Deterministic safety net on the shipped hook fields — guarantees title,
+  // angle, cover, topic titles/angles, and subjects are clean whatever the run did.
+  await repairHookSlots(userId, collectFullHookSlots(result), { chosen_topic: result.chosen_topic, audience: inputs.audience })
+  return result
 }
 
 // Regenerate a single asset unit bound to the current chosen angle (title +

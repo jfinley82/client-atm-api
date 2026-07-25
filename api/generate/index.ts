@@ -16,6 +16,9 @@ import {
   generateSingleSlide,
   SingleSlideKind,
   resolveAngle,
+  scrubTopicHooks,
+  scrubSlideCoverHook,
+  scrubEmailSubjectHooks,
   DeliveryInput,
   GeneratorInputs,
   MtSlide,
@@ -351,16 +354,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (reqHook) update.delivery = resolvedDelivery
         switch (regenerate) {
           case 'slides':
-            update.slides = (await regenerateAsset(userId, 'slides', inputs, chosenTopic, chosenAngle)).slides
+            update.slides = await scrubSlideCoverHook(userId, (await regenerateAsset(userId, 'slides', inputs, chosenTopic, chosenAngle)).slides ?? [], chosenTopic, baseInputs.audience)
             break
           case 'warm_invite':
-            update.warm_invite_emails = (await regenerateAsset(userId, 'warm_invite', inputs, chosenTopic, chosenAngle)).warm_invite_emails
+            update.warm_invite_emails = await scrubEmailSubjectHooks(userId, (await regenerateAsset(userId, 'warm_invite', inputs, chosenTopic, chosenAngle)).warm_invite_emails ?? [], chosenTopic, baseInputs.audience)
             break
           case 'emails':
-            update.emails = (await regenerateAsset(userId, 'emails', inputs, chosenTopic, chosenAngle)).emails
+            update.emails = await scrubEmailSubjectHooks(userId, (await regenerateAsset(userId, 'emails', inputs, chosenTopic, chosenAngle)).emails ?? [], chosenTopic, baseInputs.audience)
             break
           case 'book_a_call':
-            update.book_a_call_emails = (await regenerateAsset(userId, 'book_a_call', inputs, chosenTopic, chosenAngle)).book_a_call_emails
+            update.book_a_call_emails = await scrubEmailSubjectHooks(userId, (await regenerateAsset(userId, 'book_a_call', inputs, chosenTopic, chosenAngle)).book_a_call_emails ?? [], chosenTopic, baseInputs.audience)
             break
           case 'workbook':
             update.workbook = (await regenerateAsset(userId, 'workbook', inputs, chosenTopic, chosenAngle)).workbook
@@ -369,7 +372,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             update.recording_tips = (await regenerateAsset(userId, 'recording_tips', inputs, chosenTopic, chosenAngle)).recording_tips
             break
           case 'topics':
-            update.topics = (await regenerateAsset(userId, 'meta', inputs, chosenTopic, chosenAngle)).topics
+            update.topics = await scrubTopicHooks(userId, (await regenerateAsset(userId, 'meta', inputs, chosenTopic, chosenAngle)).topics ?? [], chosenTopic, baseInputs.audience)
             break
           case 'outline':
             update.outline = (await regenerateAsset(userId, 'meta', inputs, chosenTopic, chosenAngle)).outline
