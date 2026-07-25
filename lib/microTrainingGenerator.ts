@@ -35,6 +35,9 @@ export type MtSlide = {
   // Optional editable per-slide visual layout, persisted by the slide editor. The
   // generator never produces this; it only rides along when the editor saves it.
   elements?: unknown[]
+  // Optional snapshot of our generated text, saved by the editor so a slide can be
+  // reset to the generated version. Preserved as-sent; never stamped here.
+  original?: { slideTitle: string; script: string; speakerNote: string; sectionName: string }
 }
 // recommended marks the default subset the frontend pre-selects from the pool of
 // candidate exercises; the coach can add or remove the rest. collects/why_fits are
@@ -568,6 +571,11 @@ export function coerceSlides(v: unknown): MtSlide[] {
       // The slide editor's per-slide visual layout: pass it through untouched when
       // present as an array, leave it off otherwise.
       if (Array.isArray(o.elements)) slide.elements = o.elements
+      // The editor's snapshot of the generated text (for reset): preserve as-sent
+      // when present as an object, leave it off otherwise. Never stamped here.
+      if (o.original && typeof o.original === 'object' && !Array.isArray(o.original)) {
+        slide.original = o.original as MtSlide['original']
+      }
       return slide
     })
     .filter((s) => s.slideTitle.trim().length > 0 || s.script.trim().length > 0)
