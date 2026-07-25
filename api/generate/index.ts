@@ -151,6 +151,24 @@ function emailSetCustomized(arr: unknown): boolean {
   return Array.isArray(arr) && arr.some(isEmailCustomized)
 }
 
+// Stable JSON with object keys sorted, so a jsonb column read back from Postgres
+// (which does not preserve key order) compares equal to freshly-coerced content
+// of the same value — a plain JSON.stringify compare would false-positive on order.
+function canonicalJson(v: unknown): string {
+  const seen = new WeakSet<object>()
+  const norm = (x: unknown): unknown => {
+    if (x === null || typeof x !== 'object') return x
+    if (seen.has(x as object)) return null
+    seen.add(x as object)
+    if (Array.isArray(x)) return x.map(norm)
+    const o = x as Record<string, unknown>
+    const out: Record<string, unknown> = {}
+    for (const k of Object.keys(o).sort()) out[k] = norm(o[k])
+    return out
+  }
+  try { return JSON.stringify(norm(v)) } catch { return '' }
+}
+
 // A call-script beat counts as coach-customized when its content differs from the
 // generator-owned gen_snapshot, or when it was hand-added (no snapshot).
 // phrasing_options is an array, so compare it structurally.
@@ -420,6 +438,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       update.updated_at = new Date().toISOString()
 
       try {
+        // Airtight undo: a genuine content edit after a rebuild invalidates the one-step
+        // undo (restoring would wipe the new edit). Clear the pre-rebuild snapshot when any
+        // written field actually changes. angle_source and updated_at are not content, so a
+        // no-op autosave (identical content) leaves undo intact.
+        const contentKeys = Object.keys(update).filter((k) => k !== 'updated_at' && k !== 'angle_source')
+        if (contentKeys.length > 0) {
+          const { data: cur, error: readErr } = await supabase
+            .from('mtm_generations')
+            .select(['pre_rebuild_snapshot', ...contentKeys].join(','))
+            .eq('user_id', userId)
+            .eq('card_id', card_id)
+            .maybeSingle()
+          if (readErr) throw readErr
+          const row = cur as unknown as Record<string, unknown> | null
+          if (row && row.pre_rebuild_snapshot != null) {
+            const changed = contentKeys.some((k) => canonicalJson(row[k]) !== canonicalJson(update[k]))
+            if (changed) update.pre_rebuild_snapshot = null
+          }
+        }
+
         const { data, error } = await supabase
           .from('mtm_generations')
           .update(update)
