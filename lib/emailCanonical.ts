@@ -13,6 +13,8 @@
 
 export const EMAIL_CANONICAL = `EMAIL CANONICAL — how every email in the coach's suite is written (warm-market invites, confirmation, watch nudges, book-a-call/conversion). Layer on top of COPYWRITING_CANONICAL. The coach's voice guide and the Anti-AI style guide win on wording; COPYWRITING_CANONICAL governs strategy (honest, non-guru, second person, promise the outcome); this adds email structure and deliverability.
 
+VOICE: every email body is written AS the coach, in the coach's own FIRST person ("I / me / my"), addressed to the reader as "you." The coach is the SENDER — never refer to the coach in the third person in the body: no "he / she / they," and never the coach's or presenter's name. Write it as a message the coach is sending, not a description of the coach.
+
 STRUCTURE:
 - Inverted triangle: most important line first, then context, narrowing to ONE clear next step. A reader who only reads the first two lines still gets the point.
 - Scannable: short paragraphs of 2-3 sentences, each separated by a blank line. Never a wall of text. Use a short "here's what's inside" list only when it earns its place.
