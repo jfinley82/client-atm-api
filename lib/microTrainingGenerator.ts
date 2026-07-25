@@ -578,7 +578,12 @@ export function coerceSlides(v: unknown): MtSlide[] {
       }
       return slide
     })
-    .filter((s) => s.slideTitle.trim().length > 0 || s.script.trim().length > 0)
+    .filter(
+      (s) =>
+        s.slideTitle.trim().length > 0 ||
+        s.script.trim().length > 0 ||
+        (Array.isArray(s.elements) && s.elements.length > 0)
+    )
 }
 
 export function coerceWorkbook(v: unknown): MtWorkbook {
