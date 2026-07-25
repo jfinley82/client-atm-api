@@ -20,6 +20,7 @@ import {
   scrubSlideCoverHook,
   scrubEmailSubjectHooks,
   stampEmailOriginals,
+  stampSlideGenSnapshots,
   matchHookShapes,
   DeliveryInput,
   GeneratorInputs,
@@ -134,20 +135,24 @@ function computeAngleFields(row: Record<string, unknown>): {
     if (!inSync) allInSync = false
   }
 
+  // customized_slides compares against the generator-owned gen_snapshot (NOT the
+  // editor-owned `original`): a freshly generated slide carries a gen_snapshot
+  // equal to its content, so an untouched deck reads 0. A slide the coach edited
+  // differs from its snapshot, and a hand-added slide has no snapshot — both count.
   const slides = Array.isArray(row.slides) ? row.slides : []
   let customized = 0
   for (const s of slides) {
     const slide = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>
-    const orig = (slide.original && typeof slide.original === 'object' ? slide.original : null) as Record<string, unknown> | null
-    if (!orig) {
-      customized++ // hand-added slide (no original snapshot)
+    const gen = (slide.gen_snapshot && typeof slide.gen_snapshot === 'object' ? slide.gen_snapshot : null) as Record<string, unknown> | null
+    if (!gen) {
+      customized++ // hand-added slide (no generator snapshot) — lost on a rebuild
       continue
     }
     if (
-      slide.slideTitle !== orig.slideTitle ||
-      slide.script !== orig.script ||
-      slide.speakerNote !== orig.speakerNote ||
-      slide.sectionName !== orig.sectionName
+      slide.slideTitle !== gen.slideTitle ||
+      slide.script !== gen.script ||
+      slide.speakerNote !== gen.speakerNote ||
+      slide.sectionName !== gen.sectionName
     ) {
       customized++
     }
@@ -487,7 +492,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (reqHook) update.delivery = resolvedDelivery
         switch (regenerate) {
           case 'slides':
-            update.slides = await scrubSlideCoverHook(userId, (await regenerateAsset(userId, 'slides', inputs, chosenTopic, chosenAngle)).slides ?? [], chosenTopic, baseInputs.audience)
+            update.slides = stampSlideGenSnapshots(await scrubSlideCoverHook(userId, (await regenerateAsset(userId, 'slides', inputs, chosenTopic, chosenAngle)).slides ?? [], chosenTopic, baseInputs.audience))
             break
           case 'warm_invite':
             update.warm_invite_emails = stampEmailOriginals(await scrubEmailSubjectHooks(userId, (await regenerateAsset(userId, 'warm_invite', inputs, chosenTopic, chosenAngle)).warm_invite_emails ?? [], chosenTopic, baseInputs.audience))
@@ -512,7 +517,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             break
           case 'script': {
             const cur = Array.isArray(existing.slides) ? (existing.slides as MtSlide[]) : []
-            update.slides = await regenerateScript(userId, inputs, cur, chosenTopic, chosenAngle)
+            update.slides = stampSlideGenSnapshots(await regenerateScript(userId, inputs, cur, chosenTopic, chosenAngle))
             break
           }
           case 'sales_script':

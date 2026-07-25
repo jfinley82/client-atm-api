@@ -38,6 +38,12 @@ export type MtSlide = {
   // Optional snapshot of our generated text, saved by the editor so a slide can be
   // reset to the generated version. Preserved as-sent; never stamped here.
   original?: { slideTitle: string; script: string; speakerNote: string; sectionName: string }
+  // Generator-owned snapshot of the as-generated text, stamped at generation time
+  // (full generate + slides/script regenerate) so a coach edit is detectable on
+  // read for customized_slides. Distinct from `original`, which the editor owns
+  // for reset — this field never participates in the editor's reset behavior. A
+  // hand-added slide has none, so it reads as customization (lost on a rebuild).
+  gen_snapshot?: { slideTitle: string; script: string; speakerNote: string; sectionName: string }
 }
 // recommended marks the default subset the frontend pre-selects from the pool of
 // candidate exercises; the coach can add or remove the rest. collects/why_fits are
@@ -601,6 +607,11 @@ export function coerceSlides(v: unknown): MtSlide[] {
       if (o.original && typeof o.original === 'object' && !Array.isArray(o.original)) {
         slide.original = o.original as MtSlide['original']
       }
+      // The generator's as-generated snapshot (for customized_slides): pass it
+      // through untouched so a save never drops the count baseline.
+      if (o.gen_snapshot && typeof o.gen_snapshot === 'object' && !Array.isArray(o.gen_snapshot)) {
+        slide.gen_snapshot = o.gen_snapshot as MtSlide['gen_snapshot']
+      }
       return slide
     })
     .filter(
@@ -964,6 +975,21 @@ export function stampEmailOriginals(emails: MtEmail[]): MtEmail[] {
   return emails.map((e) => (e.original ? e : { ...e, original: { subject: e.subject, body: e.body } }))
 }
 
+// Stamp the as-generated snapshot on freshly generated slides so a coach edit is
+// detectable on read (customized_slides). Called at generation time (full generate
+// + slides/script regenerate), after any hook repair, so the snapshot is the final
+// shipped copy. Does not touch a slide that already carries a gen_snapshot, so a
+// prior baseline is never overwritten. Separate from the editor-owned `original`,
+// so the editor's reset-to-generated behavior is unaffected. Hand-added slides are
+// never stamped, so they keep reading as customization.
+export function stampSlideGenSnapshots(slides: MtSlide[]): MtSlide[] {
+  return slides.map((s) =>
+    s.gen_snapshot
+      ? s
+      : { ...s, gen_snapshot: { slideTitle: s.slideTitle, script: s.script, speakerNote: s.speakerNote, sectionName: s.sectionName } }
+  )
+}
+
 // Full generate — two waves so the downstream assets align to the FINAL title.
 // Wave 1: meta first, fixing chosen_topic (+ subtitle). Wave 2: the remaining
 // five units in parallel, grounded through withTitle(grounding, chosen_topic) —
@@ -1051,10 +1077,11 @@ The training title is fixed to: ${JSON.stringify(pinnedTitle)}. Return chosen_to
     (s) => !(angleSource === 'coach' && s.label === 'chosen_angle')
   )
   await repairHookSlots(userId, repairSlots, { chosen_topic: result.chosen_topic, audience: inputs.audience })
-  // Snapshot the final email copy so a later coach edit is detectable on read.
+  // Snapshot the final copy so a later coach edit is detectable on read.
   result.emails = stampEmailOriginals(result.emails)
   result.warm_invite_emails = stampEmailOriginals(result.warm_invite_emails)
   result.book_a_call_emails = stampEmailOriginals(result.book_a_call_emails)
+  result.slides = stampSlideGenSnapshots(result.slides)
   return result
 }
 
@@ -1175,7 +1202,15 @@ EXISTING DECK (rewrite the script for each, keep everything else): ${JSON.string
       byNumber.set(o.slideNumber, o.script)
     }
   }
-  return currentSlides.map((s) => ({ ...s, script: byNumber.get(s.slideNumber) ?? s.script }))
+  return currentSlides.map((s) => {
+    const script = byNumber.get(s.slideNumber) ?? s.script
+    // Keep the generator snapshot in step with the freshly generated script so a
+    // script regenerate reads clean (not "customized"), while any prior edit to
+    // the other fields still shows. Slides with no snapshot get one stamped by
+    // stampSlideGenSnapshots at the call site.
+    const gen_snapshot = s.gen_snapshot ? { ...s.gen_snapshot, script } : s.gen_snapshot
+    return { ...s, script, gen_snapshot }
+  })
 }
 
 // ── Add one slide ───────────────────────────────────────────────────────────
