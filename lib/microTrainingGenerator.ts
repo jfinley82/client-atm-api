@@ -252,20 +252,22 @@ const UNIT_SPECS: Record<AssetUnit, UnitSpec> = {
   meta: {
     key: 'meta',
     maxTokens: 2500,
-    prompt: `You design the framing for a coach's pre-recorded micro-training video. Produce the title options, the recommended primary title, a subtitle, the run time, and a section outline.
+    prompt: `You design the framing for a coach's pre-recorded micro-training video. Produce the title options, the recommended primary title, the hook that title opens from, a subtitle, the run time, and a section outline.
 
 {
-  "topics": [ { "title": "title option", "angle": "the specific hook or framing", "why": "one sentence, spoken TO the coach, on why this hook lands — name the specific belief, fear, or phrase it echoes in their audience. Address the coach as 'you/your audience.' Never refer to the audience as a named persona or as 'she/he/they,' and never mention 'data,' scores, matching, or any internal system.", "score": 8.4 } ],
+  "topics": [ { "title": "title option", "angle": "the HOOK LINE itself — the one-line opening framing this title opens from, in the audience's language (the actual line, not a description of it and not a rationale)", "why": "one sentence, spoken TO the coach, on why this hook lands — name the specific belief, fear, or phrase it echoes in their audience. Address the coach as 'you/your audience.' Never refer to the audience as a named persona or as 'she/he/they,' and never mention 'data,' scores, matching, or any internal system.", "score": 8.4 } ],
   "chosen_topic": "the ONE recommended primary title (may match one of the topics or be a sharper version of the strongest) — this is the working title",
+  "chosen_angle": "the one-line HOOK / opening framing that chosen_topic opens from, in the audience's language — the actual positioning line (NOT the coach-facing rationale, NOT a description of the angle). If chosen_topic matches a topic, this is that topic's angle; if chosen_topic is a sharpened title, write the matching hook for it.",
   "subtitle": "a one-line subtitle that clarifies the promise",
   "total_duration": "the video run time in words — always in the 15-20 minute range (e.g. '15-20 minutes')",
   "outline": [ { "section_number": 1, "title": "section title", "description": "one sentence on what this section covers" } ]
 }
 
 Rules:
-- topics: exactly 5 distinct options, each grounded in this blueprint's problem and this audience's language.
+- topics: exactly 5 distinct options, each grounded in this blueprint's problem and this audience's language. Each option's "angle" is the hook LINE itself (a line you could open the training with), not a rationale for it.
 - score each topic 0-10 (one decimal) on how well its hook FITS this audience — higher when the hook mirrors the audience's OWN language and beliefs and pulls them into watching the training, lower when it's generic or off-angle. Make the scores genuinely DIFFERENTIATE across the 5 options (spread them out — do not cluster them all near the same value); the weakest option should score clearly below the strongest.
 - chosen_topic must never be empty — pick the strongest, sharpened for this audience.
+- chosen_angle must never be empty — it is the hook chosen_topic opens from, in the audience's language, and every other asset opens from it.
 - total_duration is always a 15-20 minute recorded video — do not invent a longer run time.
 - outline: the sections a viewer moves through in the recording, mapped to the framework's phases in order (hook, the teaching phases applied to this problem, the key insight, a soft next step). One entry per section.
 ${SHARED_RULES}`,
@@ -774,6 +776,7 @@ async function runUnit(
       return {
         topics: coerceTopics(parsed.topics),
         chosen_topic: asString(parsed.chosen_topic),
+        chosen_angle: asString(parsed.chosen_angle),
         subtitle: asString(parsed.subtitle),
         total_duration: asString(parsed.total_duration),
         outline: coerceOutline(parsed.outline),
@@ -814,14 +817,35 @@ export async function generateMicroTraining(
 ): Promise<MicroTraining> {
   const grounding = buildGrounding(inputs)
 
-  const metaPart = await runUnit(userId, 'meta', grounding, inputs.voiceContext)
+  // When keep_title pins the title, tell the meta unit the title is fixed so it
+  // returns chosen_topic as that title and emits chosen_angle as the hook that
+  // title opens from — no dependency on matching a pinned title against a freshly
+  // regenerated topic list.
+  const pinnedTitle = pinned?.chosen_topic?.trim() ? pinned.chosen_topic : ''
+  const metaGrounding = pinnedTitle
+    ? `${grounding}
+The training title is fixed to: ${JSON.stringify(pinnedTitle)}. Return chosen_topic exactly as this title and emit chosen_angle as the hook this title opens from.`
+    : grounding
+
+  const metaPart = await runUnit(userId, 'meta', metaGrounding, inputs.voiceContext)
   const metaTopic = typeof metaPart.chosen_topic === 'string' ? metaPart.chosen_topic : ''
+  const metaAngle = typeof metaPart.chosen_angle === 'string' ? metaPart.chosen_angle : ''
   const topics = Array.isArray(metaPart.topics) ? metaPart.topics : []
 
-  // The angle every downstream asset stays inside. Pinned wins (keep_title);
-  // otherwise it's the meta unit's chosen title and the hook of the matching topic.
-  const chosenTopic = pinned?.chosen_topic?.trim() ? pinned.chosen_topic : metaTopic
-  const chosenAngle = pinned ? pinned.chosen_angle : resolveAngle(topics, metaTopic)
+  // The angle every downstream asset stays inside. The meta unit now emits the
+  // hook directly, so that is the primary source; fall back only when it is empty.
+  // Never leave it empty (that would degrade withAngle to title-only and scatter
+  // the assets).
+  const chosenTopic = pinnedTitle || metaTopic
+  const chosenAngle = pinnedTitle
+    ? pinned!.chosen_angle.trim().length > 0
+      ? pinned!.chosen_angle
+      : metaAngle.trim().length > 0
+        ? metaAngle
+        : resolveAngle(topics, chosenTopic)
+    : metaAngle.trim().length > 0
+      ? metaAngle
+      : resolveAngle(topics, metaTopic)
 
   // Wave 2: the remaining full-length units, plus the two net-new sales assets,
   // all bound to the selected ANGLE via withAngle. angle_previews is the one
