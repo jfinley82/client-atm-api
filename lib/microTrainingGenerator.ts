@@ -250,7 +250,9 @@ ${STYLE_GUIDELINES}`
 const HOOK_STYLE_REMINDER = `NO BANNED CONTRAST/NEGATION SHAPES — RECAST. A punchy hook pulls straight into these banned templates; if a hook, title, angle, or subject line is landing on any of them, recast it as a direct claim or a concrete image before returning:
 - "It's not X, it's Y" / "not X, but Y" → state the claim or the concrete situation directly. "It's not a marketing problem, it's the friend zone" → "Your warmest followers ask you for advice, then pay someone else."
 - "You don't need another X" → name what actually moves the needle, or the real situation. "You don't need another script or more traffic" → "The people who already trust you are the ones you never ask."
-- "You don't have an X problem, you have a Y problem" / "That's not an X problem" → state the real dynamic as a direct line. "You don't have a marketing problem, you have a friend-zone problem" → "Your audience likes you and still buys from someone else."`
+- "You don't have an X problem, you have a Y problem" / "That's not an X problem" → state the real dynamic as a direct line. "You don't have a marketing problem, you have a friend-zone problem" → "Your audience likes you and still buys from someone else."
+- "You don't have an X problem" as a STANDALONE opener (banned even without the "you have a Y problem" completion) → state a direct claim. "You don't have a marketing problem" → "Your audience likes your free advice and hires someone else for the work."
+- "X isn't broken" / "Your X isn't broken" → state the real dynamic plainly. "Your funnel isn't broken" → "Your funnel does its job; your audience just learned your advice is free."`
 
 // ── Per-unit prompts ────────────────────────────────────────────────────────
 // Each unit's system prompt carries only its own schema + rules. max_tokens is
