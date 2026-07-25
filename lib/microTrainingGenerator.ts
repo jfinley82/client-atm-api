@@ -237,7 +237,7 @@ RECORDING DETAILS:
 // Shared header + guardrails appended to every unit's system prompt.
 const SHARED_RULES = `Output ONLY valid JSON, no preamble, no markdown, no code fences. Double quotes only.
 
-Ground EVERYTHING in the specific data provided — the coach's real audience language, their transformation, their named framework phases, and this one blueprint's problem/solution/offer. No generic coaching-industry filler that could apply to any topic. The teaching arc must follow the coach's ACTUAL framework phases in order, applied to this blueprint's problem — not a generic skeleton. This is ONE pre-recorded 15-20 minute teaching video, not a live session: no welcome-the-room, no housekeeping, no Q&A, no live-audience or workshop language. The arc is a recorded hook, then the framework applied to this problem, then the key insight, then a soft next step. Any call to action is soft and teaching-first: it references the blueprint's suggested_offer and invites the viewer to book a call, never a hard pitch.
+Ground EVERYTHING in the specific data provided — the coach's real audience language, their transformation, their named framework phases, and this one blueprint's problem/solution/offer. No generic coaching-industry filler that could apply to any topic. This is ONE pre-recorded 15-20 minute teaching video, not a live session: no welcome-the-room, no housekeeping, no Q&A, no live-audience or workshop language. Any call to action is soft and teaching-first: it references the blueprint's suggested_offer and invites the viewer to book a call, never a hard pitch.
 ${GENDER_NEUTRAL_INSTRUCTION}
 ${STYLE_GUIDELINES}`
 
