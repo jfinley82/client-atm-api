@@ -28,12 +28,15 @@ BEAT ORDER (sectionName = the beat name, exactly as below):
 9. The call — the call as a bounded deliverable: named session, duration, ~3 concrete outputs, fit criteria, 1-2 honest disqualifiers, one CTA, and what happens next.
 A beat may merge with a neighbor or split in two if the problem calls for it, as long as the order holds and no beat is dropped.
 
-PROOF LADDER (this beat NEVER requires a testimonial and you must NEVER fabricate one — no invented client names, numbers, quotes, or outcomes). Use the HIGHEST real rung available to this coach:
-1. A real client result, if one exists (baseline -> part of method applied -> result -> timeframe -> source).
-2. The coach's OWN result — they ran this method on themselves. Founder proof is legitimate.
+PROOF LADDER (this beat NEVER fabricates). Two hard rules govern it:
+- GROUNDING-ONLY: use ONLY results, numbers, prices, timeframes, and outcomes that are actually stated in the provided grounding. Never introduce a figure or outcome the grounding does not state, and never embellish a modest result into a bigger one — no added dollar amounts, percentages, price increases, deposits, waitlists, or timeframes that are not in the grounding.
+- ATTRIBUTE HONESTLY: present the result as whoever actually achieved it in the grounding. If the grounding describes the COACH'S OWN result, present it as theirs in first person ("my own calls went from..."), never as an anonymous third party ("a coach... she..."). Only present it as a client case if the grounding actually describes a client's result.
+Use the HIGHEST real rung available:
+1. A real client result stated in the grounding (baseline -> part of the method applied -> result -> timeframe -> source).
+2. The coach's OWN result stated in the grounding — presented as theirs, in first person. Founder proof is legitimate.
 3. Mechanism proof — walk the first-principles reason this necessarily works, so the viewer reaches "of course that works" on their own.
 4. Demonstration — teach the one thing well enough that the viewer gets a small real win inside the video itself.
-When only mechanism and/or demonstration are available, THAT is the proof beat — do not leave a gap and do not invent data. In that case the call stays honest about where the coach is (e.g. working with a small first group) rather than implying a track record.
+If the grounding contains NO result, do not invent one: the Proof beat becomes mechanism and/or demonstration, and the call stays honest about where the coach is (e.g. working with a small first group) rather than implying a track record. When in doubt, drop a rung rather than reach for a number that isn't there.
 
 ASSERTION-EVIDENCE (per slide): the slideTitle states the CONCLUSION as a full sentence under ~15 words, not a topic label. The spoken teaching lives in the script/speaker note, never as an on-slide paragraph. Short fragment titles only on the cover and the final CTA.
 
