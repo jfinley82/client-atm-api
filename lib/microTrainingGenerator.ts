@@ -25,25 +25,50 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 // Angle step renders it as a fit meter like the blueprint cards' match_strength.
 export type MtTopic = { title: string; angle: string; why: string; score: number }
 export type MtOutlineItem = { section_number: number; title: string; description: string }
+// The one presentation move for a slide. kind drives the UI: only 'image' shows
+// an image placeholder; 'screen_share' and 'just_talk' do not. note is a plain
+// one-line example grounded in the coach's own framework/offer.
+export type MtDeliveryMove = { kind: 'image' | 'screen_share' | 'just_talk'; note: string }
+
+// The snapshot shape shared by `original` (editor-owned, for reset) and
+// `gen_snapshot` (generator-owned, for customized_slides). script/speakerNote are
+// legacy; talkingPoints/deliveryMove are the current content.
+type SlideSnapshot = {
+  slideTitle: string
+  sectionName: string
+  talkingPoints: string[]
+  deliveryMove: MtDeliveryMove
+  // legacy on-screen narration, kept so old decks still reset/compare
+  script?: string
+  speakerNote?: string
+}
+
 export type MtSlide = {
   slideNumber: number
   slideTitle: string
-  script: string
-  speakerNote: string
+  // 3-5 short beats the coach conveys in their OWN voice, ordered — what to say,
+  // not verbatim prose. The current on-screen/teaching content.
+  talkingPoints: string[]
+  // How the coach presents this slide (one move). See MtDeliveryMove.
+  deliveryMove: MtDeliveryMove
   timing: string
   sectionName: string
+  // Legacy on-screen narration — no longer generated or surfaced; the UI prefers
+  // talkingPoints. Kept so old decks still show something and coerce cleanly.
+  script?: string
+  speakerNote?: string
   // Optional editable per-slide visual layout, persisted by the slide editor. The
   // generator never produces this; it only rides along when the editor saves it.
   elements?: unknown[]
-  // Optional snapshot of our generated text, saved by the editor so a slide can be
-  // reset to the generated version. Preserved as-sent; never stamped here.
-  original?: { slideTitle: string; script: string; speakerNote: string; sectionName: string }
-  // Generator-owned snapshot of the as-generated text, stamped at generation time
-  // (full generate + slides/script regenerate) so a coach edit is detectable on
-  // read for customized_slides. Distinct from `original`, which the editor owns
+  // Optional snapshot of our generated content, saved by the editor so a slide can
+  // be reset to the generated version. Preserved as-sent; never stamped here.
+  original?: SlideSnapshot
+  // Generator-owned snapshot of the as-generated content, stamped at generation
+  // time (full generate + slides/script regenerate) so a coach edit is detectable
+  // on read for customized_slides. Distinct from `original`, which the editor owns
   // for reset — this field never participates in the editor's reset behavior. A
   // hand-added slide has none, so it reads as customization (lost on a rebuild).
-  gen_snapshot?: { slideTitle: string; script: string; speakerNote: string; sectionName: string }
+  gen_snapshot?: SlideSnapshot
 }
 // recommended marks the default subset the frontend pre-selects from the pool of
 // candidate exercises; the coach can add or remove the rest. collects/why_fits are
@@ -299,13 +324,13 @@ ${SHARED_RULES}`,
   slides: {
     key: 'slides',
     maxTokens: 8000,
-    prompt: `You build the slide deck the coach records the micro-training video from. Each slide has the script the coach speaks on camera, a short speaker note/cue, its timing, and the beat it belongs to. Build the deck to the slide-deck doctrine below.
+    prompt: `You build the slide deck the coach records the micro-training video from. Each slide gives the coach an on-screen assertion (slideTitle), 3-5 talking points (beats to CONVEY in their own voice, not a script to read), one delivery move (how to present the slide), its timing, and the beat it belongs to. Build the deck to the slide-deck doctrine below.
 
 ${SLIDES_CANONICAL}
 
 {
   "slides": [
-    { "slideNumber": 1, "slideTitle": "slide title", "script": "what the coach actually says on this slide, written to be read or paraphrased on camera", "speakerNote": "a short delivery cue for this slide", "timing": "minutes for this slide, e.g. '2 min'", "sectionName": "the beat name this slide belongs to" }
+    { "slideNumber": 1, "slideTitle": "the assertion: a full-sentence conclusion under ~15 words", "talkingPoints": ["3-5 short beats the coach conveys in their OWN voice, ordered, in the audience's language — what to say, not verbatim prose"], "deliveryMove": { "kind": "image | screen_share | just_talk", "note": "one short line: the move for this slide" }, "timing": "minutes for this slide, e.g. '2 min'", "sectionName": "the beat name this slide belongs to" }
   ]
 }
 
@@ -315,11 +340,12 @@ Rules:
 - sectionName is the BEAT NAME the slide belongs to, exactly as named in the doctrine.
 - The Proof beat is CONDITIONAL: include it ONLY if COACH-PROVIDED PROOF appears in the grounding, and ground it solely in that text — use only what the coach wrote, attribute it exactly as they wrote it, and invent no numbers or outcomes beyond their words. If no coach-provided proof is present, OMIT the Proof beat entirely (Framework reveal is followed directly by Implementation gap); never fabricate a result or a client case.
 - The per-slide timing values must sum to roughly 15-20 minutes.
-- script is the spoken content grounded in this blueprint and the audience's language — specific teaching, not vague restatements of the title. No live-audience or "welcome to today's session" language; this is recorded solo.
-- If a COACH'S OWN OPENING STORY is provided in the AUTHORSHIP block, the opening (the Cover/Qualify area) MUST weave it in as the coach's own opening — in their voice, teaching-first, preserving their words (frame around them, do not paraphrase them away). If none is provided, write a strong opening and do NOT fabricate a personal story.
-- If a COACH'S SIGNATURE EXAMPLE is provided, work it into a teaching slide where it fits naturally, preserving their words.
-- On "The call" beat, reflect the CTA in the grounding: for book_call, invite the viewer to book a call and use the token [BOOK_A_CALL_LINK]; for sell_program, invite them to get the program directly and use the token [OFFER_LINK]. Use only the applicable link. The CTA token ([BOOK_A_CALL_LINK] / [OFFER_LINK]) must appear INSIDE The call slide's script — never as its own slide and never as a slide title.
-- The Cover slide's title and opening script are the deck's hook, so check them against this before returning:
+- talkingPoints are 3-5 short beats the coach hits IN THEIR OWN VOICE, in order, in the audience's language. Each is what to CONVEY, a beat to hit ("Open with the moment someone you helped for free hired someone else"), NOT a sentence to read verbatim and NOT a paragraph. Ground each in this blueprint and the audience's language, not vague restatements of the title. Where it helps, make one point a delivery cue ("Pause here, let it land"). Recorded solo: no live-audience or "welcome to today's session" language.
+- deliveryMove is the ONE move for the slide. Choose kind HONESTLY per slide: "image" ONLY when a visual clearly strengthens the point, "screen_share" when a live demo or a screenshot fits, "just_talk" otherwise. Do NOT default everything to "image" — most teaching slides are "just_talk". note is one short, plain line grounded in the coach's own framework or offer (e.g. "a simple 3-step flow of your process" for image, "your booking page" for screen_share, "say this straight to camera, then pause" for just_talk).
+- If a COACH'S OWN OPENING STORY is provided in the AUTHORSHIP block, the opening (the Cover/Qualify area) MUST weave it into the talking points as the coach's own opening — in their voice, teaching-first, preserving their words (frame around them, do not paraphrase them away). If none is provided, write a strong opening and do NOT fabricate a personal story.
+- If a COACH'S SIGNATURE EXAMPLE is provided, work it into a teaching slide's talking points where it fits naturally, preserving their words.
+- On "The call" beat, reflect the CTA in the grounding: for book_call, invite the viewer to book a call and use the token [BOOK_A_CALL_LINK]; for sell_program, invite them to get the program directly and use the token [OFFER_LINK]. Use only the applicable link. The CTA token ([BOOK_A_CALL_LINK] / [OFFER_LINK]) must appear INSIDE one of The call slide's talkingPoints — never as its own slide and never as a slide title.
+- The Cover slide's title and its first talking point are the deck's hook, so check them against this before returning:
 ${HOOK_STYLE_REMINDER}
 ${SHARED_RULES}`,
   },
@@ -595,14 +621,20 @@ export function coerceSlides(v: unknown): MtSlide[] {
     .map((r, i) => {
       const o = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>
       const n = typeof o.slideNumber === 'number' && Number.isFinite(o.slideNumber) ? o.slideNumber : i + 1
+      const dm = (o.deliveryMove && typeof o.deliveryMove === 'object' && !Array.isArray(o.deliveryMove) ? o.deliveryMove : {}) as Record<string, unknown>
+      const dmKind = dm.kind === 'image' || dm.kind === 'screen_share' || dm.kind === 'just_talk' ? dm.kind : 'just_talk'
       const slide: MtSlide = {
         slideNumber: n,
         slideTitle: asString(o.slideTitle),
-        script: asString(o.script),
-        speakerNote: asString(o.speakerNote),
+        talkingPoints: asStringArray(o.talkingPoints).filter((t) => t.trim().length > 0),
+        deliveryMove: { kind: dmKind, note: asString(dm.note) },
         timing: asString(o.timing),
         sectionName: asString(o.sectionName),
       }
+      // Legacy on-screen narration: pass it through when a stored/edited slide
+      // still carries it, so old decks keep it. Not generated for new slides.
+      if (typeof o.script === 'string' && o.script.length > 0) slide.script = o.script
+      if (typeof o.speakerNote === 'string' && o.speakerNote.length > 0) slide.speakerNote = o.speakerNote
       // The slide editor's per-slide visual layout: pass it through untouched when
       // present as an array, leave it off otherwise.
       if (Array.isArray(o.elements)) slide.elements = o.elements
@@ -621,7 +653,8 @@ export function coerceSlides(v: unknown): MtSlide[] {
     .filter(
       (s) =>
         s.slideTitle.trim().length > 0 ||
-        s.script.trim().length > 0 ||
+        s.talkingPoints.length > 0 ||
+        (typeof s.script === 'string' && s.script.trim().length > 0) ||
         (Array.isArray(s.elements) && s.elements.length > 0)
     )
 }
@@ -996,7 +1029,17 @@ export function stampSlideGenSnapshots(slides: MtSlide[]): MtSlide[] {
   return slides.map((s) =>
     s.gen_snapshot
       ? s
-      : { ...s, gen_snapshot: { slideTitle: s.slideTitle, script: s.script, speakerNote: s.speakerNote, sectionName: s.sectionName } }
+      : {
+          ...s,
+          gen_snapshot: {
+            slideTitle: s.slideTitle,
+            sectionName: s.sectionName,
+            talkingPoints: [...s.talkingPoints],
+            deliveryMove: { ...s.deliveryMove },
+            script: s.script,
+            speakerNote: s.speakerNote,
+          },
+        }
   )
 }
 
@@ -1244,7 +1287,7 @@ EXISTING DECK (rewrite the script for each, keep everything else): ${JSON.string
 // so it fits the deck. Returns just the slide fields; no slideNumber (the editor
 // assigns position on insert). Never touches the stored deck.
 export type SingleSlideKind = 'proof' | 'opening_story' | 'signature_example'
-type SingleSlide = Pick<MtSlide, 'slideTitle' | 'script' | 'speakerNote' | 'timing' | 'sectionName'>
+type SingleSlide = Pick<MtSlide, 'slideTitle' | 'talkingPoints' | 'deliveryMove' | 'timing' | 'sectionName'>
 
 const SINGLE_SLIDE_SPECS: Record<SingleSlideKind, { sectionName: string; label: string; instruction: string }> = {
   proof: {
@@ -1282,14 +1325,16 @@ ${spec.instruction}
 Return exactly ONE slide object (NO slideNumber — the editor assigns position):
 {
   "slideTitle": "a full-sentence CONCLUSION under ~15 words (assertion-evidence), not a topic label",
-  "script": "the spoken content the coach says on camera — the teaching lives here, not on the slide",
-  "speakerNote": "a short delivery cue",
+  "talkingPoints": ["3-5 short beats the coach conveys in their OWN voice, ordered — what to say, not verbatim prose"],
+  "deliveryMove": { "kind": "image | screen_share | just_talk", "note": "one short line: the move for this slide" },
   "timing": "minutes for this slide, e.g. '2 min'",
   "sectionName": "${spec.sectionName}"
 }
 
 Rules:
-- Assertion-evidence: slideTitle is a full-sentence conclusion; the spoken content lives in script, never as an on-slide paragraph.
+- Assertion-evidence: slideTitle is a full-sentence conclusion; the teaching lives in the talking points, never as an on-slide paragraph.
+- talkingPoints are 3-5 short beats to CONVEY in the coach's own voice, in order, in the audience's language — beats to hit, not sentences to read verbatim and not a paragraph. Where it helps, make one point a delivery cue ("Pause here, let it land").
+- deliveryMove is the ONE move for the slide. Choose kind HONESTLY: "image" ONLY when a visual clearly strengthens the point, "screen_share" when a live demo or a screenshot fits, "just_talk" otherwise — do NOT default to "image". note is one short line grounded in the coach's own framework or offer.
 - sectionName MUST be exactly "${spec.sectionName}".
 - Ground the slide in this blueprint and the audience's language so it fits the deck; recorded solo, no live-audience or "welcome to today's session" language.
 ${SHARED_RULES}`
@@ -1302,10 +1347,12 @@ Generate the one slide now.`
 
   const parsed = await callAndParse(userId, system, userMessage, 2000)
   const sectionName = asString(parsed.sectionName).trim().length > 0 ? asString(parsed.sectionName) : spec.sectionName
+  const dm = (parsed.deliveryMove && typeof parsed.deliveryMove === 'object' && !Array.isArray(parsed.deliveryMove) ? parsed.deliveryMove : {}) as Record<string, unknown>
+  const dmKind = dm.kind === 'image' || dm.kind === 'screen_share' || dm.kind === 'just_talk' ? dm.kind : 'just_talk'
   return {
     slideTitle: asString(parsed.slideTitle),
-    script: asString(parsed.script),
-    speakerNote: asString(parsed.speakerNote),
+    talkingPoints: asStringArray(parsed.talkingPoints).filter((t) => t.trim().length > 0),
+    deliveryMove: { kind: dmKind, note: asString(dm.note) },
     timing: asString(parsed.timing),
     sectionName,
   }

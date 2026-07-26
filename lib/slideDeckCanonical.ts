@@ -33,6 +33,51 @@ PROOF (conditional beat — driven ONLY by coach-provided proof):
 - When NO coach-provided proof is present, OMIT the Proof beat entirely: go straight from Framework reveal to Implementation gap. Do not fabricate a result, do not substitute an anonymous client case, and do not manufacture a mechanism-only "proof" slide. The deck simply has no Proof beat.
 - Proof appears on the slides ONLY if the coach supplied it. Never fabricate proof under any circumstance.
 
-ASSERTION-EVIDENCE (per slide): the slideTitle states the CONCLUSION as a full sentence under ~15 words, not a topic label. The spoken teaching lives in the script/speaker note, never as an on-slide paragraph. Short fragment titles only on the cover and the final CTA.
+ASSERTION-EVIDENCE (per slide): the slideTitle states the CONCLUSION as a full sentence under ~15 words, not a topic label. The spoken teaching lives in the talking points the coach delivers in their own voice, never as an on-slide paragraph. Short fragment titles only on the cover and the final CTA.
 
 HONESTY BAR: no fake scarcity, no countdowns, no manufactured urgency, no offer stacks. State a real capacity limit only if factual. Close on autonomy — they can apply it themselves or choose help. Same honesty bar as the copywriting and email canonicals.`
+
+// Universal beat teaching, keyed by beat name (a slide's sectionName). This is
+// STATIC and identical for every coach — the beat's JOB and WHY it works are the
+// same regardless of topic, so it is NOT generated per training. It is the single
+// source of truth the frontend renders beside each slide to teach the coach what
+// the beat is for; the AI only writes the per-slide talking points and delivery
+// move. Keep it in sync with the BEAT ORDER above.
+export const BEAT_TEACHING: Record<string, { job: string; why: string }> = {
+  Cover: {
+    job: 'Re-state the outcome, who it is for, and the objection you remove, in one breath.',
+    why: 'People decide in seconds whether this is about them. Naming the result and the person makes the right viewer lean in and lets the wrong one leave.',
+  },
+  Qualify: {
+    job: 'Say who this is for, and who should not keep watching.',
+    why: 'Telling the wrong person to leave is what makes the right person trust you. Fit earns more than reach.',
+  },
+  'Hidden bottleneck': {
+    job: 'Name the real thing holding them back, the one they cannot see, and what it costs them.',
+    why: 'They came for the symptom. Showing them the hidden cause is the moment they feel you understand the problem better than they do.',
+  },
+  'Why the old way fails': {
+    job: 'Walk through why the usual approach leaves them stuck.',
+    why: 'You cannot sell a new way until the old way looks broken. This clears the ground for your teaching.',
+  },
+  Teaching: {
+    job: 'Hand them one diagnostic, shift one belief, and give one action they can take on this problem.',
+    why: 'A viewer who can act differently after watching believes you can help with the rest. Teach the one problem, do not tour the whole framework.',
+  },
+  'Framework reveal': {
+    job: 'Show your complete, named method as the bigger picture this one problem sits inside.',
+    why: 'Once they have felt one piece work, seeing the whole method makes the paid path obvious without teaching all of it here.',
+  },
+  Proof: {
+    job: 'Show one real result, in your own words, exactly as it happened.',
+    why: 'One honest, specific result outweighs a wall of testimonials. Only include this beat if you have real proof to point to.',
+  },
+  'Implementation gap': {
+    job: 'Lay out the honest fork: apply it alone, or apply it with your help.',
+    why: 'Respecting that they can do it themselves is what makes the offer to help land. No "you will fail without me."',
+  },
+  'The call': {
+    job: 'Describe the next step as a bounded session: what it is, how long, what they walk away with, and who it is for.',
+    why: 'A clear, concrete next step feels safe to say yes to. A vague "book a call" does not.',
+  },
+}
