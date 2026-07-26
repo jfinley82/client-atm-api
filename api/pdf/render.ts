@@ -1,19 +1,14 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
+import chromium from '@sparticuz/chromium'
+import puppeteer from 'puppeteer-core'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 
-// @sparticuz/chromium@149 and puppeteer-core are ESM-only (package "type":
-// "module"). This function is compiled to CommonJS, where a static import — or
-// even a plain `await import(...)` — is downleveled to require(), which throws
-// ERR_REQUIRE_ESM at module load and crashes the function on EVERY request
-// (including the CORS preflight). Loading them through this indirection keeps a
-// genuine dynamic import() in the output no matter how the file is compiled, so
-// Node loads them as real ESM at runtime. Imported lazily inside the handler.
-const esmImport = new Function('specifier', 'return import(specifier)') as (
-  specifier: string
-) => Promise<any>
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyDefault = { default: any }
+// @sparticuz/chromium is pinned to 133.0.0 — the last CommonJS release (137+ is
+// ESM-only) — with its matching puppeteer-core (Chrome 133). Both are CJS, so
+// these plain static imports compile to require(), and Vercel's dependency tracer
+// follows the require graph and bundles chromium's runtime deps (tar-fs and the
+// rest) into the function. The Chrome version is irrelevant for document PDFs.
 
 // POST /api/pdf/render — server-side PDF engine. Turns a COMPLETE, print-ready
 // HTML document (supplied by the frontend, with its own <style>, @page rules, and
@@ -110,12 +105,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const filename = sanitizeFilename(body.filename)
   const safeHtml = stripScripts(html)
 
-  let browser: any = null
+  let browser: Awaited<ReturnType<typeof puppeteer.launch>> | null = null
   try {
-    // Load the ESM-only render deps at runtime (see esmImport above).
-    const chromium = ((await esmImport('@sparticuz/chromium')) as AnyDefault).default
-    const puppeteer = ((await esmImport('puppeteer-core')) as AnyDefault).default
-
     // Document PDFs need no WebGL, so skip the graphics stack (faster cold start,
     // avoids extracting swiftshader to /tmp).
     chromium.setGraphicsMode = false
@@ -129,7 +120,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Lock the page down: no scripts, and no network beyond inlined data: URLs.
     await page.setJavaScriptEnabled(false)
     await page.setRequestInterception(true)
-    page.on('request', (request: any) => {
+    page.on('request', (request) => {
       if (request.url().startsWith('data:')) request.continue()
       else request.abort()
     })
