@@ -39,6 +39,7 @@ import {
   coerceObjections,
   coerceAnglePreviews,
 } from '../../lib/microTrainingGenerator'
+import { BEAT_TEACHING } from '../../lib/slideDeckCanonical'
 
 // POST /api/generate — the unified Micro-Training generator. From ONE validated
 // blueprint plus a few optional recording details, it produces and persists the
@@ -131,9 +132,13 @@ function isSlideCustomized(s: unknown): boolean {
   if (!gen) return true // hand-added slide (no generator snapshot) — lost on a rebuild
   return (
     slide.slideTitle !== gen.slideTitle ||
+    slide.sectionName !== gen.sectionName ||
+    // current content: talking points (array, order matters) + delivery move
+    canonicalJson(slide.talkingPoints ?? []) !== canonicalJson(gen.talkingPoints ?? []) ||
+    canonicalJson(slide.deliveryMove ?? null) !== canonicalJson(gen.deliveryMove ?? null) ||
+    // legacy on-screen narration, still compared so an edit to an old deck counts
     slide.script !== gen.script ||
-    slide.speakerNote !== gen.speakerNote ||
-    slide.sectionName !== gen.sectionName
+    slide.speakerNote !== gen.speakerNote
   )
 }
 
@@ -874,7 +879,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         if (error) throw error
         if (!data) return res.status(404).json({ error: 'Generation not found' })
-        return res.status(200).json(withAngleFields(data))
+        // beat_teaching is the static, universal per-beat coaching copy; the
+        // frontend renders each slide's note from beat_teaching[slide.sectionName].
+        return res.status(200).json({ ...withAngleFields(data), beat_teaching: BEAT_TEACHING })
       } catch (err) {
         console.error('[generate] GET one', err)
         return res.status(500).json({ error: 'Failed to load generation' })
@@ -894,7 +901,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .maybeSingle()
 
         if (error) throw error
-        return res.status(200).json(data ? withAngleFields(data) : null)
+        // beat_teaching is the static, universal per-beat coaching copy; the
+        // frontend renders each slide's note from beat_teaching[slide.sectionName].
+        return res.status(200).json(data ? { ...withAngleFields(data), beat_teaching: BEAT_TEACHING } : null)
       } catch (err) {
         console.error('[generate] GET by card_id', err)
         return res.status(500).json({ error: 'Failed to load generation' })

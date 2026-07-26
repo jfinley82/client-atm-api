@@ -33,6 +33,69 @@ PROOF (conditional beat — driven ONLY by coach-provided proof):
 - When NO coach-provided proof is present, OMIT the Proof beat entirely: go straight from Framework reveal to Implementation gap. Do not fabricate a result, do not substitute an anonymous client case, and do not manufacture a mechanism-only "proof" slide. The deck simply has no Proof beat.
 - Proof appears on the slides ONLY if the coach supplied it. Never fabricate proof under any circumstance.
 
-ASSERTION-EVIDENCE (per slide): the slideTitle states the CONCLUSION as a full sentence under ~15 words, not a topic label. The spoken teaching lives in the script/speaker note, never as an on-slide paragraph. Short fragment titles only on the cover and the final CTA.
+ASSERTION-EVIDENCE (per slide): the slideTitle states the CONCLUSION as a full sentence under ~15 words, not a topic label. The spoken teaching lives in the talking points the coach delivers in their own voice, never as an on-slide paragraph. Short fragment titles only on the cover and the final CTA.
 
 HONESTY BAR: no fake scarcity, no countdowns, no manufactured urgency, no offer stacks. State a real capacity limit only if factual. Close on autonomy — they can apply it themselves or choose help. Same honesty bar as the copywriting and email canonicals.`
+
+// Universal beat teaching, keyed by beat name (a slide's sectionName). This is
+// STATIC and identical for every coach — what a beat does, why it works, and how
+// it is delivered are the same regardless of topic, so it is NOT generated per
+// training. It is the single source of truth the frontend renders beside each
+// slide to teach the coach what the beat is for; the AI only writes the per-slide
+// talking points and delivery move. Keep it in sync with the BEAT ORDER above.
+export const BEAT_TEACHING: Record<string, { title: string; whatItDoes: string; whyItWorks: string; howDelivered: string }> = {
+  'Cover': {
+    title: 'Your opening',
+    whatItDoes: 'Name the exact problem your viewer is living, in one line, so the right person leans in and everyone else clicks away.',
+    whyItWorks: 'People give you their attention when you describe their situation better than they could themselves. That first line is what earns you the next fifteen minutes.',
+    howDelivered: 'Usually just you, talking straight to camera, warm and direct. Skip the intro and the housekeeping and open on the problem.',
+  },
+  'Qualify': {
+    title: 'Who this is for',
+    whatItDoes: 'Show the viewer, in a few plain signs, that this training was built for their exact situation. Say who it is not for, too.',
+    whyItWorks: 'When someone recognizes themselves in your list, the rest of the training feels personal instead of general. Turning the wrong people away is what makes the right people trust you.',
+    howDelivered: 'Talk through the signs, or put them on screen as a short checklist. Keep it to three so it lands.',
+  },
+  'Hidden bottleneck': {
+    title: 'The real problem',
+    whatItDoes: 'Move the viewer from the symptom they can see to the hidden cause sitting underneath it.',
+    whyItWorks: 'Nobody books a call to fix a problem they cannot see. Naming the real cause is what makes your offer the obvious fix later, without you having to sell it here.',
+    howDelivered: 'A simple picture of the cause, drawn your own way, helps here. One idea, not five. If the line is strong enough on its own, just say it and let it sit.',
+  },
+  'Why the old way fails': {
+    title: "Why the usual fix doesn't work",
+    whatItDoes: 'Show why the thing they keep trying, more content, more effort, more free value, cannot solve this. That clears the way for the move you teach next.',
+    whyItWorks: 'You earn the right to teach by being right about why they are stuck. When you name their failed fix before they say it themselves, they believe everything after it.',
+    howDelivered: 'Walk the reasoning out loud, or show it as a few steps ending on the point where it breaks. Keep that ending honest and a little uncomfortable.',
+  },
+  'Teaching': {
+    title: 'Your teaching slides',
+    whatItDoes: 'Hand the viewer one thing they can use on this problem today, a way to check where they stand, a belief worth changing, or a move to make. One usable thing per slide.',
+    whyItWorks: 'This is where most of the selling actually happens. When you give someone a tool that works, they trust that the fuller version works too, and they start wanting it.',
+    howDelivered: 'Show the tool the way you would draw it on a whiteboard, or share your screen and walk through it. The clearer the takeaway, the more the call sells itself later.',
+  },
+  'Framework reveal': {
+    title: 'Show your full method',
+    whatItDoes: "Pull back and show today's lesson as one piece of your bigger method, so they see the whole system it came from.",
+    whyItWorks: "Once they see the full method, today's win reads as a sample of something larger. That is the moment they start wanting the whole thing, not just the free piece.",
+    howDelivered: 'A simple map of your method in your own words. Name the parts, but do not teach them all here. You are showing the shape, not walking through it.',
+  },
+  'Proof': {
+    title: 'Your proof',
+    whatItDoes: 'Answer the quiet question every viewer is holding, will this actually work for someone like me. You answer it with a real result, in the client\'s own words and numbers.',
+    whyItWorks: 'One specific, true story from someone they recognize beats any claim you could make about yourself. If you have no real result yet, leave this slide out rather than invent one, and the training still holds.',
+    howDelivered: 'Put the result on screen the way it happened, their words, their numbers, nothing added. Read it plainly and let it stand on its own.',
+  },
+  'Implementation gap': {
+    title: 'Their two paths',
+    whatItDoes: 'Lay out the two honest paths from here, doing it on their own or doing it with your help. Both are real, and you say so.',
+    whyItWorks: 'When you admit they can do it alone, they trust you, and the value of your help stands on its own instead of on fear. This is the bridge that makes the call feel like a choice rather than a trap.',
+    howDelivered: 'Show the two paths side by side, plainly. No "you will fail without me." Let the honest difference do the work.',
+  },
+  'The call': {
+    title: 'The invitation',
+    whatItDoes: 'Collect the decision. The teaching already did the selling, so this stays clear and bounded.',
+    whyItWorks: 'By now they feel the gap themselves, so a plain next step with real outcomes beats any hard pitch. One clear ask is stronger than three.',
+    howDelivered: 'You can share your booking page here. Say exactly what they will walk away with, then make the ask once and stop.',
+  },
+}

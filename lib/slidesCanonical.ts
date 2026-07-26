@@ -33,6 +33,11 @@ export function deckSlidesToCanonical(slides: SlideEntry[], phaseNames: string[]
     return {
       slideNumber: typeof s.slide_number === 'number' ? s.slide_number : i + 1,
       slideTitle: typeof s.title === 'string' ? s.title : '',
+      // Legacy import: the old toolkit had prose notes, not talking-point beats.
+      // Keep the prose in the legacy script/speakerNote fields (the UI falls back
+      // to them) and leave the current-shape fields at sane empty defaults.
+      talkingPoints: [],
+      deliveryMove: { kind: 'just_talk', note: '' },
       script: notes,
       speakerNote: notes,
       timing: '',
@@ -53,10 +58,13 @@ export function canonicalRowToDeck(row: CanonicalSlideRow): SlidesDeck {
     const o = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>
     const script = typeof o.script === 'string' ? o.script : ''
     const speakerNote = typeof o.speakerNote === 'string' ? o.speakerNote : ''
+    // Current shape carries talking points; prefer them (one per line) and fall
+    // back to the legacy prose so old decks still populate speaker_notes.
+    const talkingPoints = (Array.isArray(o.talkingPoints) ? o.talkingPoints : []).filter((t): t is string => typeof t === 'string')
     return {
       slide_number: typeof o.slideNumber === 'number' ? o.slideNumber : i + 1,
       title: typeof o.slideTitle === 'string' ? o.slideTitle : '',
-      speaker_notes: script || speakerNote,
+      speaker_notes: talkingPoints.length > 0 ? talkingPoints.join('\n') : script || speakerNote,
       key_points: [],
     }
   })
