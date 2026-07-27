@@ -3,6 +3,7 @@ import { buildGuideDocument, GuideBrand, NEUTRAL_ACCENT, accentShades } from './
 import { bookingQrDataUri } from './qr'
 import { loadBusinessSettings } from '../businessSettings'
 import { isValidBrandColor } from '../funnels'
+import { ensureGuideCopy } from '../guideCopy'
 
 // Build the print-ready HTML for a coach's lead-magnet Guide (the coach-branded
 // workbook — its own cover + shell, zero MTM branding). Shared by the on-demand
@@ -54,9 +55,13 @@ export async function buildGuideHtml(opts: { userId: string; token: string; card
   const businessName = (settings.business_name && settings.business_name.trim()) || presenterName
   const accent = isValidBrandColor(settings.brand_primary_color) ? settings.brand_primary_color : NEUTRAL_ACCENT
 
-  // Booking URL from the coach's funnel subdomain (same resolution the emails use).
-  // Fallback: the funnel base — never an MTM link, never a minted token.
+  // Booking + training URLs from the coach's funnel subdomain (same resolution the
+  // emails use). Booking falls back to the funnel base; the training/companion
+  // link only renders when the coach has a funnel (a real training page exists).
+  // Never an MTM link, never a minted token.
+  const ink = accentShades(accent).ink
   let bookingUrl = `https://${FUNNEL_DOMAIN}`
+  let trainingUrl = ''
   const funnelRes = await supabase
     .from('funnels')
     .select('subdomain')
@@ -64,7 +69,11 @@ export async function buildGuideHtml(opts: { userId: string; token: string; card
     .not('subdomain', 'is', null)
     .limit(1)
   const subdomain = funnelRes.data?.[0]?.subdomain
-  if (typeof subdomain === 'string' && subdomain.trim()) bookingUrl = `https://${subdomain.trim()}.${FUNNEL_DOMAIN}/?page=book`
+  if (typeof subdomain === 'string' && subdomain.trim()) {
+    const base = `https://${subdomain.trim()}.${FUNNEL_DOMAIN}`
+    bookingUrl = `${base}/?page=book`
+    trainingUrl = `${base}/?page=training`
+  }
   let bookingDisplay = FUNNEL_DOMAIN
   try {
     bookingDisplay = new URL(bookingUrl).host
@@ -72,14 +81,32 @@ export async function buildGuideHtml(opts: { userId: string; token: string; card
     /* keep the domain */
   }
 
-  const qrDataUri = await bookingQrDataUri(bookingUrl, accentShades(accent).ink)
-  const brand: GuideBrand = { businessName, presenterName, accent, bookingUrl, bookingDisplay }
+  const [qrDataUri, trainingQrDataUri] = await Promise.all([
+    bookingQrDataUri(bookingUrl, ink),
+    trainingUrl ? bookingQrDataUri(trainingUrl, ink) : Promise.resolve(null),
+  ])
+  const brand: GuideBrand = { businessName, presenterName, accent, bookingUrl, bookingDisplay, trainingUrl }
 
   const workbook = obj(gen.data.workbook)
   const coverTitle = str(workbook.title) || str(gen.data.chosen_angle) || frameworkName
   const analysis = obj(obj(results.transformation).analysis)
+
+  // Ensure clean second-person close copy + recap (generated + persisted; backfills
+  // existing generations). Never derives lead-facing copy from the avatar text.
+  const copy = await ensureGuideCopy({ userId, cardId, workbook, analysis, presenterName })
+
   const docTitle = coverTitle || frameworkName || 'Your guide'
-  const html = buildGuideDocument({ brand, workbook: gen.data.workbook, analysis, delivery: gen.data.delivery, frameworkName, coverTitle, qrDataUri })
+  const html = buildGuideDocument({
+    brand,
+    workbook: gen.data.workbook,
+    delivery: gen.data.delivery,
+    transformationClose: copy.transformationClose,
+    recap: copy.recap,
+    frameworkName,
+    coverTitle,
+    qrDataUri,
+    trainingQrDataUri,
+  })
 
   const filename = `${docTitle.slice(0, 80)} - Guide`
   return { html, filename, docTitle }
