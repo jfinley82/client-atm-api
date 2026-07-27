@@ -1,0 +1,215 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Lead-magnet guide — coach-branded template</title>
+<!-- Visual source of truth for the Guide PDF (lib/pdf/guideDoc.ts). Authored on a
+     660x854 on-screen page; the PDF builder scales every dimension by 816/660 into
+     Letter (816x1056) page space. The QR image below is elided to a placeholder;
+     the builder generates it server-side from the coach's real booking link. -->
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{ --accent:#0F766E; --accent-soft:#e6f2f0; --accent-ink:#0b544e; --ink:#1a2230; --muted:#6b7280; --line:#e5e7eb; }
+body{font-family:Inter,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#eceef2;color:var(--ink);padding:26px}
+.cap{max-width:680px;margin:0 auto 22px;color:#48506a;font-size:13.5px;line-height:1.65;text-align:center}
+.cap b{color:#111}
+.cap .pill{display:inline-block;background:var(--accent-soft);color:var(--accent-ink);border:1px solid #cfe6e2;border-radius:999px;font-size:11px;font-weight:800;padding:3px 10px}
+.stack{display:flex;flex-direction:column;align-items:center;gap:26px}
+
+/* page */
+.page{width:660px;height:854px;background:#fff;box-shadow:0 12px 34px rgba(20,30,50,.14);position:relative;overflow:hidden}
+.pg-pad{padding:56px 60px}
+
+/* running header / footer */
+.rhead{position:absolute;top:26px;left:60px;right:60px;display:flex;align-items:center;justify-content:space-between;font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.rhead .b{color:var(--accent-ink)}
+.rfoot{position:absolute;bottom:26px;left:60px;right:60px;display:flex;align-items:center;justify-content:space-between;font-size:10px;color:var(--muted);border-top:1px solid var(--line);padding-top:10px}
+.rfoot .b{font-weight:700;color:var(--ink)}
+
+/* section header */
+.sec{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+.sec .num{width:30px;height:30px;border-radius:8px;background:var(--accent);color:#fff;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.sec .t{font-size:19px;font-weight:800;color:var(--ink);letter-spacing:-.01em}
+.kicker{font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:7px}
+.rule{height:3px;width:52px;background:var(--accent);border-radius:2px;margin-bottom:26px}
+
+p.body{font-size:13.5px;line-height:1.72;color:#374151;margin-bottom:13px}
+p.body.lg{font-size:14.5px}
+
+/* callout */
+.callout{background:var(--accent-soft);border:1px solid #cfe6e2;border-left:4px solid var(--accent);border-radius:10px;padding:16px 18px;margin:18px 0}
+.callout h4{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--accent-ink);margin-bottom:10px}
+.callout ul{margin:0;padding-left:18px}
+.callout li{font-size:13px;line-height:1.6;color:#334155;margin-bottom:7px}
+
+/* ---------- COVER ---------- */
+.cover{display:flex;flex-direction:column;height:100%}
+.cover .top{padding:56px 60px 0}
+.cover .biz{font-size:12px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;color:var(--accent)}
+.cover .mid{flex:1;padding:0 60px;display:flex;flex-direction:column;justify-content:center}
+.cover .eyebrow{font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:16px}
+.cover h1{font-size:42px;line-height:1.08;font-weight:800;letter-spacing:-.02em;color:var(--ink)}
+.cover .sub{font-size:16px;color:var(--muted);margin-top:16px;line-height:1.5;max-width:440px}
+.cover .accentbar{height:8px;width:120px;background:var(--accent);border-radius:4px;margin-top:30px}
+.cover .bot{padding:0 60px 52px;display:flex;align-items:flex-end;justify-content:space-between}
+.cover .bot .by{font-size:12.5px;color:var(--muted)}
+.cover .bot .by b{color:var(--ink);font-weight:700}
+.cover .tag{font-size:11px;font-weight:800;color:var(--accent-ink);background:var(--accent-soft);border:1px solid #cfe6e2;border-radius:999px;padding:5px 12px}
+.cover .band{position:absolute;top:0;right:0;width:210px;height:100%;background:linear-gradient(160deg,var(--accent) 0%,var(--accent-ink) 100%);opacity:.06}
+
+/* ---------- EXERCISE BLOCKS ---------- */
+.ex{border:1px solid var(--line);border-radius:12px;padding:18px 18px 16px;margin-bottom:20px}
+.ex .q{display:flex;gap:11px;margin-bottom:6px}
+.ex .qn{width:26px;height:26px;border-radius:7px;border:2px solid var(--accent);color:var(--accent-ink);font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.ex .qt{font-size:13.5px;font-weight:700;color:var(--ink);line-height:1.5}
+.ex .rev{font-size:11px;color:var(--muted);margin:2px 0 12px 37px}
+.ex .rev b{color:var(--accent-ink);font-weight:700}
+.lines{margin-left:37px}
+.lines .ln{height:26px;border-bottom:1px solid #dfe3ea}
+.lines .ln:last-child{border-bottom:1px dashed #dfe3ea}
+
+/* ---------- BACK CTA ---------- */
+.cta-page{display:flex;flex-direction:column;height:100%;justify-content:flex-start;padding:52px 60px}
+.ctabox2{display:flex;gap:18px;background:var(--accent);border-radius:14px;padding:20px 22px;color:#fff;align-items:center}
+.ctabox2 .left{flex:1}
+.ctabox2 .cl{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;opacity:.85}
+.ctabox2 .h2{font-size:19px;font-weight:800;margin:7px 0 13px}
+.btn2{display:inline-block;background:#fff;color:var(--accent-ink);font-weight:800;font-size:13.5px;padding:11px 20px;border-radius:10px}
+.ctabox2 .meta{font-size:11.5px;opacity:.9;margin-top:11px}
+.qrwrap{background:#fff;border-radius:12px;padding:9px 9px 6px;text-align:center;flex:0 0 auto}
+.qrwrap img{width:92px;height:92px;display:block}
+.qrwrap span{display:block;font-size:9px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent-ink);margin-top:4px}
+.pnote{font-size:12px;line-height:1.6;color:#4b5563;font-style:italic;margin-top:16px}
+.trans{display:flex;align-items:stretch;margin:16px 0 4px}
+.trans .col{flex:1;border-radius:12px;padding:15px 16px}
+.trans .from{background:#f6f7f9;border:1px solid var(--line)}
+.trans .to{background:var(--accent-soft);border:1px solid #cfe6e2}
+.trans .lab{font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px}
+.trans .from .lab{color:var(--muted)}
+.trans .to .lab{color:var(--accent-ink)}
+.trans .col p{font-size:12px;line-height:1.55;color:#374151;margin:0}
+.trans .arrow{display:flex;align-items:center;justify-content:center;width:36px;flex:0 0 auto}
+.trans .arrow svg{width:22px;height:22px;stroke:var(--accent);fill:none;stroke-width:2.6}
+.bridge{font-size:13px;line-height:1.6;color:var(--ink);font-weight:600;margin:16px 0 6px}
+.bridge b{color:var(--accent-ink)}
+.proofline{font-size:11.5px;line-height:1.5;color:var(--muted);font-style:italic;margin:0 0 16px}
+.proofline b{color:var(--accent-ink);font-style:normal}
+.cta-kick{font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
+.cta-h{font-size:32px;font-weight:800;letter-spacing:-.02em;color:var(--ink);margin:12px 0 18px;line-height:1.12}
+.cta-foot{margin-top:auto;padding-top:26px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--muted)}
+.cta-foot b{color:var(--ink)}
+.plabel{font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:#9aa2b0;margin:2px 0 -14px}
+</style></head><body>
+
+<div class="cap">
+  <span class="pill">MOCKUP</span> &nbsp; <b>The lead-magnet guide — coach-branded template.</b><br>
+  Same AI-generated content, wrapped in a clean workbook shell that belongs to the coach. The <b style="color:var(--accent)">business name, accent color, and booking link</b> all pull from their profile (shown here with a sample brand). Four representative pages: cover, a content page, a fillable exercise page, and the back-page CTA.
+</div>
+
+<div class="stack">
+
+  <!-- ===== COVER ===== -->
+  <div class="plabel">Page 1 — Cover</div>
+  <div class="page cover">
+    <div class="band"></div>
+    <div class="top"><div class="biz">Bright Path Coaching</div></div>
+    <div class="mid">
+      <div class="eyebrow">A workbook · solve one problem</div>
+      <h1>They ask you for advice, then book someone else</h1>
+      <div class="sub">Your path out of the free-help pattern, one honest look at a time.</div>
+      <div class="accentbar"></div>
+    </div>
+    <div class="bot">
+      <div class="by">A workbook by <b>Danielle Hart</b><br>Bright Path Coaching</div>
+      <span class="tag">15-minute companion</span>
+    </div>
+  </div>
+
+  <!-- ===== CONTENT PAGE ===== -->
+  <div class="plabel">Page 2 — The problem, in their words</div>
+  <div class="page">
+    <div class="rhead"><span class="b">Bright Path Coaching</span><span>The friend-zone pattern</span></div>
+    <div class="pg-pad" style="padding-top:70px">
+      <div class="kicker">Start here</div>
+      <div class="sec"><span class="num">1</span><span class="t">The pattern you keep feeling</span></div>
+      <p class="body lg">You know the feeling. Someone comments on your post, DMs you for advice, tells you how much they get from your content, and then a few weeks later you find out they hired a different coach, one who charges more than you and, honestly, maybe knows less than you do.</p>
+      <p class="body">It doesn't mean your price is too high. It doesn't mean you're bad at sales. It doesn't even mean your marketing is broken, even though marketing is the thing you've probably tried to fix three or four times now. It means your audience learned something from you, over time, one free answer at a time.</p>
+      <p class="body">They learned that you're the generous one, the one who'll help for free if they just ask nicely. You taught them that, not on purpose, but you taught them. That's not a character flaw. It's a pattern, and patterns can be seen and changed once you know where to look.</p>
+      <div class="callout">
+        <h4>What you'll walk away with</h4>
+        <ul>
+          <li>The exact moment the free-help pattern starts, named in your own recent activity.</li>
+          <li>Why raising your price alone never fixes it.</li>
+          <li>The first concrete move out of the friend zone.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="rfoot"><span class="b">Bright Path Coaching</span><span>2</span></div>
+  </div>
+
+  <!-- ===== EXERCISE PAGE ===== -->
+  <div class="plabel">Page 3 — Work it through (fillable)</div>
+  <div class="page">
+    <div class="rhead"><span class="b">Bright Path Coaching</span><span>Your exercises</span></div>
+    <div class="pg-pad" style="padding-top:70px">
+      <div class="kicker">Do the work</div>
+      <div class="sec"><span class="num">2</span><span class="t">Name it in your own numbers</span></div>
+      <p class="body" style="margin-bottom:20px">Write by hand if you can. The point is to make the pattern concrete, not abstract.</p>
+
+      <div class="ex">
+        <div class="q"><span class="qn">1</span><span class="qt">Think back over the last 90 days. Write down three moments where someone got real, substantial help from you for free, whether in a comment, a DM, or a live.</span></div>
+        <div class="rev"><b>What this reveals:</b> the free-help pattern in your own recent activity.</div>
+        <div class="lines"><div class="ln"></div><div class="ln"></div><div class="ln"></div></div>
+      </div>
+
+      <div class="ex">
+        <div class="q"><span class="qn">2</span><span class="qt">Look at your last five discovery calls. How many did you discount, and what did you tell yourself in the moment that made the discount feel necessary?</span></div>
+        <div class="rev"><b>What this reveals:</b> the guilt-driven pricing pattern, straight from your own calls.</div>
+        <div class="lines"><div class="ln"></div><div class="ln"></div><div class="ln"></div></div>
+      </div>
+
+      <div class="ex">
+        <div class="q"><span class="qn">3</span><span class="qt">Finish this sentence honestly: "If I raised my price and someone asked for a discount, I would probably..." Write what you'd actually do, not what you think you should do.</span></div>
+        <div class="rev"><b>What this reveals:</b> the gap between your stated price and your behavior under pressure.</div>
+        <div class="lines"><div class="ln"></div><div class="ln"></div></div>
+      </div>
+    </div>
+    <div class="rfoot"><span class="b">Bright Path Coaching</span><span>3</span></div>
+  </div>
+
+  <!-- ===== BACK CTA (the close) ===== -->
+  <div class="plabel">Page 4 — The close (book the call)</div>
+  <div class="page">
+    <div class="cta-page">
+      <div class="cta-kick">Where this goes</div>
+      <div class="cta-h">You're one shift away from being paid like the expert you already are</div>
+
+      <div class="trans">
+        <div class="col from">
+          <div class="lab">Where you are now</div>
+          <p>You post daily, go live, run the challenges, book the calls. And still, the warmest people, the ones who tell you how much you've helped them, go hire someone else. You've been quietly moved into the free-advice seat, closing one or two discounted clients a month while your audience pays a stranger for the work.</p>
+        </div>
+        <div class="arrow"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+        <div class="col to">
+          <div class="lab">Where this goes</div>
+          <p>Your existing audience pays you like the specialist you already are. Your calls shift from convincing to diagnosing. One narrow offer, a repeatable process, a paid waitlist instead of chasing, and no more producing content just to prove you're worth it.</p>
+        </div>
+      </div>
+
+      <div class="bridge">Closing that gap comes down to two things you can fix faster than you think: how you're positioned, and how your sales conversation goes. That is the work we'd do together on one call.</div>
+      <div class="proofline"><b>Real result:</b> my client Tess went from 2 to 7 paying clients in 9 weeks, after one diagnosis-first call.</div>
+
+      <div class="ctabox2">
+        <div class="left">
+          <div class="cl">Your next step</div>
+          <div class="h2">Book your diagnosis call</div>
+          <a class="btn2">Book your call →</a>
+          <div class="meta">Free · about 30 minutes · brightpathcoaching.com/call</div>
+        </div>
+        <div class="qrwrap"><img src="[QR generated server-side from the coach's booking link]" alt="Scan to book"><span>Scan to book</span></div>
+      </div>
+
+      <div class="pnote">"If that first picture sounded like your last six months, the second one is closer than it feels. Let's map it on a call." — Danielle</div>
+
+      <div class="cta-foot"><span>A workbook by <b>Bright Path Coaching</b></span><span>brightpathcoaching.com</span></div>
+    </div>
+  </div>
+
+</div>
+</body></html>
