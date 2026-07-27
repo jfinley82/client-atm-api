@@ -81,6 +81,27 @@ export async function logApiCost(
   }
 }
 
+// Log a non-token, non-metered event to the same api_cost_log sink for volume
+// telemetry (e.g. a transactional email send). Cost is $0 by definition, so there
+// is NO pricing lookup — unlike logApiCost, this never emits the "no pricing
+// entry" warning for a sender that isn't an LLM. Same best-effort, never-throws
+// contract; the admin dashboard aggregates cost_usd by tool_type either way.
+export async function logEvent(userId: string, toolType: string, source = 'n/a'): Promise<void> {
+  try {
+    const { error } = await supabase.from('api_cost_log').insert({
+      user_id: userId,
+      tool_type: toolType,
+      model: source,
+      input_tokens: 0,
+      output_tokens: 0,
+      cost_usd: 0,
+    })
+    if (error) console.error('[apiCostLog] insert failed', error)
+  } catch (err) {
+    console.error('[apiCostLog] logEvent threw', err)
+  }
+}
+
 // Groq Whisper transcription is billed per hour of audio, not per token, so
 // it needs its own pricing table and resolver rather than reusing PRICING/
 // computeCostUsd above — same api_cost_log sink, different unit.
