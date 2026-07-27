@@ -224,14 +224,13 @@ function wraps(text: string, fontPx: number, width = CONTENT_W, ratio = 0.53): n
   return Math.max(1, Math.ceil(((text || '').length * fontPx * ratio) / width))
 }
 // How much room a heading must reserve for the block it is bound to, so the
-// heading is never left alone at the bottom of a page. For a split that fits a
-// whole page we reserve the ENTIRE thing (short lists move down intact rather than
-// breaking after one row); a split too big for a page reserves just its first
-// chunk (heading + first rows travel together, the rest flows on).
+// heading is never stranded at the bottom of a page. For a split (list/table) we
+// reserve only its start — the heading plus its first couple of rows — NOT the
+// whole thing, so lists flow row-by-row and fill the page instead of jumping down
+// intact and leaving it half empty.
 const reserveFor = (b: Block): number => {
   if (!b.split) return b.h
-  const total = b.chunkOverhead + b.rows.reduce((a, r) => a + r.h, 0)
-  return total <= PAGE_BUDGET ? total : b.chunkOverhead + (b.rows[0]?.h ?? 0)
+  return b.chunkOverhead + (b.rows[0]?.h ?? 0) + (b.rows[1]?.h ?? 0)
 }
 
 // ── framework redesign renderers (each returns a Block) ───────────────────────
@@ -270,15 +269,20 @@ export function avatarBand(initial: string, name: string, idLine: string, emotio
   return { html, h }
 }
 
-// The four fixed insight cards (real problem / core gap / what they want / connect).
-export function cardGrid(items: { label: string; text: string }[]): Block {
+// The four fixed insight cards (real problem / core gap / what they want /
+// connect). Splittable between its rows (top pair / bottom pair) so the cards pack
+// right after the avatar band instead of the whole grid jumping to a new page.
+export function cardGrid(items: { label: string; text: string }[]): Split {
   const cardW = (CONTENT_W - 14) / 2 - 36
   const cardH = (it: { text: string }) => 32 + 19 + wraps(it.text, 12.5, cardW) * 19
-  let h = 6 + 4
-  for (let i = 0; i < items.length; i += 2) h += Math.max(cardH(items[i]), items[i + 1] ? cardH(items[i + 1]) : 0) + (i > 0 ? 14 : 0)
   const cell = (it: { label: string; text: string }, i: number) =>
     `<div class="card"><div class="h">${CARD_ICONS[i % CARD_ICONS.length]}${esc(it.label)}</div><p>${esc(it.text)}</p></div>`
-  return { html: `<div class="grid2">${items.map(cell).join('')}</div>`, h }
+  const rows: Row[] = []
+  for (let i = 0; i < items.length; i += 2) {
+    const pair = items.slice(i, i + 2)
+    rows.push({ html: `<div class="grid2">${pair.map((it, j) => cell(it, i + j)).join('')}</div>`, h: Math.max(...pair.map(cardH)) + 14 })
+  }
+  return { split: true, rows, wrapOpen: '', wrapClose: '', chunkOverhead: 6 }
 }
 
 // Numbered (or ✓) rows — splittable row-by-row.
@@ -479,30 +483,33 @@ export function paginate(blocks: Block[], docTitle: string, startPage: number): 
       continue
     }
 
-    // Split block.
+    // Split block (list/table) — flow row-by-row, filling the page and continuing
+    // onto the next; the wrapper (and, for a table, its header) is re-emitted per
+    // chunk. Fills rather than jumping the whole block down and half-emptying the
+    // page.
     const total = b.chunkOverhead + b.rows.reduce((a, r) => a + r.h, 0)
     if (used + total <= PAGE_BUDGET) {
       cur.push(b.wrapOpen + b.rows.map((r) => r.html).join('') + b.wrapClose)
       used += total
-    } else if (!pinned && total <= PAGE_BUDGET) {
-      flush()
-      cur.push(b.wrapOpen + b.rows.map((r) => r.html).join('') + b.wrapClose)
-      used += total
     } else {
-      // Split across pages. The first chunk stays on the current page when pinned
-      // (so the heading above it is never orphaned), otherwise it may start fresh.
       let idx = 0
       let firstChunk = true
       while (idx < b.rows.length) {
-        if (!(pinned && firstChunk) && cur.length > 0 && used + b.chunkOverhead + b.rows[idx].h > PAGE_BUDGET) flush()
-        const chunk: string[] = []
-        let chunkH = b.chunkOverhead
-        while (idx < b.rows.length && used + chunkH + b.rows[idx].h <= PAGE_BUDGET) {
-          chunk.push(b.rows[idx].html); chunkH += b.rows[idx].h; idx++
-        }
-        if (chunk.length === 0) { chunk.push(b.rows[idx].html); chunkH += b.rows[idx].h; idx++ }
-        cur.push(b.wrapOpen + chunk.join('') + b.wrapClose)
-        used += chunkH
+        // How many rows fit in what's left of this page.
+        let fit = 0
+        let probe = b.chunkOverhead
+        while (idx + fit < b.rows.length && used + probe + b.rows[idx + fit].h <= PAGE_BUDGET) { probe += b.rows[idx + fit].h; fit++ }
+        const remain = b.rows.length - idx
+        // Don't open a chunk that can't hold ~2 rows (avoids a stranded lone row):
+        // start it on a fresh page. The pinned first chunk stays with its heading.
+        if (!(pinned && firstChunk) && cur.length > 0 && fit < Math.min(2, remain)) { flush(); continue }
+        let take = Math.max(fit, 1)
+        // Widow control: never leave exactly one row for the next page.
+        if (remain - take === 1 && take >= 2) take--
+        const chunk = b.rows.slice(idx, idx + take)
+        cur.push(b.wrapOpen + chunk.map((r) => r.html).join('') + b.wrapClose)
+        used += b.chunkOverhead + chunk.reduce((a, r) => a + r.h, 0)
+        idx += take
         firstChunk = false
         if (idx < b.rows.length) flush()
       }
