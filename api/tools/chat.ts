@@ -4,6 +4,7 @@ import { requireActiveUser } from '../../lib/auth'
 import { requireCapability } from '../../lib/entitlements'
 import { setCors } from '../../lib/cors'
 import { getSavedOutput, saveOutput } from '../../lib/savedOutputs'
+import { sanitizePhrasingDeep } from '../../lib/phrasing'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from '../../lib/promptGuidelines'
 import { logApiCost } from '../../lib/apiCostLog'
 
@@ -810,7 +811,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         base = priorProfile
         sessionCompleted = priorCompleted === true
       }
-      await saveOutput(userId, saveToolType, { ...base, completed: sessionCompleted, session_history: sessionHistoryToSave })
+      // Enforce the no-clause-em-dash style rule in code (the model sometimes
+      // ignores STYLE_GUIDELINES). Sanitize the audience content object only —
+      // the transcript is left verbatim. Phrasing-only, never changes meaning.
+      const contentToSave = saveToolType === 'audience' ? sanitizePhrasingDeep(base) : base
+      await saveOutput(userId, saveToolType, { ...contentToSave, completed: sessionCompleted, session_history: sessionHistoryToSave })
     } catch (saveError) {
       console.error('[tools/chat] save', saveError)
     }

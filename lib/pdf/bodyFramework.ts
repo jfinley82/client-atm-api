@@ -1,4 +1,5 @@
 import { esc, strArray } from './html'
+import { sanitizePhrasingDeep } from '../phrasing'
 import {
   StepSection,
   Block,
@@ -69,7 +70,11 @@ function splitPrice(p: string): { price: string; unit?: string } {
   return m ? { price: m[1].trim(), unit: m[2].replace(/\s+/g, '') } : { price: p }
 }
 
-export function buildFrameworkDoc(results: Any): { docTitle: string; sections: StepSection[] } {
+export function buildFrameworkDoc(rawResults: Any): { docTitle: string; sections: StepSection[] } {
+  // Defensive phrasing cleanup: existing accounts already have em-dash clause
+  // splits in stored content and won't re-generate, so strip them here — the PDF
+  // reads clean for everyone with no data backfill. Phrasing-only.
+  const results = sanitizePhrasingDeep(rawResults)
   const fw = obj(obj(results.framework).framework)
   const docTitle = pick(fw, 'frameworkName', 'framework_name') || 'Your framework'
   const sections: StepSection[] = []
