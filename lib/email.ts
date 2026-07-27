@@ -240,7 +240,7 @@ export function brandedEmailHtml(
 // token, threaded in by the caller). escapeHtml leaves the bracket tokens intact
 // so they survive to be replaced. A missing/invalid URL degrades to plain words
 // rather than leaking the literal placeholder.
-export function linkifyEmailBody(raw: string, bookUrl: string, trainingUrl?: string): string {
+export function linkifyEmailBody(raw: string, bookUrl: string, trainingUrl?: string, registerUrl?: string): string {
   const bookAnchor = isValidHttpUrl(bookUrl)
     ? `<a href="${escapeHtml(bookUrl)}" target="_blank" style="color:#0B1120;font-weight:bold;">book a call</a>`
     : 'book a call'
@@ -248,6 +248,12 @@ export function linkifyEmailBody(raw: string, bookUrl: string, trainingUrl?: str
     trainingUrl && isValidHttpUrl(trainingUrl)
       ? `<a href="${escapeHtml(trainingUrl)}" target="_blank" style="color:#0B1120;font-weight:bold;">watch the training</a>`
       : 'the training'
+  // [REGISTER_LINK] → the opt-in page (warm-market invite emails). Optional: a
+  // missing/invalid URL degrades to the plain word rather than leaking the token.
+  const registerAnchor =
+    registerUrl && isValidHttpUrl(registerUrl)
+      ? `<a href="${escapeHtml(registerUrl)}" target="_blank" style="color:#0B1120;font-weight:bold;">register</a>`
+      : 'register'
   return String(raw || '')
     .split(/\n\s*\n/)
     .filter((p) => p.trim())
@@ -260,9 +266,33 @@ export function linkifyEmailBody(raw: string, bookUrl: string, trainingUrl?: str
         .join(bookAnchor)
         .split('[TRAINING_LINK]')
         .join(trainingAnchor)
+        .split('[REGISTER_LINK]')
+        .join(registerAnchor)
       return `<p style="margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;">${h}</p>`
     })
     .join('')
+}
+
+// Fire a single one-off email through the verified MTM sending domain (the
+// coach's "send a test" action). Thin wrapper over resend.emails.send: no tags,
+// no funnel recording — it is not a lead send. Returns the Resend message id (or
+// null); throws on a Resend error so the caller can surface a clean failure.
+export async function sendOneOffEmail(opts: {
+  from: string
+  to: string
+  replyTo?: string | null
+  subject: string
+  html: string
+}): Promise<string | null> {
+  const { data, error } = await resend.emails.send({
+    from: opts.from,
+    to: opts.to,
+    ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
+    subject: opts.subject,
+    html: opts.html,
+  })
+  if (error) throw new Error(error.message || 'Resend send failed')
+  return data?.id ?? null
 }
 
 // The one Resend entry point for scheduled/immediate funnel nurture sends.
