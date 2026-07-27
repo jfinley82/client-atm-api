@@ -3,7 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { rateLimit } from '../../lib/rateLimit'
-import { loadCoachBrand, linkifyEmailBody, brandedEmailHtml, sendOneOffEmail } from '../../lib/email'
+import { loadCoachBrand, composeEmailBody, brandedEmailHtml, sendOneOffEmail } from '../../lib/email'
 import { logEvent } from '../../lib/apiCostLog'
 
 // POST /api/email/test — send ONE coach-branded email to a coach-chosen inbox so
@@ -66,7 +66,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let base = `https://${FUNNEL_DOMAIN}`
     const funnelRes = await supabase
       .from('funnels')
-      .select('subdomain')
+      .select('subdomain, generation_id')
       .eq('user_id', userId)
       .not('subdomain', 'is', null)
       .limit(1)
@@ -76,19 +76,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const trainingUrl = `${base}/?page=training`
     const registerUrl = `${base}/`
 
+    // Resolve the real [GUIDE_LINK] destination from the coach's funnel generation
+    // so a confirmation-email preview links the guide exactly as a real send would.
+    // Absent/unpublished ⇒ undefined and [GUIDE_LINK] degrades to a plain word.
+    let guideUrl: string | undefined
+    const generationId = funnelRes.data?.[0]?.generation_id
+    if (typeof generationId === 'string' && generationId) {
+      const genRes = await supabase.from('mtm_generations').select('guide_url').eq('id', generationId).maybeSingle()
+      const g = (genRes.data as { guide_url?: unknown } | null)?.guide_url
+      if (typeof g === 'string' && g.trim()) guideUrl = g.trim()
+    }
+
     const firstName = name ? name.split(/\s+/)[0] : 'there'
     const mergedSubject = mergeName(subject, firstName)
     const mergedBody = mergeName(emailBody, firstName)
 
-    // Match the real send's CTA button: book emails point at the book page,
-    // training emails at the training, register emails at the opt-in page.
-    let cta: { label: string; url: string } | undefined
-    if (/\[BOOK_A_CALL_LINK\]|\[OFFER_LINK\]/.test(emailBody)) cta = { label: 'Book your call', url: bookUrl }
-    else if (/\[TRAINING_LINK\]/.test(emailBody)) cta = { label: 'Watch the training', url: trainingUrl }
-    else if (/\[REGISTER_LINK\]/.test(emailBody)) cta = { label: 'Register', url: registerUrl }
-
-    const bodyHtml = linkifyEmailBody(mergedBody, bookUrl, trainingUrl, registerUrl)
-    const html = brandedEmailHtml(brand, { heading: mergedSubject, bodyHtml, cta })
+    // Same shared compose path as a real send: the primary CTA (first
+    // button-eligible token in reading order) becomes the single button; every
+    // other token — incl. [GUIDE_LINK] — renders as an inline link, none dropped.
+    const { bodyHtml, cta } = composeEmailBody(mergedBody, {
+      book: bookUrl,
+      training: trainingUrl,
+      register: registerUrl,
+      guide: guideUrl,
+    })
+    const html = brandedEmailHtml(brand, { heading: mergedSubject, bodyHtml, ...(cta ? { cta } : {}) })
 
     const messageId = await sendOneOffEmail({
       from: `${brand.fromName} <${FROM_ADDRESS}>`,

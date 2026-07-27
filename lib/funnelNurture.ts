@@ -3,7 +3,7 @@ import {
   CoachBrand,
   loadCoachBrand,
   brandedEmailHtml,
-  linkifyEmailBody,
+  composeEmailBody,
   scheduleFunnelEmail,
   cancelFunnelSends,
 } from './email'
@@ -64,6 +64,21 @@ function trainingUrl(subdomain: string, wt: string): string {
 function bookUrl(subdomain: string): string {
   return `${publicBase(subdomain)}/?page=book`
 }
+
+// The guide/download URL for [GUIDE_LINK] — the published PDF on the funnel's
+// generation. Missing/unpublished ⇒ undefined, and [GUIDE_LINK] degrades to a
+// plain word rather than leaking the literal token. Best-effort; never throws.
+async function loadGuideUrl(funnel: Funnel): Promise<string | undefined> {
+  const genId = funnel.generation_id
+  if (typeof genId !== 'string' || !genId) return undefined
+  try {
+    const { data } = await supabase.from('mtm_generations').select('guide_url').eq('id', genId).maybeSingle()
+    const url = (data as { guide_url?: unknown } | null)?.guide_url
+    return typeof url === 'string' && url.trim() ? url.trim() : undefined
+  } catch {
+    return undefined
+  }
+}
 function unsubscribeUrl(funnelId: string, leadId: string): string {
   return `${API_URL}/api/funnel/unsubscribe?token=${encodeURIComponent(signUnsubscribeToken(funnelId, leadId))}`
 }
@@ -98,6 +113,7 @@ async function scheduleSet(opts: {
   offsets: number[]
   subdomain: string
   bookUrlForTokens: string
+  guideUrl?: string
   defaultSubjects: string[]
   nowMs: number
 }): Promise<void> {
@@ -114,13 +130,16 @@ async function scheduleSet(opts: {
     // time — used for the nurture CTA and to substitute [TRAINING_LINK] in the
     // body (so a body-embedded training link still attributes + fires the pivot).
     const training = trainingUrl(opts.subdomain, signWatchToken(opts.funnel.id as string, opts.leadId, sendTimeMs))
-    const cta =
-      opts.kindPrefix === 'nurture'
-        ? { label: 'Watch the training', url: training }
-        : { label: 'Book your call', url: opts.bookUrlForTokens }
 
-    const bodyHtml = linkifyEmailBody(em.body, opts.bookUrlForTokens, training)
-    const html = brandedEmailHtml(opts.brand, { heading: subject, bodyHtml, cta, unsubscribeUrl: unsub })
+    // The button is derived from the body's tokens (primary CTA = first
+    // button-eligible token in reading order), NOT forced by the sequence:
+    // every other token — including [GUIDE_LINK] — renders as an inline link.
+    const { bodyHtml, cta } = composeEmailBody(em.body, {
+      book: opts.bookUrlForTokens,
+      training,
+      guide: opts.guideUrl,
+    })
+    const html = brandedEmailHtml(opts.brand, { heading: subject, bodyHtml, ...(cta ? { cta } : {}), unsubscribeUrl: unsub })
     const scheduledAt = opts.offsets[i] > 0 ? new Date(sendTimeMs).toISOString() : undefined
 
     tasks.push(
@@ -148,7 +167,7 @@ export async function scheduleNurtureSequence(funnel: Funnel, leadId: string, em
     if (await isUnsubscribed(leadId)) return
     const emails = coerceEmails(funnel.nurture_emails)
     if (!emails.length) return
-    const brand = await loadCoachBrand(funnel.user_id as string)
+    const [brand, guideUrl] = await Promise.all([loadCoachBrand(funnel.user_id as string), loadGuideUrl(funnel)])
     await scheduleSet({
       funnel,
       brand,
@@ -159,6 +178,7 @@ export async function scheduleNurtureSequence(funnel: Funnel, leadId: string, em
       offsets: NURTURE_OFFSETS,
       subdomain,
       bookUrlForTokens: bookUrl(subdomain),
+      guideUrl,
       defaultSubjects: NURTURE_SUBJECTS,
       nowMs,
     })
@@ -190,7 +210,7 @@ export async function pivotToBookACall(funnel: Funnel, leadId: string, email: st
     if (await isUnsubscribed(leadId)) return
     const emails = coerceEmails(funnel.book_a_call_emails)
     if (!emails.length) return
-    const brand = await loadCoachBrand(funnel.user_id as string)
+    const [brand, guideUrl] = await Promise.all([loadCoachBrand(funnel.user_id as string), loadGuideUrl(funnel)])
     await scheduleSet({
       funnel,
       brand,
@@ -201,6 +221,7 @@ export async function pivotToBookACall(funnel: Funnel, leadId: string, email: st
       offsets: BOOK_A_CALL_OFFSETS,
       subdomain,
       bookUrlForTokens: bookUrl(subdomain),
+      guideUrl,
       defaultSubjects: BOOK_SUBJECTS,
       nowMs,
     })
