@@ -245,32 +245,33 @@ export function brandedEmailHtml(
 }
 
 // Turn an MtEmail plain-text body into safe paragraph HTML, linking the tokens
-// the generator embeds: [BOOK_A_CALL_LINK] / [OFFER_LINK] → the book page, and
+// the generator embeds: [BOOK_A_CALL_LINK] / [OFFER_LINK] → the book page,
 // [TRAINING_LINK] → the training page (per-send URL carrying the fresh watch
-// token, threaded in by the caller). escapeHtml leaves the bracket tokens intact
+// token, threaded in by the caller), [REGISTER_LINK] → the opt-in page, and
+// [GUIDE_LINK] → the guide download. escapeHtml leaves the bracket tokens intact
 // so they survive to be replaced. A missing/invalid URL degrades to plain words
 // rather than leaking the literal placeholder.
-// A line that is nothing but a single link token (optionally padded) — rendered
-// only as the CTA button, never also as an inline text link.
-const TOKEN_ONLY_LINE = /^\s*\[(?:BOOK_A_CALL|OFFER|TRAINING|REGISTER)_LINK\]\s*$/
-
-export function linkifyEmailBody(raw: string, bookUrl: string, trainingUrl?: string, registerUrl?: string): string {
-  const bookAnchor = isValidHttpUrl(bookUrl)
-    ? `<a href="${escapeHtml(bookUrl)}" target="_blank" style="color:#0B1120;font-weight:bold;">book a call</a>`
-    : 'book a call'
-  const trainingAnchor =
-    trainingUrl && isValidHttpUrl(trainingUrl)
-      ? `<a href="${escapeHtml(trainingUrl)}" target="_blank" style="color:#0B1120;font-weight:bold;">watch the training</a>`
-      : 'the training'
-  // [REGISTER_LINK] → the opt-in page (warm-market invite emails). Optional: a
-  // missing/invalid URL degrades to the plain word rather than leaking the token.
-  const registerAnchor =
-    registerUrl && isValidHttpUrl(registerUrl)
-      ? `<a href="${escapeHtml(registerUrl)}" target="_blank" style="color:#0B1120;font-weight:bold;">register</a>`
-      : 'register'
-  // A token INLINE in a sentence renders as a normal inline link; a token ALONE on
-  // its own line/paragraph is dropped here — it is represented by the CTA button
-  // that the layout appends, so it must not also render as a duplicate text link.
+//
+// EVERY token renders as a standard inline hyperlink here — including a token
+// sitting alone on its own line. This function never decides what becomes the
+// button and never drops a token; that is composeEmailBody's job (it removes the
+// single primary-CTA occurrence before calling this, so the button and the inline
+// text never duplicate the same link).
+export function linkifyEmailBody(
+  raw: string,
+  bookUrl: string,
+  trainingUrl?: string,
+  registerUrl?: string,
+  guideUrl?: string
+): string {
+  const anchor = (url: string | undefined, label: string, fallback: string): string =>
+    url && isValidHttpUrl(url)
+      ? `<a href="${escapeHtml(url)}" target="_blank" style="color:#0B1120;font-weight:bold;">${label}</a>`
+      : fallback
+  const bookAnchor = anchor(bookUrl, 'book a call', 'book a call')
+  const trainingAnchor = anchor(trainingUrl, 'watch the training', 'the training')
+  const registerAnchor = anchor(registerUrl, 'register', 'register')
+  const guideAnchor = anchor(guideUrl, 'download the guide', 'the guide')
   const inline = (line: string): string =>
     escapeHtml(line)
       .split('[BOOK_A_CALL_LINK]')
@@ -281,19 +282,64 @@ export function linkifyEmailBody(raw: string, bookUrl: string, trainingUrl?: str
       .join(trainingAnchor)
       .split('[REGISTER_LINK]')
       .join(registerAnchor)
+      .split('[GUIDE_LINK]')
+      .join(guideAnchor)
   return String(raw || '')
     .split(/\n\s*\n/)
     .filter((p) => p.trim())
     .map((p) => {
-      const h = p
-        .split(/\r?\n/)
-        .filter((line) => !TOKEN_ONLY_LINE.test(line))
-        .map(inline)
-        .join('<br>')
+      const h = p.split(/\r?\n/).map(inline).join('<br>')
       return h.trim() ? `<p style="margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;">${h}</p>` : ''
     })
     .filter(Boolean)
     .join('')
+}
+
+// The tokens that MAY become the single CTA button, each with its button label
+// and the links-key it resolves against. Order here is only the label/key map —
+// primary selection is by READING ORDER in the body, not this list's order.
+// [GUIDE_LINK] is deliberately absent: the guide/download link is NEVER a button.
+const BUTTON_ELIGIBLE: { token: string; label: string; key: 'book' | 'training' | 'register' }[] = [
+  { token: '[BOOK_A_CALL_LINK]', label: 'Book your call', key: 'book' },
+  { token: '[OFFER_LINK]', label: 'Book your call', key: 'book' },
+  { token: '[TRAINING_LINK]', label: 'Watch the training', key: 'training' },
+  { token: '[REGISTER_LINK]', label: 'Register', key: 'register' },
+]
+
+export type EmailLinks = { book?: string; training?: string; register?: string; guide?: string }
+
+// The shared compose path for a token-bearing email body. Rules (per Jamaul):
+//  1. At most ONE button, only for the primary CTA. No button-eligible token with
+//     a valid URL ⇒ no button.
+//  2. The PRIMARY CTA is the FIRST button-eligible token in reading order (not by
+//     layout, not by a fixed token priority). It becomes the single button; its
+//     first occurrence is removed from the body so it isn't ALSO an inline link.
+//  3. Every OTHER token — additional CTA tokens, later occurrences of the primary,
+//     and [GUIDE_LINK] — renders as a standard inline hyperlink. Nothing is ever
+//     silently dropped.
+// Returns the paragraph HTML and the cta (or null). brandedEmailHtml appends the
+// button + its P.S. fallback only when cta is present.
+export function composeEmailBody(raw: string, links: EmailLinks): { bodyHtml: string; cta: { label: string; url: string } | null } {
+  const body = String(raw || '')
+  let cta: { label: string; url: string } | null = null
+  let primaryIdx = -1
+  let primaryLen = 0
+  for (const spec of BUTTON_ELIGIBLE) {
+    const url = links[spec.key]
+    if (!url || !isValidHttpUrl(url)) continue
+    const idx = body.indexOf(spec.token)
+    if (idx === -1) continue
+    if (primaryIdx === -1 || idx < primaryIdx) {
+      primaryIdx = idx
+      primaryLen = spec.token.length
+      cta = { label: spec.label, url }
+    }
+  }
+  // Remove ONLY the primary occurrence so it renders as the button, not also
+  // inline. A now-empty standalone-token line collapses away in linkifyEmailBody.
+  const remainder = primaryIdx === -1 ? body : body.slice(0, primaryIdx) + body.slice(primaryIdx + primaryLen)
+  const bodyHtml = linkifyEmailBody(remainder, links.book || '', links.training, links.register, links.guide)
+  return { bodyHtml, cta }
 }
 
 // Fire a single one-off email through the verified MTM sending domain (the
