@@ -78,6 +78,12 @@ export type MtWorkbookSection = { sectionTitle: string; keyInsight: string; exer
 // Both CTA variants are generated so the frontend can show whichever the coach's
 // cta_type selects; book_call ends with [BOOK_A_CALL_LINK], sell_program with [OFFER_LINK].
 export type MtClosingInvite = { book_call: string; sell_program: string }
+// The recap beat on the lead-facing Guide (after the exercises, before the CTA):
+// a PERSONAL LETTER from the coach. It leads with where the reader started when
+// they opened the guide, names what they just did, reminds them this is only the
+// first part, and gets personal about how it was vs. what it could be if they
+// stick with it — building authority and teeing up the close.
+export type MtRecap = { started: string; did: string; first_part: string; stick: string }
 // The lead-facing Guide (given at opt-in — stands alone, does NOT assume the lead
 // watched the video). problem_intro/understanding/closing_invite are the new
 // self-contained fields; title/intro/sections/keyTakeaways are kept for back-compat.
@@ -88,6 +94,7 @@ export type MtWorkbook = {
   understanding: string
   sections: MtWorkbookSection[]
   keyTakeaways: string[]
+  recap: MtRecap
   closing_invite: MtClosingInvite
 }
 // original is the as-generated snapshot the editor stamps on load, so a coach
@@ -368,6 +375,12 @@ ${SALES_FRAMEWORK_CANONICAL}
       { "sectionTitle": "section title (mapped to a framework phase)", "keyInsight": "the one key insight of this section", "exercises": [ { "prompt": "an apply-it prompt the lead works through on their own", "lines": 4, "recommended": true, "collects": "one line: what information this question surfaces from the reader", "why_fits": "one line: how it fits this phase and what it sets up next" } ], "reflection": "a reflection question to close the section" }
     ],
     "keyTakeaways": ["a concrete takeaway", "another"],
+    "recap": {
+      "started": "a short paragraph, second person, warm — remind the reader where they were when they OPENED this guide: the specific frustration they walked in with. Coach voice, like a personal letter.",
+      "did": "a short paragraph: what they just did in these exercises — the honest self-audit — affirming and specific to THIS problem, not generic praise.",
+      "first_part": "a short paragraph: gently remind them this guide is only the FIRST part — it names the pattern and starts the shift, it does not finish it.",
+      "stick": "a short paragraph, personal and encouraging: contrast how it has felt with what it could be like if they stick with it — your genuine belief they can get there. Hands off into the invitation."
+    },
     "closing_invite": {
       "book_call": "the coach speaking to the lead in FIRST person ('On it, I'll look at…', 'I built this for…') — an honest, bounded invitation to book a call, addressing the lead as 'you': what the next step is, who it's for, one honest disqualifier. Not a pitch. Short paragraphs separated by blank lines. Ends with [BOOK_A_CALL_LINK].",
       "sell_program": "the same first-person, honest, bounded invitation but to get the program directly. Short paragraphs separated by blank lines. Ends with [OFFER_LINK]."
@@ -384,6 +397,7 @@ Rules:
 - each exercise carries "collects" (one line: what information this question surfaces from the reader) and "why_fits" (one line: how it fits this phase and what it sets up next).
 - keyInsight, prompts, and reflection are specific to this blueprint's problem and this audience — no generic worksheet filler.
 - keyTakeaways: 3-5 concrete takeaways.
+- recap: a PERSONAL LETTER from the coach that comes AFTER the exercises and BEFORE the invitation. Second person, coach voice, warm, no hype. Four short-paragraph beats, in order: "started" leads with where the reader was when they OPENED the guide (the frustration they walked in with); "did" names what they just did; "first_part" reminds them this is only the first part; "stick" gets personal — how it has felt vs. what it could be like if they stick with it, in your genuine voice. It must SET UP the close, not repeat problem_intro. It is signed by the coach at render, so do NOT sign it or name the coach inside the text.
 - closing_invite: generate BOTH variants. Each is an honest, bounded invitation grounded in the sales methodology (collect a yes, don't chase a no) — state what the next step is, who it's for, and one honest disqualifier. Not a pitch, no false scarcity, no hype.
 - closing_invite is the COACH speaking directly to the lead: write both variants in FIRST person ("On it, I'll look at…", "I built this for…"), addressing the lead as "you". Never refer to the coach in third person or by name in the closing invite.
 - Per the BOTH CTA LINKS block in the grounding, the book_call copy ends with [BOOK_A_CALL_LINK] and the sell_program copy ends with [OFFER_LINK]. Do not cross the tokens.
@@ -688,6 +702,7 @@ export function coerceWorkbook(v: unknown): MtWorkbook {
     })
     .filter((s) => s.sectionTitle.trim().length > 0)
   const ci = (o.closing_invite && typeof o.closing_invite === 'object' ? o.closing_invite : {}) as Record<string, unknown>
+  const rc = (o.recap && typeof o.recap === 'object' ? o.recap : {}) as Record<string, unknown>
   return {
     title: asString(o.title),
     intro: asString(o.intro),
@@ -695,6 +710,7 @@ export function coerceWorkbook(v: unknown): MtWorkbook {
     understanding: asString(o.understanding),
     sections,
     keyTakeaways: asStringArray(o.keyTakeaways),
+    recap: { started: asString(rc.started), did: asString(rc.did), first_part: asString(rc.first_part), stick: asString(rc.stick) },
     closing_invite: { book_call: asString(ci.book_call), sell_program: asString(ci.sell_program) },
   }
 }
@@ -1127,7 +1143,7 @@ The training title is fixed to: ${JSON.stringify(pinnedTitle)}. Return chosen_to
     total_duration: merged.total_duration ?? '15-20 minutes',
     outline: merged.outline ?? [],
     slides: merged.slides ?? [],
-    workbook: merged.workbook ?? { title: '', intro: '', problem_intro: '', understanding: '', sections: [], keyTakeaways: [], closing_invite: { book_call: '', sell_program: '' } },
+    workbook: merged.workbook ?? { title: '', intro: '', problem_intro: '', understanding: '', sections: [], keyTakeaways: [], recap: { started: '', did: '', first_part: '', stick: '' }, closing_invite: { book_call: '', sell_program: '' } },
     warm_invite_emails: merged.warm_invite_emails ?? [],
     emails: merged.emails ?? [],
     book_a_call_emails: merged.book_a_call_emails ?? [],

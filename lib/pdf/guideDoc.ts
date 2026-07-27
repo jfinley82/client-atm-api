@@ -87,6 +87,15 @@ export function toSecondPerson(text: string): string {
   return out.replace(/\byour the\b/gi, (m) => recap('your', m))
 }
 
+// Lowercase the first letter so a converted state can sit mid-sentence (after a
+// lead-in like "the reality: "). Leaves an all-caps acronym start alone.
+function lowerFirst(s: string): string {
+  const t = String(s || '').trim()
+  if (!t) return t
+  if (t.length > 1 && t[1] === t[1].toUpperCase() && /[A-Z]/.test(t[1])) return t // e.g. "AI ..."
+  return t[0].toLowerCase() + t.slice(1)
+}
+
 // ── layout scale (mockup 660px page → 816px Letter page) ────────────────────
 const S = 816 / 660
 const px = (n: number): string => (n * S).toFixed(1) + 'px'
@@ -122,11 +131,14 @@ body{ font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; co
 
 p.body{ font-size:${px(13.5)}; line-height:1.72; color:#374151; margin-bottom:${px(13)}; }
 p.body.lg{ font-size:${px(14.5)}; }
+p.sig{ font-size:${px(14)}; font-weight:700; color:var(--accent-ink); margin-top:${px(10)}; }
 
 .callout{ background:var(--accent-soft); border:1px solid var(--accent-border); border-left:${px(4)} solid var(--accent); border-radius:${px(10)}; padding:${px(16)} ${px(18)}; margin:${px(18)} 0; }
 .callout h4{ font-size:${px(11)}; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink); margin-bottom:${px(10)}; }
 .callout ul{ margin:0; padding-left:${px(18)}; }
 .callout li{ font-size:${px(13)}; line-height:1.6; color:#334155; margin-bottom:${px(7)}; }
+.callout li b{ color:var(--accent-ink); }
+.callout p{ font-size:${px(13)}; line-height:1.62; color:#334155; margin:0; }
 
 /* cover — no height override: the .page fixed 1056px height must win so the flex
    column fills the sheet and .bot sits at the bottom (a same-element height:100%
@@ -303,7 +315,7 @@ export function buildGuideDocument(opts: {
     const list = (Array.isArray(s.exercises) ? s.exercises.map(obj) : [])
       .filter((e) => str(e.prompt))
       .filter((e) => e.recommended !== false)
-      .slice(0, 2)
+      .slice(0, 3) // up to 3 selected questions per phase
     for (const e of list) {
       exercises.push({ prompt: str(e.prompt), reveal: str(e.collects) || str(e.why_fits), lines: Math.min(4, Math.max(2, Number(e.lines) || 3)) })
     }
@@ -328,7 +340,56 @@ export function buildGuideDocument(opts: {
     exercisePages.push(...ex.pages)
     afterExercisesPage = ex.nextPage
   }
-  void afterExercisesPage
+
+  // ── RECAP ── a PERSONAL LETTER from the coach, after the exercises and before
+  // the close: leads with where they started when they opened the guide, names
+  // what they did, reminds them this is only the first part, and gets personal
+  // about how it was vs. what it could be if they stick with it — then is signed.
+  // Prefers the generated workbook.recap; falls back to composing from the
+  // before/after states for guides generated before the recap field existed.
+  const recapPages: string[] = []
+  {
+    const rc = obj(w.recap)
+    const beforeFwd = toSecondPerson(str(a.beforeState))
+    const afterFwd = toSecondPerson(str(a.afterState))
+    const firstName = brand.presenterName.split(/\s+/)[0] || brand.presenterName
+
+    const started =
+      str(rc.started) ||
+      (beforeFwd
+        ? `When you opened this guide, this was the reality: ${lowerFirst(beforeFwd)}`
+        : 'When you opened this guide, something was not adding up — you were doing the work and still not seeing it come back the way it should.')
+    const did =
+      str(rc.did) ||
+      'In these pages, you stopped guessing. You looked honestly at where the pattern actually shows up — in your own words, your own numbers. That is the part most people skip.'
+    const firstPart =
+      str(rc.first_part) ||
+      'This guide is only the first part. It names the pattern and starts the shift. It does not finish it — and it was never meant to.'
+    const stick =
+      str(rc.stick) ||
+      (afterFwd
+        ? `Here is what I want you to hold onto: ${lowerFirst(afterFwd)} That is not a fantasy — it is the other side of the one shift you just started to see. Stick with it.`
+        : 'It does not have to stay the way it has felt. The shift you just started to see is the one that changes it — if you stick with it.')
+
+    const recapChip = exercises.length ? 3 : 2
+    const recapTitle = 'Before you go'
+    const recapHeader =
+      `<div class="kicker">A note from ${esc(firstName)}</div>` +
+      `<div class="sec"><span class="num">${recapChip}</span><span class="t">${esc(recapTitle)}</span></div>`
+    const recapHeaderH = secH(recapTitle)
+
+    const letter = [
+      { t: started, lg: true },
+      { t: did, lg: false },
+      { t: firstPart, lg: false },
+      { t: stick, lg: false },
+    ]
+    const recapBlocks: Blk[] = letter.map((p) => ({ html: `<p class="body${p.lg ? ' lg' : ''}">${esc(p.t)}</p>`, h: paraH(p.t, p.lg) }))
+    recapBlocks.push({ html: `<p class="sig">— ${esc(brand.presenterName)}</p>`, h: 30 * S })
+
+    const recap = packChapter(brand, 'Before you go', recapHeader, recapHeaderH, recapBlocks, afterExercisesPage)
+    recapPages.push(...recap.pages)
+  }
 
   // ── CLOSE (the priority) ──
   const before = toSecondPerson(str(a.beforeState))
@@ -382,6 +443,7 @@ export function buildGuideDocument(opts: {
 ${cover}
 ${problem.pages.join('\n')}
 ${exercisePages.join('\n')}
+${recapPages.join('\n')}
 ${close}
 </body></html>`
 }
