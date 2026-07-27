@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
+import { storeGuidePdf } from '../../lib/guideStorage'
 
 // POST /api/guide/publish?card_id=... — body is the raw PDF bytes, Content-Type
 // application/pdf. Vercel's default JSON body parser can't handle that, so
@@ -68,27 +68,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'No PDF data received' })
     }
 
-    // One object per (coach, card); a re-publish overwrites the SAME object
-    // rather than orphaning the previous PDF. contentType is passed explicitly
-    // so the object is served as a PDF regardless of path.
-    const path = `${userId}/${cardId}.pdf`
-    const { error: uploadError } = await supabase.storage
-      .from('guides')
-      .upload(path, buffer, { contentType: 'application/pdf', upsert: true })
-    if (uploadError) throw uploadError
-
-    const { data: publicUrlData } = supabase.storage.from('guides').getPublicUrl(path)
-    // Cache-bust: the object path never changes across re-publishes, so without
-    // this a browser/CDN could keep serving the previous PDF after a re-publish.
-    const guide_url = `${publicUrlData.publicUrl}?v=${Date.now()}`
-
-    const { error: updateError } = await supabase
-      .from('mtm_generations')
-      .update({ guide_url, updated_at: new Date().toISOString() })
-      .eq('user_id', userId)
-      .eq('card_id', cardId)
-    if (updateError) throw updateError
-
+    // Store the uploaded PDF + stamp mtm_generations.guide_url (shared with the
+    // server-side render path, POST /api/guide/refresh).
+    const guide_url = await storeGuidePdf(userId, cardId, buffer)
     return res.status(200).json({ ok: true, guide_url })
   } catch (err) {
     console.error('[guide/publish]', err)

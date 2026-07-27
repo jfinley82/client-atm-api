@@ -7,16 +7,16 @@ import { DocType } from '../../lib/pdf/assets'
 import { paginate, buildDocument, assembleSteps } from '../../lib/pdf/shell'
 import { buildFrameworkDoc } from '../../lib/pdf/bodyFramework'
 import { buildScriptBlocks } from '../../lib/pdf/bodyScript'
-import { buildGuideDocument, GuideBrand, NEUTRAL_ACCENT, accentShades } from '../../lib/pdf/guideDoc'
-import { bookingQrDataUri } from '../../lib/pdf/qr'
-import { loadBusinessSettings } from '../../lib/businessSettings'
-import { isValidBrandColor } from '../../lib/funnels'
+import { buildGuideHtml } from '../../lib/pdf/guideRender'
 
 // POST /api/pdf/document — assemble one of the branded document PDFs (framework,
 // guide, script) and return the bytes. Gathers the coach's data, builds the
-// print-ready HTML (cover page + interior shell) with the Node font-fit, then
-// POSTs { html, filename } to the unchanged /api/pdf/render engine and streams
-// the PDF back. Slides are not a PDF and are not handled here.
+// print-ready HTML, then POSTs { html, filename } to the unchanged /api/pdf/render
+// engine and streams the PDF back. Slides are not a PDF and are not handled here.
+//
+// The Guide is a self-contained COACH-branded document (its own cover + shell,
+// zero MTM branding) built by lib/pdf/guideRender; framework + script keep the
+// shared MTM cover + interior shell.
 //
 // results (60s ceiling incl. lazy synopsis regen) + a chromium render can stack,
 // so this function gets 60s. It needs opentype + the cover/font assets bundled
@@ -26,15 +26,11 @@ export const config = { maxDuration: 60 }
 // The API's own public base URL, for the internal results + render calls. Same
 // pattern lib/email.ts / lib/funnelNurture.ts use.
 const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
-// The public funnel domain the coach's booking page serves on — same resolution
-// the nurture emails use. NEVER an MTM domain (the guide carries zero MTM branding).
-const FUNNEL_DOMAIN = process.env.FUNNEL_PUBLIC_DOMAIN || 'freeminiworkshop.com'
 
 const DOC_LABEL: Record<DocType, string> = { framework: 'Framework', guide: 'Guide', script: 'Script' }
 
 type Any = Record<string, unknown>
 const obj = (v: unknown): Any => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Any) : {})
-const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
@@ -55,75 +51,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    // The coach's display name for the "prepared for" slot.
-    const userRow = await supabase.from('users').select('name').eq('id', userId).maybeSingle()
-    const coachName = typeof userRow.data?.name === 'string' ? userRow.data.name.trim() : ''
-
-    // Results carry the framework name (cover title + running header for all docs)
-    // and, for the framework doc, the full Steps 1-3 payload.
-    const resultsRes = await fetch(`${API_URL}/api/micro-blueprints/results`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    if (!resultsRes.ok) throw new Error(`results ${resultsRes.status}`)
-    const results = (await resultsRes.json()) as Any
-    const fw = obj(obj(results.framework).framework)
-    const rawName = fw.frameworkName ?? fw.framework_name
-    const frameworkName = typeof rawName === 'string' ? rawName.trim() : ''
-
-    // Build the interior for the requested doc. The framework doc interleaves
-    // chalkboard step dividers with paginated content (assembleSteps); guide +
-    // script are a single paginated flow. Cover page is always page 1, so the
-    // interior starts numbering at page 2.
-    let docTitle = frameworkName || 'Your framework'
     let html: string
+    let filename: string
 
     if (doc === 'guide') {
-      // The lead-magnet Guide is a self-contained COACH-branded document — its own
-      // cover + shell, themed from the coach's brand tokens, with ZERO MTM branding.
-      // It does NOT use buildCoverPage/buildDocument (those carry the MTM chalkboard).
-      const gen = await supabase
-        .from('mtm_generations')
-        .select('workbook, delivery, chosen_angle')
-        .eq('user_id', userId)
-        .eq('card_id', cardId)
-        .maybeSingle()
-      if (gen.error) throw gen.error
-      if (!gen.data) return res.status(404).json({ error: 'No generation for this card' })
-
-      // Brand tokens — resolved once, non-MTM fallbacks only.
-      const settings = await loadBusinessSettings(userId)
-      const deliveryObj = obj(gen.data.delivery)
-      const presenterName = str(deliveryObj.presenter_name) || coachName || settings.business_name || 'Your coach'
-      const businessName = (settings.business_name && settings.business_name.trim()) || presenterName
-      const accent = isValidBrandColor(settings.brand_primary_color) ? settings.brand_primary_color : NEUTRAL_ACCENT
-
-      // Booking URL from the coach's funnel subdomain (same resolution the emails
-      // use). Fallback: the funnel base — never an MTM link, never a minted token.
-      let bookingUrl = `https://${FUNNEL_DOMAIN}`
-      const funnelRes = await supabase
-        .from('funnels')
-        .select('subdomain')
-        .eq('user_id', userId)
-        .not('subdomain', 'is', null)
-        .limit(1)
-      const subdomain = funnelRes.data?.[0]?.subdomain
-      if (typeof subdomain === 'string' && subdomain.trim()) bookingUrl = `https://${subdomain.trim()}.${FUNNEL_DOMAIN}/?page=book`
-      let bookingDisplay = FUNNEL_DOMAIN
-      try {
-        bookingDisplay = new URL(bookingUrl).host
-      } catch {
-        /* keep the domain */
-      }
-
-      const qrDataUri = await bookingQrDataUri(bookingUrl, accentShades(accent).ink)
-      const brand: GuideBrand = { businessName, presenterName, accent, bookingUrl, bookingDisplay }
-
-      const workbook = obj(gen.data.workbook)
-      const coverTitle = str(workbook.title) || str(gen.data.chosen_angle) || frameworkName
-      const analysis = obj(obj(results.transformation).analysis)
-      docTitle = coverTitle || frameworkName || 'Your guide'
-      html = buildGuideDocument({ brand, workbook: gen.data.workbook, analysis, delivery: gen.data.delivery, frameworkName, coverTitle, qrDataUri })
+      const built = await buildGuideHtml({ userId, token, cardId, apiUrl: API_URL })
+      if (!built) return res.status(404).json({ error: 'No generation for this card' })
+      html = built.html
+      filename = built.filename
     } else {
+      // framework + script share the MTM cover + interior shell. The coach's name
+      // fills the "prepared for" slot; results carry the framework name (cover
+      // title + running header) and the framework doc's full Steps 1-3 payload.
+      const userRow = await supabase.from('users').select('name').eq('id', userId).maybeSingle()
+      const coachName = typeof userRow.data?.name === 'string' ? userRow.data.name.trim() : ''
+
+      const resultsRes = await fetch(`${API_URL}/api/micro-blueprints/results`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!resultsRes.ok) throw new Error(`results ${resultsRes.status}`)
+      const results = (await resultsRes.json()) as Any
+      const fw = obj(obj(results.framework).framework)
+      const rawName = fw.frameworkName ?? fw.framework_name
+      const frameworkName = typeof rawName === 'string' ? rawName.trim() : ''
+
+      let docTitle = frameworkName || 'Your framework'
       let interior: string
       if (doc === 'framework') {
         const built = buildFrameworkDoc(results)
@@ -142,13 +94,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         docTitle = built.docTitle
         interior = paginate(built.blocks, docTitle, 2).html
       }
-      // Framework + script keep the shared cover + interior shell.
       const coverTitle = frameworkName || docTitle
       const cover = buildCoverPage(doc, coverTitle, coachName)
       html = buildDocument(cover, interior)
+      filename = `${(frameworkName || docTitle).slice(0, 80)} - ${DOC_LABEL[doc as DocType]}`
     }
-
-    const filename = `${(frameworkName || docTitle).slice(0, 80)} - ${DOC_LABEL[doc]}`
 
     // Render via the unchanged engine.
     const renderRes = await fetch(`${API_URL}/api/pdf/render`, {
