@@ -4,8 +4,8 @@ import { requireActiveUser, getSessionFromRequest } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { buildCoverPage } from '../../lib/pdf/cover'
 import { DocType } from '../../lib/pdf/assets'
-import { paginate, buildDocument, Block } from '../../lib/pdf/shell'
-import { buildFrameworkBlocks } from '../../lib/pdf/bodyFramework'
+import { paginate, buildDocument, assembleSteps } from '../../lib/pdf/shell'
+import { buildFrameworkDoc } from '../../lib/pdf/bodyFramework'
 import { buildGuideBlocks } from '../../lib/pdf/bodyGuide'
 import { buildScriptBlocks } from '../../lib/pdf/bodyScript'
 
@@ -63,13 +63,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const rawName = fw.frameworkName ?? fw.framework_name
     const frameworkName = typeof rawName === 'string' ? rawName.trim() : ''
 
-    // Build the interior body for the requested doc.
+    // Build the interior for the requested doc. The framework doc interleaves
+    // chalkboard step dividers with paginated content (assembleSteps); guide +
+    // script are a single paginated flow. Cover page is always page 1, so the
+    // interior starts numbering at page 2.
     let docTitle = frameworkName || 'Your framework'
-    let blocks: Block[]
+    let interior: string
     if (doc === 'framework') {
-      const built = buildFrameworkBlocks(results)
+      const built = buildFrameworkDoc(results)
       docTitle = built.docTitle
-      blocks = built.blocks
+      interior = assembleSteps(built.sections, docTitle, 2).html
     } else {
       const gen = await supabase
         .from('mtm_generations')
@@ -83,14 +86,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? buildGuideBlocks(gen.data.workbook, frameworkName)
         : buildScriptBlocks(gen.data.sales_script, frameworkName)
       docTitle = built.docTitle
-      blocks = built.blocks
+      interior = paginate(built.blocks, docTitle, 2).html
     }
 
-    // Assemble the full print-ready HTML: cover page + paginated interior.
+    // Assemble the full print-ready HTML: cover page + interior.
     const coverTitle = frameworkName || docTitle
     console.log('[pdf/document] cover slots', JSON.stringify({ doc, coverTitle, coachName, titleLen: coverTitle.length, nameLen: coachName.length }))
     const cover = buildCoverPage(doc, coverTitle, coachName)
-    const { html: interior } = paginate(blocks, docTitle.toUpperCase(), 2)
     const html = buildDocument(cover, interior)
 
     const filename = `${(frameworkName || docTitle).slice(0, 80)} - ${DOC_LABEL[doc]}`
