@@ -20,6 +20,7 @@ export type GuideBrand = {
   accent: string // validated hex (#rgb or #rrggbb); caller applies the neutral-slate fallback
   bookingUrl: string // full href — never shown as bare text
   bookingDisplay: string // host shown in the CTA meta/footer (no protocol)
+  trainingUrl?: string // funnel training page for the companion callout; '' when no funnel
 }
 
 // ── accent shade derivation ─────────────────────────────────────────────────
@@ -51,49 +52,12 @@ export function accentShades(accentHex: string): { accent: string; soft: string;
   return { accent, soft, ink, border }
 }
 
-// ── third-person → second-person (render-time; the clean long-term source is a
-// generated transformationClose {before, after} pair). Project copy is written
-// gender-neutral ("they/them/their"), which maps cleanly to "you" with no verb
-// disagreement; she/he are handled best-effort. Capitalization at a sentence
-// start is preserved by matching the leading capital.
-const SECOND_PERSON: Array<[RegExp, string]> = [
-  [/\bthey are\b/gi, 'you are'],
-  [/\bthey're\b/gi, "you're"],
-  [/\bthey've\b/gi, "you've"],
-  [/\bthey'll\b/gi, "you'll"],
-  [/\bthey'd\b/gi, "you'd"],
-  [/\bthemselves\b/gi, 'yourself'],
-  [/\btheir\b/gi, 'your'],
-  [/\btheirs\b/gi, 'yours'],
-  [/\bthey\b/gi, 'you'],
-  [/\bthem\b/gi, 'you'],
-  [/\b(?:she|he) is\b/gi, 'you are'],
-  [/\b(?:she's|he's)\b/gi, "you're"],
-  [/\b(?:she'll|he'll)\b/gi, "you'll"],
-  [/\b(?:she'd|he'd)\b/gi, "you'd"],
-  [/\b(?:herself|himself)\b/gi, 'yourself'],
-  [/\b(?:she|he)\b/gi, 'you'],
-  [/\bhers\b/gi, 'yours'],
-  [/\b(?:her|him)\b/gi, 'you'],
-  [/\bhis\b/gi, 'your'],
-]
-function recap(word: string, sample: string): string {
-  return sample[0] === sample[0]?.toUpperCase() ? word[0].toUpperCase() + word.slice(1) : word
-}
-export function toSecondPerson(text: string): string {
-  let out = String(text || '')
-  for (const [re, repl] of SECOND_PERSON) out = out.replace(re, (m) => recap(repl, m))
-  // Tidy a leftover "your the …" that a possessive replace can create.
-  return out.replace(/\byour the\b/gi, (m) => recap('your', m))
-}
-
-// Lowercase the first letter so a converted state can sit mid-sentence (after a
-// lead-in like "the reality: "). Leaves an all-caps acronym start alone.
-function lowerFirst(s: string): string {
-  const t = String(s || '').trim()
-  if (!t) return t
-  if (t.length > 1 && t[1] === t[1].toUpperCase() && /[A-Z]/.test(t[1])) return t // e.g. "AI ..."
-  return t[0].toLowerCase() + t.slice(1)
+// Strip a leading debug/version tag like "REBUILD5:" from coach-entered proof
+// before it reaches the lead-facing page. Only fires on an all-caps token that
+// CONTAINS a digit followed by a colon — normal prose ("Note:", "In 2023,") is
+// left untouched.
+export function stripDebugPrefix(s: string): string {
+  return String(s || '').replace(/^\s*[A-Z][A-Z0-9]*\d[A-Z0-9]*\s*:\s+/, '')
 }
 
 // ── layout scale (mockup 660px page → 816px Letter page) ────────────────────
@@ -139,6 +103,16 @@ p.sig{ font-size:${px(14)}; font-weight:700; color:var(--accent-ink); margin-top
 .callout li{ font-size:${px(13)}; line-height:1.6; color:#334155; margin-bottom:${px(7)}; }
 .callout li b{ color:var(--accent-ink); }
 .callout p{ font-size:${px(13)}; line-height:1.62; color:#334155; margin:0; }
+
+/* companion-to-the-training callout (top of the first content page) */
+.companion{ display:flex; align-items:center; gap:${px(16)}; background:var(--accent-soft); border:1px solid var(--accent-border); border-left:${px(4)} solid var(--accent); border-radius:${px(10)}; padding:${px(14)} ${px(16)}; margin:0 0 ${px(20)}; }
+.companion .left{ flex:1; }
+.companion .cl{ font-size:${px(10)}; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:var(--accent-ink); margin-bottom:${px(5)}; }
+.companion .ct{ font-size:${px(12.5)}; line-height:1.5; color:#334155; margin-bottom:${px(8)}; }
+.companion .clink{ font-size:${px(12.5)}; font-weight:800; color:var(--accent-ink); text-decoration:none; }
+.companion .cqr{ flex:0 0 auto; text-align:center; }
+.companion .cqr img{ width:${px(62)}; height:${px(62)}; display:block; background:#fff; border-radius:${px(6)}; }
+.companion .cqr span{ display:block; font-size:${px(8)}; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--accent-ink); margin-top:${px(3)}; }
 
 /* cover — no height override: the .page fixed 1056px height must win so the flex
    column fills the sheet and .bot sits at the bottom (a same-element height:100%
@@ -254,16 +228,19 @@ function packChapter(brand: GuideBrand, sectionLabel: string, header: string, he
 export function buildGuideDocument(opts: {
   brand: GuideBrand
   workbook: unknown
-  analysis: unknown // results.transformation.analysis
   delivery: unknown
+  // Clean, lead-facing SECOND-PERSON copy (generated + persisted by lib/guideCopy).
+  // The guide NEVER derives close copy from the third-person avatar states here.
+  transformationClose: { before: string; after: string; bridge: string }
+  recap: { started: string; did: string; first_part: string; stick: string }
   frameworkName: string
   coverTitle?: string
   qrDataUri: string | null
+  trainingQrDataUri?: string | null
 }): string {
   const { brand } = opts
   const sh = accentShades(brand.accent)
   const w = obj(opts.workbook)
-  const a = obj(opts.analysis)
   const d = obj(opts.delivery)
 
   // paragraphs split on blank lines (problem_intro / understanding are authored
@@ -297,6 +274,23 @@ export function buildGuideDocument(opts: {
     `<div class="sec"><span class="num">1</span><span class="t">${esc(problemTitle)}</span></div>`
   const problemHeaderH = secH(problemTitle)
   const problemBlocks: Blk[] = []
+  // Companion-to-the-training callout (accent) — tells the lead this workbook goes
+  // with the coach's training and links/QRs them to watch it. Only when the coach
+  // has a funnel training page.
+  if (brand.trainingUrl) {
+    const cqr = opts.trainingQrDataUri
+      ? `<div class="cqr"><img src="${opts.trainingQrDataUri}" alt="Scan to watch"><span>Scan to watch</span></div>`
+      : ''
+    problemBlocks.push({
+      html:
+        `<div class="companion"><div class="left">` +
+        `<div class="cl">Your companion to the training</div>` +
+        `<div class="ct">This workbook goes with ${esc(brand.businessName)}&rsquo;s training. Haven&rsquo;t watched it yet? Start there &mdash; then work through these pages.</div>` +
+        `<a class="clink" href="${esc(brand.trainingUrl)}" target="_blank">Watch the training &rarr;</a>` +
+        `</div>${cqr}</div>`,
+      h: 150,
+    })
+  }
   paras(w.problem_intro).forEach((p, i) => problemBlocks.push({ html: `<p class="body${i === 0 ? ' lg' : ''}">${esc(p)}</p>`, h: paraH(p, i === 0) }))
   paras(w.understanding).forEach((p) => problemBlocks.push({ html: `<p class="body">${esc(p)}</p>`, h: paraH(p) }))
   const takeaways = strArray(w.keyTakeaways).slice(0, 3)
@@ -349,16 +343,14 @@ export function buildGuideDocument(opts: {
   // before/after states for guides generated before the recap field existed.
   const recapPages: string[] = []
   {
-    const rc = obj(w.recap)
-    const beforeFwd = toSecondPerson(str(a.beforeState))
-    const afterFwd = toSecondPerson(str(a.afterState))
+    const rc = opts.recap
     const firstName = brand.presenterName.split(/\s+/)[0] || brand.presenterName
 
+    // opts.recap is clean, generated second-person copy. The fallbacks fire only if
+    // generation failed — clean generic lines, never avatar text.
     const started =
       str(rc.started) ||
-      (beforeFwd
-        ? `When you opened this guide, this was the reality: ${lowerFirst(beforeFwd)}`
-        : 'When you opened this guide, something was not adding up — you were doing the work and still not seeing it come back the way it should.')
+      'When you opened this guide, something was not adding up — you were showing up and doing the work, and still not seeing it come back the way it should.'
     const did =
       str(rc.did) ||
       'In these pages, you stopped guessing. You looked honestly at where the pattern actually shows up — in your own words, your own numbers. That is the part most people skip.'
@@ -367,9 +359,7 @@ export function buildGuideDocument(opts: {
       'This guide is only the first part. It names the pattern and starts the shift. It does not finish it — and it was never meant to.'
     const stick =
       str(rc.stick) ||
-      (afterFwd
-        ? `Here is what I want you to hold onto: ${lowerFirst(afterFwd)} That is not a fantasy — it is the other side of the one shift you just started to see. Stick with it.`
-        : 'It does not have to stay the way it has felt. The shift you just started to see is the one that changes it — if you stick with it.')
+      'It does not have to stay the way it has felt. The shift you just started to see is the one that changes it — if you stick with it.'
 
     const recapChip = exercises.length ? 3 : 2
     const recapTitle = 'Before you go'
@@ -391,27 +381,24 @@ export function buildGuideDocument(opts: {
     recapPages.push(...recap.pages)
   }
 
-  // ── CLOSE (the priority) ──
-  const before = toSecondPerson(str(a.beforeState))
-  const after = toSecondPerson(str(a.afterState))
-  const zone = str(a.zoneOfImpact)
-  const proof = str(obj(d.personal_hook).proof)
+  // ── CLOSE (the priority) ── clean second person from opts.transformationClose;
+  // never the third-person avatar states. Fallbacks are clean generic lines.
+  const tc = opts.transformationClose
+  const before = str(tc.before) || 'Right now, the people who value your work most are not the ones paying you for it — and it is quietly wearing on you.'
+  const after = str(tc.after) || 'That changes when the way you are positioned finally matches the value you already deliver — and the right people say yes without being convinced.'
+  const bridgeText = str(tc.bridge) || "Closing that gap comes down to how you're positioned and how your sales conversation goes — and that's the work we'd do together on one call."
+  const proof = stripDebugPrefix(str(obj(d.personal_hook).proof))
   const ctaType = d.cta_type === 'sell_program' ? 'sell_program' : 'book_call'
   const ctaLabel = ctaType === 'sell_program' ? 'See the program' : 'Book your call'
   const ctaHeading = ctaType === 'sell_program' ? 'Take the next step' : 'Book your call'
   const ARROW = '<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>'
 
-  const transHtml =
-    before || after
-      ? `<div class="trans">
+  const transHtml = `<div class="trans">
       <div class="col from"><div class="lab">Where you are now</div><p>${esc(before)}</p></div>
       <div class="arrow">${ARROW}</div>
       <div class="col to"><div class="lab">Where this goes</div><p>${esc(after)}</p></div>
     </div>`
-      : ''
-  const bridge = zone
-    ? `<div class="bridge"><b>Closing that gap</b> is the work we'd do together on one call. ${esc(zone)}</div>`
-    : `<div class="bridge"><b>Closing that gap</b> is the work we'd do together — on one honest call, we map exactly where you are and the first move out.</div>`
+  const bridge = `<div class="bridge">${esc(bridgeText)}</div>`
   const proofLine = proof ? `<div class="proofline"><b>Real result:</b> ${esc(proof)}</div>` : ''
   const qrHtml = opts.qrDataUri
     ? `<div class="qrwrap"><img src="${opts.qrDataUri}" alt="Scan to book"><span>Scan to book</span></div>`

@@ -84,6 +84,12 @@ export type MtClosingInvite = { book_call: string; sell_program: string }
 // first part, and gets personal about how it was vs. what it could be if they
 // stick with it — building authority and teeing up the close.
 export type MtRecap = { started: string; did: string; first_part: string; stick: string }
+// The lead-facing from->to close, in clean SECOND PERSON with no avatar name — a
+// bespoke rewrite of the third-person avatar before/after states. `bridge` is a
+// lead-facing sentence (NOT the coach's third-person zoneOfImpact positioning).
+// Generated lazily at guide render (lib/guideCopy) and persisted; new + existing
+// generations backfill the same way.
+export type MtTransformationClose = { before: string; after: string; bridge: string }
 // The lead-facing Guide (given at opt-in — stands alone, does NOT assume the lead
 // watched the video). problem_intro/understanding/closing_invite are the new
 // self-contained fields; title/intro/sections/keyTakeaways are kept for back-compat.
@@ -95,6 +101,7 @@ export type MtWorkbook = {
   sections: MtWorkbookSection[]
   keyTakeaways: string[]
   recap: MtRecap
+  transformationClose: MtTransformationClose
   closing_invite: MtClosingInvite
 }
 // original is the as-generated snapshot the editor stamps on load, so a coach
@@ -703,6 +710,7 @@ export function coerceWorkbook(v: unknown): MtWorkbook {
     .filter((s) => s.sectionTitle.trim().length > 0)
   const ci = (o.closing_invite && typeof o.closing_invite === 'object' ? o.closing_invite : {}) as Record<string, unknown>
   const rc = (o.recap && typeof o.recap === 'object' ? o.recap : {}) as Record<string, unknown>
+  const tc = (o.transformationClose && typeof o.transformationClose === 'object' ? o.transformationClose : {}) as Record<string, unknown>
   return {
     title: asString(o.title),
     intro: asString(o.intro),
@@ -711,6 +719,7 @@ export function coerceWorkbook(v: unknown): MtWorkbook {
     sections,
     keyTakeaways: asStringArray(o.keyTakeaways),
     recap: { started: asString(rc.started), did: asString(rc.did), first_part: asString(rc.first_part), stick: asString(rc.stick) },
+    transformationClose: { before: asString(tc.before), after: asString(tc.after), bridge: asString(tc.bridge) },
     closing_invite: { book_call: asString(ci.book_call), sell_program: asString(ci.sell_program) },
   }
 }
@@ -1143,7 +1152,7 @@ The training title is fixed to: ${JSON.stringify(pinnedTitle)}. Return chosen_to
     total_duration: merged.total_duration ?? '15-20 minutes',
     outline: merged.outline ?? [],
     slides: merged.slides ?? [],
-    workbook: merged.workbook ?? { title: '', intro: '', problem_intro: '', understanding: '', sections: [], keyTakeaways: [], recap: { started: '', did: '', first_part: '', stick: '' }, closing_invite: { book_call: '', sell_program: '' } },
+    workbook: merged.workbook ?? { title: '', intro: '', problem_intro: '', understanding: '', sections: [], keyTakeaways: [], recap: { started: '', did: '', first_part: '', stick: '' }, transformationClose: { before: '', after: '', bridge: '' }, closing_invite: { book_call: '', sell_program: '' } },
     warm_invite_emails: merged.warm_invite_emails ?? [],
     emails: merged.emails ?? [],
     book_a_call_emails: merged.book_a_call_emails ?? [],
