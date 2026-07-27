@@ -63,7 +63,9 @@ ul.list li b{ color:var(--navy); }
 // packed into fixed-height pages by that estimate (the render page runs no JS, so
 // heights cannot be measured live). Estimates are deliberately conservative — we
 // would rather leave a page slightly short than clip a block.
-export type Block = { html: string; h: number }
+// `keepNext` marks a heading that must not be the last block on a page — the
+// paginator keeps it with the block that follows (avoids orphaned headings).
+export type Block = { html: string; h: number; keepNext?: boolean }
 
 const CONTENT_W = 672 // 816 - 72*2
 // Usable vertical space for content on a page: 1056 - padding(64+68) - header(~62) - footer(~40).
@@ -82,11 +84,11 @@ export function sectionHead(kicker: string, title: string, lead?: string): Block
   if (kicker) { html += `<div class="kicker">${esc(kicker)}</div>`; h += 20 + 9 }
   html += `<h2 class="section">${esc(title)}</h2>`; h += wraps(title, 27, CONTENT_W, 0.56) * 30
   if (lead) { html += `<p class="lead">${esc(lead)}</p>`; h += 14 + wraps(lead, 15) * 24 }
-  return { html, h: h + 8 }
+  return { html, h: h + 8, keepNext: true }
 }
 
 export function sub(text: string): Block {
-  return { html: `<h3 class="sub">${esc(text)}</h3>`, h: 30 + 10 + wraps(text, 16) * 18 }
+  return { html: `<h3 class="sub">${esc(text)}</h3>`, h: 30 + 10 + wraps(text, 16) * 18, keepNext: true }
 }
 
 // body() takes ready HTML (the builder composes <strong>/<b> around escaped text).
@@ -140,8 +142,17 @@ export function paginate(blocks: Block[], docTitle: string, startPage: number): 
   const pages: Block[][] = []
   let cur: Block[] = []
   let used = 0
-  for (const b of blocks) {
-    if (cur.length > 0 && used + b.h > PAGE_BUDGET) {
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i]
+    // Break before this block if it overflows the page, OR if it's a heading that
+    // would be orphaned — i.e. the heading fits but the block it introduces would
+    // not fit after it. Only break when the current page already has content
+    // (never open a page with a lone break), and only look one block ahead (a
+    // heading is always followed by its body/list, never another heading).
+    const overflow = used + b.h > PAGE_BUDGET
+    const next = blocks[i + 1]
+    const orphan = !!b.keepNext && !!next && used + b.h + next.h > PAGE_BUDGET
+    if (cur.length > 0 && (overflow || orphan)) {
       pages.push(cur)
       cur = []
       used = 0

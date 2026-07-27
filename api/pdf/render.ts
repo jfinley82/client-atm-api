@@ -32,6 +32,12 @@ export const config = { api: { bodyParser: false } }
 // applies first; this is the app-level guard and a clean 400.
 const MAX_HTML_BYTES = 6 * 1024 * 1024
 
+// Settle window after `load` so inlined data: URL webfonts finish decoding and
+// applying before page.pdf() captures. Inlined fonts decode in well under this;
+// generous enough to cover a cold, CPU-throttled lambda without meaningfully
+// affecting the (60s) budget.
+const FONT_SETTLE_MS = 800
+
 // Read the request body into a Buffer, aborting once the cap is exceeded so an
 // oversized payload can't be accumulated into memory unbounded. Mirrors the
 // bounded-read pattern in api/guide/publish.ts.
@@ -127,6 +133,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     await page.emulateMediaType('print')
     await page.setContent(safeHtml, { waitUntil: 'load' })
+
+    // The document's fonts are inlined as data: URLs. Chromium can fire `load`
+    // before a webfont has decoded and applied, and with JavaScript disabled we
+    // cannot await document.fonts.ready. Without this settle, text set in a
+    // custom @font-face renders blank during the face's block period (system-font
+    // text is unaffected — which is why only the branded cover slots went blank).
+    // The face is also declared font-display:swap as a backstop so any capture
+    // that still races shows the fallback family rather than nothing.
+    await new Promise((resolve) => setTimeout(resolve, FONT_SETTLE_MS))
 
     // Let the document's own @page size + margins drive layout.
     const pdf = await page.pdf({

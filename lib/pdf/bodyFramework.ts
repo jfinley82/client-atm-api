@@ -29,6 +29,16 @@ function pick(o: Any, ...keys: string[]): string {
   }
   return ''
 }
+// Like pick, but also accepts numbers (the program schema stores week,
+// total_weeks, session_length_minutes, capacity as numbers — pick() drops those).
+function pickVal(o: Any, ...keys: string[]): string {
+  for (const k of keys) {
+    const v = o[k]
+    if (typeof v === 'string' && v.trim().length > 0) return v.trim()
+    if (typeof v === 'number' && Number.isFinite(v)) return String(v)
+  }
+  return ''
+}
 // First array across key variants.
 function pickArr(o: Any, ...keys: string[]): unknown[] {
   for (const k of keys) if (Array.isArray(o[k])) return o[k] as unknown[]
@@ -158,21 +168,27 @@ export function buildFrameworkBlocks(results: Any): { docTitle: string; blocks: 
   if (progSec.status === 'ready' || coSec.status === 'ready') {
     const p = obj(progSec.program)
     const ht = obj(co.high_ticket)
-    blocks.push(sectionHead('Step 3 · Monetize', pick(p, 'program_name', 'name') || 'Your program', pick(ht, 'name')))
+    // Lead is the high-ticket offer name, but only when it differs from the
+    // program name — otherwise it prints the same title twice under the heading.
+    const programName = pick(p, 'program_name', 'name') || 'Your program'
+    const htName = pick(ht, 'name')
+    blocks.push(sectionHead('Step 3 · Monetize', programName, htName && htName !== programName ? htName : undefined))
     field(blocks, 'Who it is for', pick(ht, 'who_its_for', 'who_it_is_for'))
     const inc = strArray(ht.whats_included ?? ht.included)
     if (inc.length) { blocks.push(sub("What's included")); blocks.push(list(inc.map(esc))) }
-    // delivery shape
+    // delivery shape (total_weeks / session_length_minutes are numbers)
+    const weeksN = pickVal(p, 'total_weeks')
+    const sessMin = pickVal(p, 'session_length_minutes')
     const shape = [
       pick(p, 'session_type'),
-      pick(p, 'total_weeks') && `${pick(p, 'total_weeks')} weeks`,
-      pick(p, 'session_length_minutes') && `${pick(p, 'session_length_minutes')} min sessions`,
+      weeksN && `${weeksN} weeks`,
+      sessMin && `${sessMin} min sessions`,
     ].filter(Boolean).join(' · ')
     if (shape) blocks.push(body(`<strong>Delivery.</strong> ${esc(shape)}`, shape.length + 12))
     field(blocks, 'Why this shape', pick(p, 'timeline_reasoning'))
     const weeks = pickArr(p, 'weekly_breakdown').map((wRaw) => {
       const w = obj(wRaw)
-      const head = `Week ${pick(w, 'week') || ''} · ${pick(w, 'phase_name')}`.trim()
+      const head = `Week ${pickVal(w, 'week', 'week_number')} · ${pick(w, 'phase_name')}`.trim()
       const rest = [pick(w, 'session_focus'), pick(w, 'client_milestone') && `client milestone: ${pick(w, 'client_milestone')}`].filter(Boolean).join('; ')
       return bold(head, rest)
     })
@@ -204,7 +220,7 @@ export function buildFrameworkBlocks(results: Any): { docTitle: string; blocks: 
 
     // Revenue potential (static computed values)
     const price = money(pick(p, 'suggested_starting_price') || pick(obj(co.high_ticket), 'price_point'))
-    const clients = money(pick(p, 'suggested_capacity_per_month')) || 3
+    const clients = money(pickVal(p, 'suggested_capacity_per_month')) || 3
     const monthly = price * clients
     if (price > 0) {
       blocks.push(sub('Revenue potential'))
