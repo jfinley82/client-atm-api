@@ -52,6 +52,7 @@ export const INTERIOR_CSS = `
 
 /* section title row with icon */
 .stitle{ display:flex; align-items:center; gap:14px; margin-bottom:4px; }
+.stitle.flow{ margin-top:40px; padding-top:32px; border-top:1px solid var(--line); }
 .stitle .ic{ width:44px;height:44px;border-radius:12px;background:var(--tintn);display:flex;align-items:center;justify-content:center;flex:0 0 auto; }
 .stitle .ic svg{ width:24px;height:24px;stroke:var(--navy);fill:none;stroke-width:1.7; }
 .kick{ color:var(--green-ink); font-weight:800; letter-spacing:.15em; font-size:10.5px; text-transform:uppercase; }
@@ -208,13 +209,15 @@ ul.list li b{ color:var(--navy); }
 // page runs no JS, so nothing can be measured live; we would rather leave a page a
 // little short than clip.
 export interface Row { html: string; h: number }
-export interface Atom { html: string; h: number; keepNext?: boolean; breakBefore?: boolean; split?: false }
+export interface Atom { html: string; h: number; keepNext?: boolean; section?: boolean; split?: false }
 export interface Split { split: true; rows: Row[]; wrapOpen: string; wrapClose: string; chunkOverhead: number }
 export type Block = Atom | Split
 
 const CONTENT_W = 684 // 816 - 66*2
 // Usable vertical space per page: 1056 - pad(60+64) - header(~70) - footer(~40).
 const PAGE_BUDGET = 812
+// Extra height a mid-page section title costs from its `flow` top gap + hairline.
+const FLOW_GAP = 74
 
 // Rough wrapped-line count for a run of text at a given font size.
 function wraps(text: string, fontPx: number, width = CONTENT_W, ratio = 0.53): number {
@@ -241,9 +244,11 @@ export function sectionTitle(iconKey: string, kicker: string, title: string, lea
   let leadHtml = ''
   if (lead) { leadHtml = `<div class="lead">${esc(lead)}</div>`; h += 12 + wraps(lead, 14) * 23 + 4 }
   const html = `<div class="stitle"><div class="ic">${ic}</div><div><div class="kick">${esc(kicker)}</div><h2>${esc(title)}</h2></div></div>${leadHtml}`
-  // Each major section opens at the top of its own page (as in the mockup), so a
-  // section title never crowds the block above it.
-  return { html, h, keepNext: true, breakBefore: true }
+  // Sections flow and fill the page; when a title lands mid-page the paginator
+  // adds a top gap + hairline (via the `flow` class) so the new section still
+  // reads as a clear break. It only starts a fresh page when it plus its first
+  // block would not fit in the space remaining (keepNext).
+  return { html, h, keepNext: true, section: true }
 }
 
 // A mockup h3 (with an optional green "tag" chip). Bound to the block after it.
@@ -374,9 +379,9 @@ export function blueprintCard(bp: BlueprintData): Block {
   }
 
   if (!mtHtml) return { html: `<div class="bp">${header}<div class="bd">${bd}</div></div>`, h: cardH }
-  // Leave headroom for the section title that may share the page; only split when
-  // the whole card genuinely can't fit alongside it.
-  if (cardH + mtH <= PAGE_BUDGET - 170) return { html: `<div class="bp">${header}<div class="bd">${bd}${mtHtml}</div></div>`, h: cardH + mtH }
+  // Stay one unified card whenever the whole thing fits a page; only split at the
+  // micro-training boundary when it genuinely can't.
+  if (cardH + mtH <= PAGE_BUDGET) return { html: `<div class="bp">${header}<div class="bd">${bd}${mtHtml}</div></div>`, h: cardH + mtH }
   const row1: Row = { html: `<div class="bp">${header}<div class="bd">${bd}</div></div>`, h: cardH }
   const row2: Row = { html: `<div class="bp"><div class="bd">${mtHtml.replace('class="mt"', 'class="mt" style="margin-top:0"')}</div></div>`, h: 30 + mtH }
   return { split: true, rows: [row1, row2], wrapOpen: '', wrapClose: '', chunkOverhead: 0 }
@@ -462,12 +467,15 @@ export function paginate(blocks: Block[], docTitle: string, startPage: number): 
     const pinned = i > 0 && !blocks[i - 1].split && (blocks[i - 1] as Atom).keepNext === true
 
     if (!b.split) {
-      if (b.breakBefore && cur.length > 0) flush()
-      let need = b.h
+      // A section title that lands mid-page gets a top gap + hairline (`flow`), so
+      // sections fill the page yet still read as a break. It only opens a fresh
+      // page when it plus its first following block won't fit in what's left.
+      let flowing = b.section === true && cur.length > 0
+      let need = b.h + (flowing ? FLOW_GAP : 0)
       if (b.keepNext && blocks[i + 1]) need += reserveFor(blocks[i + 1])
-      if (!pinned && cur.length > 0 && used + need > PAGE_BUDGET) flush()
-      cur.push(b.html)
-      used += b.h
+      if (!pinned && cur.length > 0 && used + need > PAGE_BUDGET) { flush(); flowing = false }
+      cur.push(flowing ? b.html.replace('class="stitle"', 'class="stitle flow"') : b.html)
+      used += b.h + (flowing ? FLOW_GAP : 0)
       continue
     }
 
