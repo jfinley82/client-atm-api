@@ -64,6 +64,7 @@ export function coverCss(): string {
 @font-face {
   font-family: 'MTM Chalk';
   src: url(${fontDataUrl()}) format('truetype');
+  font-display: swap;
 }
 .cover-page {
   width: 816px; height: 1056px;
@@ -81,7 +82,7 @@ export function coverCss(): string {
 .cover-slot {
   position: absolute; left: 0; width: 1632px;
   text-align: center; color: #eef0f5;
-  font-family: 'MTM Chalk'; margin: 0; padding: 0;
+  font-family: 'MTM Chalk', 'Segoe UI', Helvetica, Arial, sans-serif; margin: 0; padding: 0;
 }`
 }
 

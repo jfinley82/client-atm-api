@@ -59,9 +59,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     })
     if (!resultsRes.ok) throw new Error(`results ${resultsRes.status}`)
     const results = (await resultsRes.json()) as Any
-    const frameworkName = typeof obj(obj(results.framework).framework).frameworkName === 'string'
-      ? (obj(obj(results.framework).framework).frameworkName as string).trim()
-      : ''
+    const fw = obj(obj(results.framework).framework)
+    const rawName = fw.frameworkName ?? fw.framework_name
+    const frameworkName = typeof rawName === 'string' ? rawName.trim() : ''
 
     // Build the interior body for the requested doc.
     let docTitle = frameworkName || 'Your framework'
@@ -87,7 +87,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Assemble the full print-ready HTML: cover page + paginated interior.
-    const cover = buildCoverPage(doc, frameworkName || docTitle, coachName)
+    const coverTitle = frameworkName || docTitle
+    console.log('[pdf/document] cover slots', JSON.stringify({ doc, coverTitle, coachName, titleLen: coverTitle.length, nameLen: coachName.length }))
+    const cover = buildCoverPage(doc, coverTitle, coachName)
     const { html: interior } = paginate(blocks, docTitle.toUpperCase(), 2)
     const html = buildDocument(cover, interior)
 
