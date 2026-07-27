@@ -40,6 +40,7 @@ import {
   coerceAnglePreviews,
 } from '../../lib/microTrainingGenerator'
 import { BEAT_TEACHING } from '../../lib/slideDeckCanonical'
+import { emailBodyHasRawHtml } from '../../lib/email'
 
 // POST /api/generate — the unified Micro-Training generator. From ONE validated
 // blueprint plus a few optional recording details, it produces and persists the
@@ -411,6 +412,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!(await requireCapability(userId, 'toolkits', res))) return
       const save = body.save as Record<string, unknown>
       const update: Record<string, unknown> = {}
+
+      // Guard: email bodies are canonical text (plain text + link tokens +
+      // lightweight markers). Reject any that arrive as RENDERED HTML — a past
+      // frontend regression once flattened tokens to <a href="#"> and stored the
+      // DOM verbatim, permanently corrupting the email. This can't recover an
+      // already-flattened token, so its job is to stop a future regression from
+      // silently corrupting stored emails again — fail loudly and log.
+      for (const listName of ['emails', 'warm_invite_emails', 'book_a_call_emails'] as const) {
+        if (!(listName in save)) continue
+        const arr = Array.isArray(save[listName]) ? (save[listName] as unknown[]) : []
+        for (let idx = 0; idx < arr.length; idx++) {
+          const em = (arr[idx] && typeof arr[idx] === 'object' ? arr[idx] : {}) as Record<string, unknown>
+          if (emailBodyHasRawHtml(em.body)) {
+            console.error(`[generate] rejected rendered-HTML email body on save (list=${listName}, index=${idx}, user=${userId}, card=${card_id})`)
+            return res.status(400).json({ error: 'Email body must be plain text with formatting markers, not HTML. Please retry from the editor.' })
+          }
+        }
+      }
 
       if ('slides' in save) update.slides = coerceSlides(save.slides)
       if ('warm_invite_emails' in save) update.warm_invite_emails = coerceEmails(save.warm_invite_emails)
