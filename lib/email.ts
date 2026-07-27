@@ -208,6 +208,15 @@ export function brandedEmailHtml(
               <a href="${escapeHtml(opts.cta.url)}" target="_blank" style="display:inline-block;padding:14px 30px;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;color:#FFFFFF;text-decoration:none;border-radius:10px;">${escapeHtml(opts.cta.label)}</a>
             </td></tr></table>`
       : ''
+  // Button fallback: when there IS a CTA button, a plain P.S. below the signature
+  // hyperlinks "Click here" to the SAME coach-specific destination. The raw URL is
+  // never shown as visible text — freeminiworkshop.com is the shared base domain,
+  // so a lead copying/typing the bare domain could land on a different coach's
+  // funnel; only the full href carries the coach's own destination.
+  const ps =
+    opts.cta && isValidHttpUrl(opts.cta.url)
+      ? `<p style="margin:12px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:20px;color:#98A2B3;">P.S. Button not working? <a href="${escapeHtml(opts.cta.url)}" target="_blank" style="color:#98A2B3;text-decoration:underline;">Click here</a>.</p>`
+      : ''
   const foot =
     opts.unsubscribeUrl && isValidHttpUrl(opts.unsubscribeUrl)
       ? `<p style="margin:16px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:18px;color:#98A2B3;">Sent by ${escapeHtml(brand.businessName)}. <a href="${escapeHtml(opts.unsubscribeUrl)}" target="_blank" style="color:#98A2B3;text-decoration:underline;">Unsubscribe</a>.</p>`
@@ -226,6 +235,7 @@ export function brandedEmailHtml(
         </td></tr>
         <tr><td style="padding-top:20px;padding-left:4px;">
           <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:20px;color:#98A2B3;">${escapeHtml(brand.coachName)}</p>
+          ${ps}
           ${foot}
         </td></tr>
       </table>
@@ -240,6 +250,10 @@ export function brandedEmailHtml(
 // token, threaded in by the caller). escapeHtml leaves the bracket tokens intact
 // so they survive to be replaced. A missing/invalid URL degrades to plain words
 // rather than leaking the literal placeholder.
+// A line that is nothing but a single link token (optionally padded) — rendered
+// only as the CTA button, never also as an inline text link.
+const TOKEN_ONLY_LINE = /^\s*\[(?:BOOK_A_CALL|OFFER|TRAINING|REGISTER)_LINK\]\s*$/
+
 export function linkifyEmailBody(raw: string, bookUrl: string, trainingUrl?: string, registerUrl?: string): string {
   const bookAnchor = isValidHttpUrl(bookUrl)
     ? `<a href="${escapeHtml(bookUrl)}" target="_blank" style="color:#0B1120;font-weight:bold;">book a call</a>`
@@ -254,22 +268,31 @@ export function linkifyEmailBody(raw: string, bookUrl: string, trainingUrl?: str
     registerUrl && isValidHttpUrl(registerUrl)
       ? `<a href="${escapeHtml(registerUrl)}" target="_blank" style="color:#0B1120;font-weight:bold;">register</a>`
       : 'register'
+  // A token INLINE in a sentence renders as a normal inline link; a token ALONE on
+  // its own line/paragraph is dropped here — it is represented by the CTA button
+  // that the layout appends, so it must not also render as a duplicate text link.
+  const inline = (line: string): string =>
+    escapeHtml(line)
+      .split('[BOOK_A_CALL_LINK]')
+      .join(bookAnchor)
+      .split('[OFFER_LINK]')
+      .join(bookAnchor)
+      .split('[TRAINING_LINK]')
+      .join(trainingAnchor)
+      .split('[REGISTER_LINK]')
+      .join(registerAnchor)
   return String(raw || '')
     .split(/\n\s*\n/)
     .filter((p) => p.trim())
     .map((p) => {
-      const h = escapeHtml(p)
-        .replace(/\r?\n/g, '<br>')
-        .split('[BOOK_A_CALL_LINK]')
-        .join(bookAnchor)
-        .split('[OFFER_LINK]')
-        .join(bookAnchor)
-        .split('[TRAINING_LINK]')
-        .join(trainingAnchor)
-        .split('[REGISTER_LINK]')
-        .join(registerAnchor)
-      return `<p style="margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;">${h}</p>`
+      const h = p
+        .split(/\r?\n/)
+        .filter((line) => !TOKEN_ONLY_LINE.test(line))
+        .map(inline)
+        .join('<br>')
+      return h.trim() ? `<p style="margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;">${h}</p>` : ''
     })
+    .filter(Boolean)
     .join('')
 }
 
