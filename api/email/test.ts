@@ -66,7 +66,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let base = `https://${FUNNEL_DOMAIN}`
     const funnelRes = await supabase
       .from('funnels')
-      .select('subdomain, generation_id')
+      .select('subdomain')
       .eq('user_id', userId)
       .not('subdomain', 'is', null)
       .limit(1)
@@ -76,16 +76,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const trainingUrl = `${base}/?page=training`
     const registerUrl = `${base}/`
 
-    // Resolve the real [GUIDE_LINK] destination from the coach's funnel generation
-    // so a confirmation-email preview links the guide exactly as a real send would.
-    // Absent/unpublished ⇒ undefined and [GUIDE_LINK] degrades to a plain word.
+    // Resolve the real [GUIDE_LINK] destination so a confirmation-email preview
+    // links the guide exactly as a real send would. We look up the coach's most
+    // recent generation that actually HAS a published guide, rather than the
+    // picked funnel's generation_id (older funnels can carry a null/mismatched
+    // generation_id, which is why a real guide was rendering as plain text).
+    // No published guide ⇒ undefined and [GUIDE_LINK] degrades to a plain word.
     let guideUrl: string | undefined
-    const generationId = funnelRes.data?.[0]?.generation_id
-    if (typeof generationId === 'string' && generationId) {
-      const genRes = await supabase.from('mtm_generations').select('guide_url').eq('id', generationId).maybeSingle()
-      const g = (genRes.data as { guide_url?: unknown } | null)?.guide_url
-      if (typeof g === 'string' && g.trim()) guideUrl = g.trim()
-    }
+    const guideRes = await supabase
+      .from('mtm_generations')
+      .select('guide_url')
+      .eq('user_id', userId)
+      .not('guide_url', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+    const g = (guideRes.data?.[0] as { guide_url?: unknown } | undefined)?.guide_url
+    if (typeof g === 'string' && g.trim()) guideUrl = g.trim()
 
     const firstName = name ? name.split(/\s+/)[0] : 'there'
     const mergedSubject = mergeName(subject, firstName)

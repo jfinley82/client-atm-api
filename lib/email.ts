@@ -308,12 +308,27 @@ const BUTTON_ELIGIBLE: { token: string; label: string; key: 'book' | 'training' 
 
 export type EmailLinks = { book?: string; training?: string; register?: string; guide?: string }
 
+// True when the token occupying [idx, idx+len) is ALONE on its own line (only
+// surrounding whitespace) — the standalone-button case. An inline token (text on
+// either side within the same line) is NOT standalone.
+function isStandaloneOccurrence(body: string, idx: number, len: number): boolean {
+  let start = idx
+  while (start > 0 && body[start - 1] !== '\n') start--
+  let end = idx + len
+  while (end < body.length && body[end] !== '\n') end++
+  return body.slice(start, idx).trim() === '' && body.slice(idx + len, end).trim() === ''
+}
+
 // The shared compose path for a token-bearing email body. Rules (per Jamaul):
 //  1. At most ONE button, only for the primary CTA. No button-eligible token with
 //     a valid URL ⇒ no button.
 //  2. The PRIMARY CTA is the FIRST button-eligible token in reading order (not by
-//     layout, not by a fixed token priority). It becomes the single button; its
-//     first occurrence is removed from the body so it isn't ALSO an inline link.
+//     layout, not by a fixed token priority). It becomes the single button.
+//     - If that occurrence is ALONE on its own line, it is removed from the body
+//       so it isn't ALSO an inline link (the standalone-button case).
+//     - If it sits INLINE within a sentence, it is KEPT in place as an inline link
+//       so the sentence stays intact — the button is shown in addition. We never
+//       delete text mid-sentence.
 //  3. Every OTHER token — additional CTA tokens, later occurrences of the primary,
 //     and [GUIDE_LINK] — renders as a standard inline hyperlink. Nothing is ever
 //     silently dropped.
@@ -335,9 +350,13 @@ export function composeEmailBody(raw: string, links: EmailLinks): { bodyHtml: st
       cta = { label: spec.label, url }
     }
   }
-  // Remove ONLY the primary occurrence so it renders as the button, not also
-  // inline. A now-empty standalone-token line collapses away in linkifyEmailBody.
-  const remainder = primaryIdx === -1 ? body : body.slice(0, primaryIdx) + body.slice(primaryIdx + primaryLen)
+  // Only strip the primary token when it stands alone on its line (its line
+  // collapses away in linkifyEmailBody). An inline primary stays put and renders
+  // as an inline link too, so the surrounding sentence is never broken.
+  const remainder =
+    primaryIdx !== -1 && isStandaloneOccurrence(body, primaryIdx, primaryLen)
+      ? body.slice(0, primaryIdx) + body.slice(primaryIdx + primaryLen)
+      : body
   const bodyHtml = linkifyEmailBody(remainder, links.book || '', links.training, links.register, links.guide)
   return { bodyHtml, cta }
 }
