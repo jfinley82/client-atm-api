@@ -244,19 +244,49 @@ export function brandedEmailHtml(
 </body></html>`
 }
 
-// Turn an MtEmail plain-text body into safe paragraph HTML, linking the tokens
-// the generator embeds: [BOOK_A_CALL_LINK] / [OFFER_LINK] → the book page,
-// [TRAINING_LINK] → the training page (per-send URL carrying the fresh watch
-// token, threaded in by the caller), [REGISTER_LINK] → the opt-in page, and
-// [GUIDE_LINK] → the guide download. escapeHtml leaves the bracket tokens intact
-// so they survive to be replaced. A missing/invalid URL degrades to plain words
-// rather than leaking the literal placeholder.
+// Lightweight, safe inline formatting on ALREADY-ESCAPED text. The editor writes
+// canonical markers; we render exactly these and nothing else (no raw HTML ever
+// survives, because escapeHtml ran first and neither `*` nor `+` is escaped):
+//   **text** → bold, ++text++ → underline, *text* → italic.
+// Bold is done before italic so `**x**` isn't mis-parsed as two italics. Markers
+// are single-line (processed per line), so a stray marker can't run away.
+function applyInlineFormatting(escaped: string): string {
+  return escaped
+    .replace(/\*\*([^\n]+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\+\+([^\n]+?)\+\+/g, '<u>$1</u>')
+    .replace(/\*([^\n]+?)\*/g, '<em>$1</em>')
+}
+
+// The tell-tale markers of an email body that arrived as RENDERED HTML (a past
+// frontend regression) rather than canonical text. Canonical bodies use bracket
+// tokens and lightweight markers, never these.
+const RENDERED_EMAIL_HTML = /<p[\s/>]|class\s*=|href\s*=|contenteditable/i
+export function emailBodyHasRawHtml(body: unknown): boolean {
+  return typeof body === 'string' && RENDERED_EMAIL_HTML.test(body)
+}
+
+const EMAIL_P_STYLE = 'margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;'
+const EMAIL_LIST_STYLE = 'margin:0 0 14px;padding-left:22px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;'
+const EMAIL_LI_STYLE = 'margin:0 0 6px;'
+
+// Turn a canonical email body (plain text + link tokens + lightweight formatting
+// markers) into safe branded HTML. Pipeline per line: escapeHtml → lightweight
+// formatting (bold/italic/underline) → resolve the link tokens the generator
+// embeds ([BOOK_A_CALL_LINK]/[OFFER_LINK] → book page, [TRAINING_LINK] → training,
+// [REGISTER_LINK] → opt-in, [GUIDE_LINK] → guide download). Everything not a
+// recognized marker/token is escaped, so no raw HTML from the body can reach the
+// output. A missing/invalid URL degrades to plain words, never the literal token.
+//
+// Blocks are blank-line separated. Within a block, runs of `- ` lines become a
+// <ul>, runs of `1. ` (any number) lines become an <ol>, and other lines join
+// with <br> inside a <p>. Formatting and tokens compose (bold text can hold an
+// inline link in the same line).
 //
 // EVERY token renders as a standard inline hyperlink here — including a token
-// sitting alone on its own line. This function never decides what becomes the
-// button and never drops a token; that is composeEmailBody's job (it removes the
-// single primary-CTA occurrence before calling this, so the button and the inline
-// text never duplicate the same link).
+// alone on its own line. This function never decides what becomes the button and
+// never drops a token; that is composeEmailBody's job (it removes the single
+// primary-CTA occurrence before calling this, so the button and the inline text
+// never duplicate the same link).
 export function linkifyEmailBody(
   raw: string,
   bookUrl: string,
@@ -272,8 +302,10 @@ export function linkifyEmailBody(
   const trainingAnchor = anchor(trainingUrl, 'watch the training', 'the training')
   const registerAnchor = anchor(registerUrl, 'register', 'register')
   const guideAnchor = anchor(guideUrl, 'download the guide', 'the guide')
+  // escape → format → resolve tokens. Tokens are resolved LAST so their injected
+  // anchor HTML is never re-escaped or re-formatted.
   const inline = (line: string): string =>
-    escapeHtml(line)
+    applyInlineFormatting(escapeHtml(line))
       .split('[BOOK_A_CALL_LINK]')
       .join(bookAnchor)
       .split('[OFFER_LINK]')
@@ -284,13 +316,46 @@ export function linkifyEmailBody(
       .join(registerAnchor)
       .split('[GUIDE_LINK]')
       .join(guideAnchor)
+
+  const isBullet = (l: string): boolean => /^\s*-\s+\S/.test(l)
+  const isNumbered = (l: string): boolean => /^\s*\d+\.\s+\S/.test(l)
+
+  const renderBlock = (block: string): string => {
+    const lines = block.split(/\r?\n/)
+    let out = ''
+    let i = 0
+    while (i < lines.length) {
+      if (isBullet(lines[i])) {
+        const items: string[] = []
+        while (i < lines.length && isBullet(lines[i])) {
+          items.push(inline(lines[i].replace(/^\s*-\s+/, '')))
+          i++
+        }
+        out += `<ul style="${EMAIL_LIST_STYLE}">${items.map((t) => `<li style="${EMAIL_LI_STYLE}">${t}</li>`).join('')}</ul>`
+      } else if (isNumbered(lines[i])) {
+        const items: string[] = []
+        while (i < lines.length && isNumbered(lines[i])) {
+          items.push(inline(lines[i].replace(/^\s*\d+\.\s+/, '')))
+          i++
+        }
+        out += `<ol style="${EMAIL_LIST_STYLE}">${items.map((t) => `<li style="${EMAIL_LI_STYLE}">${t}</li>`).join('')}</ol>`
+      } else {
+        const textLines: string[] = []
+        while (i < lines.length && !isBullet(lines[i]) && !isNumbered(lines[i])) {
+          textLines.push(lines[i])
+          i++
+        }
+        const h = textLines.map(inline).join('<br>')
+        if (h.replace(/<br>/g, '').trim()) out += `<p style="${EMAIL_P_STYLE}">${h}</p>`
+      }
+    }
+    return out
+  }
+
   return String(raw || '')
     .split(/\n\s*\n/)
     .filter((p) => p.trim())
-    .map((p) => {
-      const h = p.split(/\r?\n/).map(inline).join('<br>')
-      return h.trim() ? `<p style="margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;">${h}</p>` : ''
-    })
+    .map(renderBlock)
     .filter(Boolean)
     .join('')
 }
