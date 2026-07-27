@@ -210,7 +210,10 @@ ul.list li b{ color:var(--navy); }
 // little short than clip.
 export interface Row { html: string; h: number }
 export interface Atom { html: string; h: number; keepNext?: boolean; section?: boolean; split?: false }
-export interface Split { split: true; rows: Row[]; wrapOpen: string; wrapClose: string; chunkOverhead: number }
+// `minChunk` is the fewest rows a chunk may hold before the block starts on a
+// fresh page (widow protection for text rows = 2). A grid whose "rows" are card
+// pairs sets 1, so a single pair can pack onto the current page.
+export interface Split { split: true; rows: Row[]; wrapOpen: string; wrapClose: string; chunkOverhead: number; minChunk?: number }
 export type Block = Atom | Split
 
 const CONTENT_W = 684 // 816 - 66*2
@@ -282,7 +285,9 @@ export function cardGrid(items: { label: string; text: string }[]): Split {
     const pair = items.slice(i, i + 2)
     rows.push({ html: `<div class="grid2">${pair.map((it, j) => cell(it, i + j)).join('')}</div>`, h: Math.max(...pair.map(cardH)) + 14 })
   }
-  return { split: true, rows, wrapOpen: '', wrapClose: '', chunkOverhead: 6 }
+  // A single card-row (a pair of cards) may pack alone onto the current page — no
+  // widow guard, unlike text lists — so the grid fills instead of jumping whole.
+  return { split: true, rows, wrapOpen: '', wrapClose: '', chunkOverhead: 6, minChunk: 1 }
 }
 
 // Numbered (or ✓) rows — splittable row-by-row.
@@ -500,12 +505,14 @@ export function paginate(blocks: Block[], docTitle: string, startPage: number): 
         let probe = b.chunkOverhead
         while (idx + fit < b.rows.length && used + probe + b.rows[idx + fit].h <= PAGE_BUDGET) { probe += b.rows[idx + fit].h; fit++ }
         const remain = b.rows.length - idx
-        // Don't open a chunk that can't hold ~2 rows (avoids a stranded lone row):
+        const minChunk = b.minChunk ?? 2
+        // Don't open a chunk that can't hold the block's minimum (text lists want
+        // ~2 rows so a lone row isn't stranded; a card grid allows a single pair):
         // start it on a fresh page. The pinned first chunk stays with its heading.
-        if (!(pinned && firstChunk) && cur.length > 0 && fit < Math.min(2, remain)) { flush(); continue }
+        if (!(pinned && firstChunk) && cur.length > 0 && fit < Math.min(minChunk, remain)) { flush(); continue }
         let take = Math.max(fit, 1)
-        // Widow control: never leave exactly one row for the next page.
-        if (remain - take === 1 && take >= 2) take--
+        // Widow control: never leave exactly one row for the next page (text lists).
+        if (minChunk >= 2 && remain - take === 1 && take >= 2) take--
         const chunk = b.rows.slice(idx, idx + take)
         cur.push(b.wrapOpen + chunk.map((r) => r.html).join('') + b.wrapClose)
         used += b.chunkOverhead + chunk.reduce((a, r) => a + r.h, 0)
