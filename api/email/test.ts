@@ -4,7 +4,7 @@ import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { rateLimit } from '../../lib/rateLimit'
 import { loadCoachBrand, linkifyEmailBody, brandedEmailHtml, sendOneOffEmail } from '../../lib/email'
-import { logApiCost } from '../../lib/apiCostLog'
+import { logEvent } from '../../lib/apiCostLog'
 
 // POST /api/email/test — send ONE coach-branded email to a coach-chosen inbox so
 // they can preview a funnel/nurture email exactly as it will land. requireActiveUser.
@@ -99,7 +99,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     })
 
     // Volume telemetry only (email is not token-billed): tool_type 'email_test'.
-    await logApiCost(userId, 'email_test', 'resend', 0, 0)
+    await logEvent(userId, 'email_test', 'resend')
 
     return res.status(200).json({ ok: true, messageId })
   } catch (err) {
