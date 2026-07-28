@@ -41,6 +41,7 @@ import {
 } from '../../lib/microTrainingGenerator'
 import { BEAT_TEACHING } from '../../lib/slideDeckCanonical'
 import { emailBodyHasRawHtml } from '../../lib/email'
+import { sanitizePhrasingDeep } from '../../lib/phrasing'
 
 // POST /api/generate — the unified Micro-Training generator. From ONE validated
 // blueprint plus a few optional recording details, it produces and persists the
@@ -272,6 +273,17 @@ function computeAngleFields(row: Record<string, unknown>): {
 // Attach the computed angle-sync fields to a generation row for a GET response.
 function withAngleFields<T extends Record<string, unknown>>(row: T): T & ReturnType<typeof computeAngleFields> {
   return { ...row, ...computeAngleFields(row) }
+}
+
+// Defensive read-sanitize: rows generated before the em-dash sanitizer (or by any
+// path that missed it) still carry clause em-dashes in the AI-generated content
+// (objections especially). Clean them on READ so every account renders clean
+// without a data backfill — mirrors what bodyFramework does for the framework PDF.
+// Phrasing-only, display-only (never written back). Coach-entered `delivery` and
+// the raw undo `pre_rebuild_snapshot` are preserved verbatim.
+function sanitizeGenRead<T extends Record<string, unknown>>(row: T): T {
+  const clean = sanitizePhrasingDeep(row)
+  return { ...clean, delivery: row.delivery, pre_rebuild_snapshot: row.pre_rebuild_snapshot }
 }
 
 function parsePersonalHook(raw: unknown): PersonalHook | undefined {
@@ -900,7 +912,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (!data) return res.status(404).json({ error: 'Generation not found' })
         // beat_teaching is the static, universal per-beat coaching copy; the
         // frontend renders each slide's note from beat_teaching[slide.sectionName].
-        return res.status(200).json({ ...withAngleFields(data), beat_teaching: BEAT_TEACHING })
+        return res.status(200).json({ ...withAngleFields(sanitizeGenRead(data)), beat_teaching: BEAT_TEACHING })
       } catch (err) {
         console.error('[generate] GET one', err)
         return res.status(500).json({ error: 'Failed to load generation' })
@@ -922,7 +934,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (error) throw error
         // beat_teaching is the static, universal per-beat coaching copy; the
         // frontend renders each slide's note from beat_teaching[slide.sectionName].
-        return res.status(200).json(data ? { ...withAngleFields(data), beat_teaching: BEAT_TEACHING } : null)
+        return res.status(200).json(data ? { ...withAngleFields(sanitizeGenRead(data)), beat_teaching: BEAT_TEACHING } : null)
       } catch (err) {
         console.error('[generate] GET by card_id', err)
         return res.status(500).json({ error: 'Failed to load generation' })
