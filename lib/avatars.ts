@@ -1,36 +1,38 @@
 // Curated persona avatars — a fixed set of pre-rendered, professional, diverse
-// illustrated portraits served as static assets from the API host at
-// /avatars/persona-NN.svg (public/avatars/). These are open-license (CC0)
-// openPeeps illustrations rendered once at build-authoring time; runtime does NOT
-// depend on any avatar-generation library and there is no per-persona image
-// generation, storage, or moderation.
+// portraits served as static assets from the API host at /avatars/<file> (see
+// public/avatars/). These are Avataaars illustrations bundled once as static
+// files; runtime does NOT depend on any avatar-generation library and there is no
+// per-persona image generation, storage, or moderation.
 //
-// The set is split into three gender-presentation buckets so a persona's avatar
-// matches its implied gender instead of being picked at random across all faces
-// (which is why "Sarah" used to resolve to a male-presenting peep). Within the
-// bucket, one avatar is picked deterministically from a stable seed, so the same
-// persona always resolves to the same face and the Audience band + Launch tile
-// stay in sync.
+// The set is split into three gender-presentation buckets (feminine = long hair,
+// no facial hair; masculine = bearded; neutral = short hair, no beard) so a
+// persona's avatar matches its implied gender instead of being picked at random
+// across all faces (which is why "Sarah" used to resolve to a male-presenting
+// face). The bucket for each file is declared in public/avatars/manifest.json —
+// that manifest is the single source of truth, so swapping the art set only means
+// replacing the files + manifest, no code change. Within the bucket, one avatar is
+// picked deterministically from a stable seed, so the same persona always resolves
+// to the same face and the Audience band + Launch tile stay in sync.
+
+import avatarManifest from '../public/avatars/manifest.json'
 
 const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
 
 export type AvatarGender = 'feminine' | 'masculine' | 'neutral'
 
-// Static bucket map over public/avatars/persona-NN.svg. Each file was rendered
-// with an intentional head/facial-hair choice for its bucket (feminine: long/
-// styled hair; masculine: short hair + facial hair; neutral: androgynous textured
-// hair). Keep this map in lockstep with the files if the set is ever regenerated.
-const BUCKETS: Record<AvatarGender, number[]> = {
-  feminine: [1, 2, 3, 4, 5, 6, 7, 8],
-  masculine: [9, 10, 11, 12, 13, 14, 15, 16],
-  neutral: [17, 18, 19, 20, 21, 22, 23, 24],
-}
-// Full set — fallback pool when a bucket is somehow empty (defensive).
-const ALL = [...BUCKETS.feminine, ...BUCKETS.masculine, ...BUCKETS.neutral]
-
 function isAvatarGender(v: unknown): v is AvatarGender {
   return v === 'feminine' || v === 'masculine' || v === 'neutral'
 }
+
+// Buckets built from the manifest (filename -> gender tag). Filenames are sorted
+// so the hash -> index mapping is stable regardless of manifest key order.
+const BUCKETS: Record<AvatarGender, string[]> = { feminine: [], masculine: [], neutral: [] }
+for (const [file, gender] of Object.entries(avatarManifest as Record<string, string>)) {
+  if (isAvatarGender(gender)) BUCKETS[gender].push(file)
+}
+for (const g of Object.keys(BUCKETS) as AvatarGender[]) BUCKETS[g].sort()
+// Full set — fallback pool when a bucket is somehow empty (defensive).
+const ALL = [...BUCKETS.feminine, ...BUCKETS.masculine, ...BUCKETS.neutral].sort()
 
 // Stable, deterministic 32-bit string hash (FNV-1a). Must NOT use Math.random or
 // any per-process state — the same seed has to map to the same avatar across
@@ -45,15 +47,14 @@ function hashSeed(seed: string): number {
   return h >>> 0
 }
 
-// Map a seed to a stable persona-NN.svg filename within the gender bucket. neutral
-// (and any unknown value) uses the neutral bucket; an empty bucket falls back to
-// the full set.
+// Map a seed to a stable avatar filename within the gender bucket. neutral (and
+// any unknown value) uses the neutral bucket; an empty bucket falls back to the
+// full set.
 export function avatarFilenameForSeed(seed: string | null | undefined, gender?: AvatarGender): string {
   const s = (seed || '').trim() || 'default'
-  const pool = (gender && BUCKETS[gender]?.length ? BUCKETS[gender] : BUCKETS.neutral) || ALL
-  const list = pool.length ? pool : ALL
-  const idx = list[hashSeed(s) % list.length]
-  return `persona-${String(idx).padStart(2, '0')}.svg`
+  const bucket = gender && BUCKETS[gender]?.length ? BUCKETS[gender] : BUCKETS.neutral
+  const list = bucket.length ? bucket : ALL
+  return list[hashSeed(s) % list.length]
 }
 
 // Full public URL for the persona avatar chosen for this seed + gender.
