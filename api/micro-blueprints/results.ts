@@ -12,6 +12,7 @@ import {
 } from '../../lib/blueprintEnrichment'
 import { getMtmSessionProgress } from '../../lib/progress'
 import { sanitizePhrasingDeep } from '../../lib/phrasing'
+import { avatarUrlForSeed } from '../../lib/avatars'
 
 // GET /api/micro-blueprints/results — read-only assembly of the member's own
 // Micro-Blueprints output page. requireActiveUser only, no tier gate (a read of
@@ -57,6 +58,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const audience = audienceRow ? stripSessionHistory(audienceRow.content) : null
     const audienceReady = isContentComplete(audienceRow?.content)
+
+    // Persona avatar for the Audience step: one curated illustrated portrait
+    // (public/avatars) chosen deterministically from the persona identity so the
+    // same avatar always gets the same face. Audience is user-level, so seed from
+    // avatar_name (the stable persona name), falling back to userId. The UI reuses
+    // this single avatar_url on both the Audience avatar band and elsewhere.
+    const audienceProfile =
+      audienceReady && audience && typeof audience === 'object'
+        ? {
+            ...(audience as Record<string, unknown>),
+            avatar_url: avatarUrlForSeed(
+              (typeof (audience as Record<string, unknown>).avatar_name === 'string'
+                ? ((audience as Record<string, unknown>).avatar_name as string)
+                : '') || userId
+            ),
+          }
+        : null
 
     const analysis = (transformationRow?.content ?? null) as { confirmed?: boolean } | null
     const transformationReady = analysis?.confirmed === true
@@ -113,7 +131,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // generate GET). Phrasing-only; there is no coach-typed field to preserve here.
     return res.status(200).json(
       sanitizePhrasingDeep({
-        audience: { status: status(audienceReady), profile: audienceReady ? audience : null },
+        audience: { status: status(audienceReady), profile: audienceProfile },
         transformation: { status: status(transformationReady), analysis: transformationReady ? analysis : null },
         framework: { status: status(frameworkReady), framework: frameworkReady ? framework : null },
         blueprints: { status: status(cards.length > 0), items: blueprintItems },
