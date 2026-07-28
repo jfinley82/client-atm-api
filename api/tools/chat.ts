@@ -5,6 +5,7 @@ import { requireCapability } from '../../lib/entitlements'
 import { setCors } from '../../lib/cors'
 import { getSavedOutput, saveOutput } from '../../lib/savedOutputs'
 import { sanitizePhrasingDeep } from '../../lib/phrasing'
+import { genderFromName, AvatarGender } from '../../lib/avatars'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from '../../lib/promptGuidelines'
 import { logApiCost } from '../../lib/apiCostLog'
 
@@ -108,6 +109,15 @@ export function deriveAudienceDisplayFields(raw: Record<string, unknown>): Recor
       : [asString(raw.emotional_state), asString(raw.internal_dialogue)].filter((v): v is string => v !== null)
   const dreamOutcome = asString(raw.dream_outcome)
   const avatarName = asString(raw.avatar_name)
+  // Implied gender of the persona, used to pick a gender-matched avatar. Prefer the
+  // model's own avatar_gender when it emits a valid value; otherwise backfill from
+  // the persona's first name. Unisex/made-up/non-names resolve to 'neutral' — never
+  // guess. Persisted on the profile so reads don't have to re-derive.
+  const rawGender = asString(raw.avatar_gender)?.toLowerCase()
+  const avatarGender: AvatarGender =
+    rawGender === 'feminine' || rawGender === 'masculine' || rawGender === 'neutral'
+      ? rawGender
+      : genderFromName(avatarName || '')
   const problemStatement = asString(raw.problem_statement)
   // camelCase aliases for The Gap card. The model emits these as snake_case
   // (perceived_problem/real_problem) and they always have — but the Gap-card UI
@@ -212,6 +222,9 @@ export function deriveAudienceDisplayFields(raw: Record<string, unknown>): Recor
   if (turnAwayStatements.length > 0) derived.turnAwayStatements = turnAwayStatements
   if (whereToFind.length > 0) derived.whereToFind = whereToFind
   if (avatarName !== null) derived.avatarName = avatarName
+  // Always set — genderFromName defaults to a safe 'neutral', so the profile always
+  // carries a valid avatar_gender for gender-matched avatar selection on read.
+  derived.avatar_gender = avatarGender
   if (problemStatement !== null) derived.problemStatement = problemStatement
   if (perceivedProblem !== null) derived.perceivedProblem = perceivedProblem
   if (realProblem !== null) derived.realProblem = realProblem
@@ -394,6 +407,7 @@ ${STYLE_GUIDELINES}
   "where_to_find_them": ["a specific platform, community, or content type this audience likely spends time in"],
   "sales_objections": ["a specific sales-resistance thought this audience would have, paired with why MTM's process specifically dissolves it", "a second, genuinely distinct entry — different resistance, different resolving detail", "a third distinct entry", "a fourth distinct entry", "a fifth distinct entry"],
   "avatar_name": "an invented persona name for the ideal client, e.g. 'Sarah the Overwhelmed Coach'",
+  "avatar_gender": "the persona's implied gender for avatar selection: 'feminine', 'masculine', or 'neutral' — 'neutral' when the name is unisex, made-up, or not a person's name",
   "problem_statement": "a single punchy distilled sentence combining who this person is and their core problem",
   "connection_summary": "2-3 sentences summing up what this person is going through emotionally and practically as a whole, plus a brief note on how to connect with them — framing context that sits above the pain points and fears",
   "gap_insight": "2-3 sentences naming WHY the gap between perceived_problem and real_problem keeps this person stuck, and why naming that gap — not more tactics — is what actually moves them",
@@ -420,6 +434,7 @@ These are NOT questions to ask the user — never ask about them directly, the s
 - where_to_find_them: specific platforms, communities, or content types this audience likely spends time in, inferred from who_they_are, their_world, and language_they_use.
 - sales_objections: EXACTLY 5 entries, each a single string with two parts joined by " — ": (1) a specific, plausible sales-resistance thought this audience would actually have about buying coaching from THIS person, rooted in their specific story — reasoned from emotional_state, internal_dialogue, perceived_problem, and real_problem, not a generic "it's expensive" objection; (2) a brief clause on why the MTM discovery process specifically dissolves that exact resistance. You may use why_it_failed as supporting context/flavor for why past attempts didn't land, but never templating it verbatim onto every entry — each of the 5 must draw on a DIFFERENT specific detail from the conversation (a different fear, a different phrase, a different past attempt, a different piece of their internal dialogue), so no two entries share the same root cause or trailing explanation. This is a completely different question from why_it_failed/tried_before: it is not "why did their past unrelated purchases fail," it is "why would a prospect specifically resist buying from this person, and what dissolves that."
 - avatar_name: an invented first name plus a short descriptor capturing this audience's core identity or struggle, in the style of "Sarah the Overwhelmed Coach" — a fictional composite representing the audience, not the real name of any client the coach mentioned. Include this as soon as who_they_are is established enough to name a persona — early on, well before the deeper analysis fields.
+- avatar_gender: the persona's implied gender, used only to pick a matching illustrated avatar — exactly one of "feminine", "masculine", or "neutral". Base it on the avatar_name you chose: a clearly feminine first name -> "feminine", a clearly masculine first name -> "masculine". If the name is unisex, invented, or not a personal name at all, return "neutral". Never guess a gender you aren't confident about — "neutral" is always the safe answer. Set it in the same turn you set avatar_name.
 - problem_statement: one punchy sentence — not a paragraph — combining who this person is and their core problem, synthesized from who_they_are and perceived_problem (draw on real_problem too if it sharpens the line). Example: "A coach stuck in the friend zone, giving away expertise for free instead of charging what they're worth." Include this once who_they_are and perceived_problem are both established — early on, same timing as avatar_name.`
     case 'transformation': {
       // Shared tail — the report instructions + <data> schema, identical for

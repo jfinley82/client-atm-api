@@ -12,7 +12,7 @@ import {
 } from '../../lib/blueprintEnrichment'
 import { getMtmSessionProgress } from '../../lib/progress'
 import { sanitizePhrasingDeep } from '../../lib/phrasing'
-import { avatarUrlForSeed, personaSeedFromAudience } from '../../lib/avatars'
+import { avatarUrlForSeed, personaSeedFromAudience, personaGenderFromAudience } from '../../lib/avatars'
 
 // GET /api/micro-blueprints/results — read-only assembly of the member's own
 // Micro-Blueprints output page. requireActiveUser only, no tier gate (a read of
@@ -62,12 +62,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Persona avatar for the Audience step: one curated illustrated portrait
     // (public/avatars) chosen deterministically from the coach's user-level persona
     // identity, so it's the same face the Launch persona tile shows (see
-    // personaSeedFromAudience). Seed from avatar_name, falling back to userId.
+    // personaSeedFromAudience). Seed from avatar_name, falling back to userId. The
+    // avatar is drawn from the gender bucket matching the persona's implied gender
+    // (avatar_gender if the generator set it, else backfilled from the name, else
+    // neutral) so "Sarah" gets a feminine face. avatar_gender is surfaced on the
+    // profile so the value is stable and inspectable; no client change is needed.
+    const audienceGender = personaGenderFromAudience(audience)
     const audienceProfile =
       audienceReady && audience && typeof audience === 'object'
         ? {
             ...(audience as Record<string, unknown>),
-            avatar_url: avatarUrlForSeed(personaSeedFromAudience(audience, userId)),
+            avatar_gender: audienceGender,
+            avatar_url: avatarUrlForSeed(personaSeedFromAudience(audience, userId), audienceGender),
           }
         : null
 
