@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
 import { extractJson, GenerationParseError } from './aiJson'
 import { logApiCost } from './apiCostLog'
+import { sanitizePhrasingDeep } from './phrasing'
 import { SALES_FRAMEWORK_CANONICAL, SALES_SCRIPT_BEATS, OBJECTION_LOOPS, type ObjectionLoop } from './salesFrameworksCanonical'
 import { COPYWRITING_CANONICAL } from './copywritingCanonical'
 import { EMAIL_CANONICAL } from './emailCanonical'
@@ -878,35 +879,42 @@ async function runUnit(
   const system = voiceContext ? `${spec.prompt}\n\n${voiceContext}` : spec.prompt
   const parsed = await callAndParse(userId, system, `${grounding}\n\nGenerate now.`, spec.maxTokens)
 
-  switch (unit) {
-    case 'meta':
-      return {
-        topics: coerceTopics(parsed.topics),
-        chosen_topic: asString(parsed.chosen_topic),
-        chosen_angle: asString(parsed.chosen_angle),
-        subtitle: asString(parsed.subtitle),
-        total_duration: asString(parsed.total_duration),
-        outline: coerceOutline(parsed.outline),
-      }
-    case 'slides':
-      return { slides: coerceSlides(parsed.slides) }
-    case 'workbook':
-      return { workbook: coerceWorkbook(parsed.workbook) }
-    case 'recording_tips':
-      return { recording_tips: coerceRecordingTips(parsed.recording_tips) }
-    case 'warm_invite':
-      return { warm_invite_emails: coerceEmails(parsed.warm_invite_emails) }
-    case 'emails':
-      return { emails: coerceEmails(parsed.emails) }
-    case 'book_a_call':
-      return { book_a_call_emails: coerceEmails(parsed.book_a_call_emails) }
-    case 'sales_script':
-      return { sales_script: coerceSalesScript(parsed.sales_script) }
-    case 'objections':
-      return { objections: coerceObjections(parsed.objections) }
-    case 'angle_previews':
-      return { angle_previews: coerceAnglePreviews(parsed.angle_previews) }
-  }
+  const built = ((): Partial<MicroTraining> => {
+    switch (unit) {
+      case 'meta':
+        return {
+          topics: coerceTopics(parsed.topics),
+          chosen_topic: asString(parsed.chosen_topic),
+          chosen_angle: asString(parsed.chosen_angle),
+          subtitle: asString(parsed.subtitle),
+          total_duration: asString(parsed.total_duration),
+          outline: coerceOutline(parsed.outline),
+        }
+      case 'slides':
+        return { slides: coerceSlides(parsed.slides) }
+      case 'workbook':
+        return { workbook: coerceWorkbook(parsed.workbook) }
+      case 'recording_tips':
+        return { recording_tips: coerceRecordingTips(parsed.recording_tips) }
+      case 'warm_invite':
+        return { warm_invite_emails: coerceEmails(parsed.warm_invite_emails) }
+      case 'emails':
+        return { emails: coerceEmails(parsed.emails) }
+      case 'book_a_call':
+        return { book_a_call_emails: coerceEmails(parsed.book_a_call_emails) }
+      case 'sales_script':
+        return { sales_script: coerceSalesScript(parsed.sales_script) }
+      case 'objections':
+        return { objections: coerceObjections(parsed.objections) }
+      case 'angle_previews':
+        return { angle_previews: coerceAnglePreviews(parsed.angle_previews) }
+    }
+  })()
+
+  // Enforce the style guide's no-em-dash-clause-split rule on ALL generated copy —
+  // the model ignores the injected instruction often enough (objections especially)
+  // to need a deterministic pass. Phrasing-only; compounds/ranges are preserved.
+  return sanitizePhrasingDeep(built)
 }
 
 // ── Hook-shape safety net ───────────────────────────────────────────────────

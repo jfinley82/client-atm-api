@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
 import { extractJson } from './aiJson'
 import { logApiCost } from './apiCostLog'
+import { sanitizePhrasingDeep } from './phrasing'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -103,10 +104,12 @@ Generate the transformation analysis now.`
   const text = textBlock?.text ?? ''
   const parsed = extractJson(text)
 
-  return {
+  // Enforce the no-clause-em-dash style rule on the generated analysis (the model
+  // ignores STYLE_GUIDELINES often enough to need it). Phrasing-only.
+  return sanitizePhrasingDeep({
     zoneOfImpact: typeof parsed.zoneOfImpact === 'string' ? parsed.zoneOfImpact : '',
     intersection: Array.isArray(parsed.intersection) ? parsed.intersection : [],
     uniquelyEquipped: Array.isArray(parsed.uniquelyEquipped) ? parsed.uniquelyEquipped : [],
     selectedProblems: Array.isArray(parsed.selectedProblems) ? parsed.selectedProblems : [],
-  }
+  })
 }
