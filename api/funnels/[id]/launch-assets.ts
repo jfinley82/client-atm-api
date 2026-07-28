@@ -4,24 +4,30 @@ import { requireFunnelBuilder, getOwnedFunnel } from '../../../lib/funnels'
 import { GenerationParseError } from '../../../lib/aiJson'
 import {
   FUNNEL_ASSET_TYPES,
-  WIN_THE_CALL_TYPES,
+  FunnelAssetType,
   isFunnelAssetType,
   isWinTheCall,
+  assetStatus,
   funnelHasBooking,
+  loadFunnelGrounding,
+  deriveInviteEmails,
   generateFunnelAsset,
   listFunnelAssets,
   upsertFunnelAsset,
 } from '../../../lib/funnelLaunchAssets'
 
-// Growth Kit assets for one funnel.
+// Growth Kit assets for one funnel. Response shapes are pinned by the Growth Kit
+// API contract (the single source of truth shared with the frontend) — see
+// lib/funnelLaunchAssets.ts for the per-asset_type `content` contracts.
 //
 // GET  /api/funnels/[id]/launch-assets
-//   Returns every asset type with its generated content (null when not yet
-//   generated) plus the booking gate state, so the tab can render the full grid
-//   — including the locked win-the-call four — in one call.
+//   { gate: { win_the_call_unlocked, reason }, assets: { <asset_type>: { status, generated_at, content } } }
+//   assets is an OBJECT keyed by asset_type (not an array), so the frontend can
+//   address a row directly without scanning.
 //
 // POST /api/funnels/[id]/launch-assets  { asset_type }
-//   Generates (or regenerates) ONE asset type on demand and upserts it.
+//   { asset_type, status: 'ready', generated_at, content }
+//   A locked win-the-call type returns 403 { error: 'no_booking' }.
 //
 // Owner-scoped via requireFunnelBuilder + getOwnedFunnel; the funnel_builder
 // entitlement and the $1,497 checkout already exist, so there is no new auth here.
@@ -37,34 +43,49 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const id = req.query.id as string
   if (!id) return res.status(400).json({ error: 'id required' })
 
-  // subdomain + generation_id are what the generators ground on.
+  // subdomain + generation_id are what the generators and the invite derivation
+  // ground on.
   const funnel = await getOwnedFunnel(userId, id, 'id, user_id, subdomain, generation_id, status')
   if (!funnel) return res.status(404).json({ error: 'Funnel not found' })
 
   if (req.method === 'GET') {
     try {
-      const [rows, hasBooking] = await Promise.all([listFunnelAssets(id), funnelHasBooking(id)])
+      const [rows, unlocked, grounding] = await Promise.all([
+        listFunnelAssets(id),
+        funnelHasBooking(id),
+        // Needed for invite_emails, which is derived on read rather than stored.
+        loadFunnelGrounding(userId, funnel),
+      ])
       const byType = new Map(rows.map((r) => [r.asset_type, r]))
 
-      const assets = FUNNEL_ASSET_TYPES.map((asset_type) => {
-        const row = byType.get(asset_type)
-        const gated = isWinTheCall(asset_type)
-        return {
-          asset_type,
-          // The win-the-call four stay locked until the funnel has a booking.
-          // Already-generated content is still returned if the gate later closes
-          // (a coach who generated then deleted their only lead keeps their work).
-          locked: gated && !hasBooking,
-          gated_on_booking: gated,
-          content: row?.content ?? null,
-          generated_at: row?.generated_at ?? null,
+      const assets: Record<string, { status: string; generated_at: string | null; content: unknown }> = {}
+      for (const asset_type of FUNNEL_ASSET_TYPES) {
+        if (asset_type === 'invite_emails') {
+          // Always present, always current: re-derived from the coach's approved
+          // warm invites on every read, so it cannot drift from what they signed
+          // off on. generated_at is null because nothing was ever generated.
+          assets[asset_type] = {
+            status: assetStatus(asset_type, true, unlocked),
+            generated_at: null,
+            content: deriveInviteEmails(grounding),
+          }
+          continue
         }
-      })
+        const row = byType.get(asset_type)
+        const hasContent = !!row
+        const status = assetStatus(asset_type, hasContent, unlocked)
+        assets[asset_type] = {
+          status,
+          generated_at: row?.generated_at ?? null,
+          // Content already generated stays readable even if the gate later
+          // closes (a coach who loses their only lead keeps their work); a locked
+          // type that was never generated reads null.
+          content: row?.content ?? null,
+        }
+      }
 
       return res.status(200).json({
-        funnel_id: id,
-        has_booking: hasBooking,
-        win_the_call_types: WIN_THE_CALL_TYPES,
+        gate: { win_the_call_unlocked: unlocked, reason: unlocked ? null : 'no_booking' },
         assets,
       })
     } catch (err) {
@@ -78,30 +99,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!isFunnelAssetType(assetType)) {
       return res.status(400).json({ error: 'asset_type required', allowed: FUNNEL_ASSET_TYPES })
     }
+    const type: FunnelAssetType = assetType
 
     // The booking gate. Enforced server-side, not just hidden in the UI — the
     // whole point is to not spend a generation on an asset the coach cannot use.
-    if (isWinTheCall(assetType)) {
-      const hasBooking = await funnelHasBooking(id)
-      if (!hasBooking) {
-        return res.status(409).json({
-          error: 'booking_required',
-          message: 'Generate this once the funnel has at least one booking.',
-          asset_type: assetType,
-        })
-      }
+    if (isWinTheCall(type)) {
+      const unlocked = await funnelHasBooking(id)
+      if (!unlocked) return res.status(403).json({ error: 'no_booking' })
     }
 
     try {
-      const content = await generateFunnelAsset(userId, funnel, assetType)
-      const saved = await upsertFunnelAsset(id, assetType, content)
-      return res.status(200).json({ asset: saved })
+      const content = await generateFunnelAsset(userId, funnel, type)
+
+      // invite_emails is derived on read and deliberately NOT persisted —
+      // storing it would let it go stale against the coach's approved warm
+      // invites, which is the one thing this asset must never do.
+      if (type === 'invite_emails') {
+        return res.status(200).json({
+          asset_type: type,
+          status: 'ready',
+          generated_at: null,
+          content,
+        })
+      }
+
+      const saved = await upsertFunnelAsset(id, type, content)
+      return res.status(200).json({
+        asset_type: type,
+        status: 'ready',
+        generated_at: saved.generated_at,
+        content: saved.content,
+      })
     } catch (err) {
       // A truncated/unparseable model response is a retryable generation failure,
       // not a server fault — same mapping the micro-training generator uses.
       if (err instanceof GenerationParseError) {
-        console.error('[funnels/[id]/launch-assets] generation parse failure', assetType, err)
-        return res.status(502).json({ error: 'generation_truncated', asset_type: assetType })
+        console.error('[funnels/[id]/launch-assets] generation parse failure', type, err)
+        return res.status(502).json({ error: 'generation_truncated', asset_type: type })
       }
       console.error('[funnels/[id]/launch-assets] POST', err)
       return res.status(500).json({ error: 'Failed to generate launch asset' })
