@@ -5,7 +5,7 @@ import { extractJson } from './aiJson'
 import { logApiCost } from './apiCostLog'
 import { sanitizePhrasingDeep } from './phrasing'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
-import { SALES_FRAMEWORK_CANONICAL, OBJECTION_LOOPS } from './salesFrameworksCanonical'
+import { SALES_FRAMEWORK_CANONICAL, SALES_SCRIPT_BEATS, OBJECTION_LOOPS } from './salesFrameworksCanonical'
 
 // ── Growth Kit ───────────────────────────────────────────────────────────────
 // Per-funnel launch assets, generated on demand one asset_type at a time and
@@ -51,25 +51,16 @@ export function isWinTheCall(t: FunnelAssetType): boolean {
 //   locked    — a win-the-call type while the funnel has no booking
 export type FunnelAssetStatus = 'ready' | 'available' | 'locked'
 
-// The 6-Step High-Ticket call framework, per the Growth Kit contract.
+// The call framework's step names + order come VERBATIM from SALES_SCRIPT_BEATS
+// in lib/salesFrameworksCanonical.ts — the single source of truth for the sales
+// method, and the same constant the Build wizard's Script step already runs on.
+// Grounding both surfaces on that one constant makes them agree by construction:
+// a change to the method is a change to that file, with no code change here.
 //
-// ⚠️ These names DIVERGE from SALES_SCRIPT_BEATS in lib/salesFrameworksCanonical.ts,
-// which the Build wizard's sales_script unit already uses and persists into
-// mtm_generations.sales_script. Steps 1-2 agree; 3-6 do not:
-//   canonical : Help and expand / Bridge to agreement / Without a shadow of doubt / The logical next step
-//   contract  : Expose opportunities / Build the bridge / Sell the movement (A→B) / Invite / ask
-// The contract is declared the single source of truth for the Growth Kit, so it
-// wins here — but the two surfaces now describe the same house method with
-// different step names, which is a real inconsistency for a coach who sees both.
-// Flagged for resolution rather than silently reconciled in either direction.
-export const CALL_FLOW_STEPS = [
-  'Confirm intentions',
-  'Measure the gap',
-  'Expose opportunities',
-  'Build the bridge',
-  'Sell the movement (A→B)',
-  'Invite / ask',
-] as const
+// Deliberately NOT redeclared as a local list. An earlier revision hardcoded the
+// older sales-frameworks-canonical.md step names, which silently disagreed with
+// the .ts the Build already used; re-deriving from the constant removes the class
+// of bug rather than just fixing the values.
 
 // Angles for the 5-day social run-up, per contract.
 export const SOCIAL_ANGLES = ['problem', 'story', 'authority', 'proof', 'cta'] as const
@@ -233,7 +224,7 @@ ${SALES_FRAMEWORK_CANONICAL}
   "steps": [
     {
       "n": 1,
-      "name": "Confirm intentions",
+      "name": "${SALES_SCRIPT_BEATS[0]}",
       "goal": "what this step must accomplish before moving on, one sentence",
       "cues": ["a question or move the coach uses here", "a second"]
     }
@@ -241,7 +232,7 @@ ${SALES_FRAMEWORK_CANONICAL}
 }
 
 Rules:
-- EXACTLY 6 steps, n 1-6 in order, with names EXACTLY: ${JSON.stringify(CALL_FLOW_STEPS)}.
+- EXACTLY ${SALES_SCRIPT_BEATS.length} steps, n 1-${SALES_SCRIPT_BEATS.length} in order, with names EXACTLY: ${JSON.stringify(SALES_SCRIPT_BEATS)}.
 - cues: 2-4 per step, each a concrete thing the coach says or watches for at that moment — grounded in this offer and this audience, not generic sales advice.
 - Diagnosis-first call. No pressure tactics, no manufactured scarcity.
 ${SHARED_TAIL}`
@@ -252,12 +243,12 @@ ${SALES_FRAMEWORK_CANONICAL}
 
 {
   "steps": [
-    { "n": 1, "name": "Confirm intentions", "script": "the words the coach says at this step" }
+    { "n": 1, "name": "${SALES_SCRIPT_BEATS[0]}", "script": "the words the coach says at this step" }
   ]
 }
 
 Rules:
-- EXACTLY 6 steps, n 1-6 in order, with names EXACTLY: ${JSON.stringify(CALL_FLOW_STEPS)}.
+- EXACTLY ${SALES_SCRIPT_BEATS.length} steps, n 1-${SALES_SCRIPT_BEATS.length} in order, with names EXACTLY: ${JSON.stringify(SALES_SCRIPT_BEATS)}.
 - script is spoken language the coach can say as-is — the audience's vocabulary, this coach's voice, this offer's specifics. Not stage directions and not a description of what to cover.
 - Diagnosis-first. The ask at step 6 is direct and calm, never a pressure close.
 ${SHARED_TAIL}`
