@@ -287,12 +287,17 @@ function sanitizeGenRead<T extends Record<string, unknown>>(row: T): T {
   return { ...clean, delivery: row.delivery, pre_rebuild_snapshot: row.pre_rebuild_snapshot }
 }
 
-// Persona avatar for the Launch persona tile ("Who it's for"): one curated
-// illustrated portrait from public/avatars, chosen from the coach's user-level
-// persona identity (see personaSeedFromAudience) so it matches the same face
-// shown on the Audience step. Read-only, display-only — never persisted.
-function withAvatar<T extends Record<string, unknown>>(row: T, seed: string): T & { avatar_url: string } {
-  return { ...row, avatar_url: avatarUrlForSeed(seed) }
+// Persona for the Launch persona tile ("Who it's for"): the coach's user-level
+// persona name (avatar_name) plus one curated illustrated portrait from
+// public/avatars, chosen from that same identity (see personaSeedFromAudience) so
+// the face matches the Audience step. Both are read-only, display-only — never
+// persisted. avatar_name is '' when the coach has no named Audience persona yet.
+function withAvatar<T extends Record<string, unknown>>(
+  row: T,
+  seed: string,
+  name: string
+): T & { avatar_url: string; avatar_name: string } {
+  return { ...row, avatar_url: avatarUrlForSeed(seed), avatar_name: name }
 }
 
 function parsePersonalHook(raw: unknown): PersonalHook | undefined {
@@ -907,15 +912,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const rawId = req.query && req.query.id
     const id = Array.isArray(rawId) ? rawId[0] : rawId
 
-    // Persona avatar seed is user-level (one Audience persona per coach), so
-    // resolve it once from the coach's saved Audience — the same face the Audience
-    // step shows. Best-effort: a missing/failed audience read falls back to userId.
+    // Persona is user-level (one Audience persona per coach), so resolve it once
+    // from the coach's saved Audience — the same name + face the Audience step
+    // shows. Best-effort: a missing/failed audience read falls back to userId for
+    // the seed and an empty persona name.
     let personaSeed = userId
+    let personaName = ''
     try {
       const audienceRow = await getSavedOutput(userId, 'audience')
       personaSeed = personaSeedFromAudience(audienceRow?.content, userId)
+      const content = audienceRow?.content as Record<string, unknown> | null | undefined
+      personaName =
+        content && typeof content.avatar_name === 'string' ? content.avatar_name.trim() : ''
     } catch {
-      /* keep userId fallback */
+      /* keep userId seed + empty name fallback */
     }
 
     // GET with id — return a single generation (must belong to the user)
@@ -932,7 +942,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (!data) return res.status(404).json({ error: 'Generation not found' })
         // beat_teaching is the static, universal per-beat coaching copy; the
         // frontend renders each slide's note from beat_teaching[slide.sectionName].
-        return res.status(200).json({ ...withAvatar(withAngleFields(sanitizeGenRead(data)), personaSeed), beat_teaching: BEAT_TEACHING })
+        return res.status(200).json({ ...withAvatar(withAngleFields(sanitizeGenRead(data)), personaSeed, personaName), beat_teaching: BEAT_TEACHING })
       } catch (err) {
         console.error('[generate] GET one', err)
         return res.status(500).json({ error: 'Failed to load generation' })
@@ -954,7 +964,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (error) throw error
         // beat_teaching is the static, universal per-beat coaching copy; the
         // frontend renders each slide's note from beat_teaching[slide.sectionName].
-        return res.status(200).json(data ? { ...withAvatar(withAngleFields(sanitizeGenRead(data)), personaSeed), beat_teaching: BEAT_TEACHING } : null)
+        return res.status(200).json(data ? { ...withAvatar(withAngleFields(sanitizeGenRead(data)), personaSeed, personaName), beat_teaching: BEAT_TEACHING } : null)
       } catch (err) {
         console.error('[generate] GET by card_id', err)
         return res.status(500).json({ error: 'Failed to load generation' })
