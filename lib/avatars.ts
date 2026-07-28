@@ -38,3 +38,15 @@ export function avatarFilenameForSeed(seed: string | null | undefined): string {
 export function avatarUrlForSeed(seed: string | null | undefined): string {
   return `${API_URL}/avatars/${avatarFilenameForSeed(seed)}`
 }
+
+// The persona is user-level: one Audience avatar (`avatar_name`) per coach, shown
+// identically on the Audience step and the Launch persona tile (and every Launch
+// library card, which all target that same persona). So the avatar seed is the
+// persona identity, NOT the per-card id — seeding by card_id would give one coach's
+// single persona a different face on every micro-training. Falls back to userId so
+// the face is still stable before a persona has been named.
+export function personaSeedFromAudience(audienceContent: unknown, userId: string): string {
+  const c = audienceContent && typeof audienceContent === 'object' ? (audienceContent as Record<string, unknown>) : null
+  const name = c && typeof c.avatar_name === 'string' ? c.avatar_name.trim() : ''
+  return name || userId
+}
