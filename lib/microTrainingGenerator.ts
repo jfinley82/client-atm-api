@@ -439,9 +439,9 @@ ${EMAIL_CANONICAL}
 
 {
   "warm_invite_emails": [
-    { "email_number": 1, "send_timing": "day 1 — announce the training", "subject": "subject line", "body": "lead with the reader's problem in 'you' language, tease the training's payoff, invite them to register. End with the opt-in CTA using [REGISTER_LINK]." },
-    { "email_number": 2, "send_timing": "day 3 — the specific result", "subject": "subject line", "body": "go deeper on the transformation the training opens the door to and who it is for, in 'you' language. End with [REGISTER_LINK]." },
-    { "email_number": 3, "send_timing": "day 5 — last call to register", "subject": "subject line", "body": "one clear, honest reason to register and watch now. End with [REGISTER_LINK]." }
+    { "email_number": 1, "send_timing": "day 1, announce the training", "subject": "subject line", "body": "lead with the reader's problem in 'you' language, tease the training's payoff, invite them to register. End with the opt-in CTA using [REGISTER_LINK]." },
+    { "email_number": 2, "send_timing": "day 3, the specific result", "subject": "subject line", "body": "go deeper on the transformation the training opens the door to and who it is for, in 'you' language. End with [REGISTER_LINK]." },
+    { "email_number": 3, "send_timing": "day 5, last call to register", "subject": "subject line", "body": "one clear, honest reason to register and watch now. End with [REGISTER_LINK]." }
   ]
 }
 
