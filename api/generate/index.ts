@@ -288,17 +288,20 @@ function sanitizeGenRead<T extends Record<string, unknown>>(row: T): T {
 }
 
 // Persona for the Launch persona tile ("Who it's for"): the coach's user-level
-// persona name (avatar_name) plus one curated illustrated portrait from
-// public/avatars, chosen from that same identity (see personaSeedFromAudience) so
-// the face matches the Audience step. Both are read-only, display-only — never
-// persisted. avatar_name is '' when the coach has no named Audience persona yet.
+// persona name (avatar_name), its implied gender (avatar_gender), and one curated
+// portrait from public/avatars chosen from that same identity (see
+// personaSeedFromAudience) so the face matches the Audience step. All read-only,
+// display-only — never persisted. avatar_name is '' and avatar_gender is 'neutral'
+// (the selection default) when the coach has no resolved Audience persona yet.
+// avatar_gender mirrors what /api/micro-blueprints/results exposes so the two reads
+// are consistent — the tile still selects the avatar server-side via avatar_url.
 function withAvatar<T extends Record<string, unknown>>(
   row: T,
   seed: string,
   name: string,
   gender: AvatarGender
-): T & { avatar_url: string; avatar_name: string } {
-  return { ...row, avatar_url: avatarUrlForSeed(seed, gender), avatar_name: name }
+): T & { avatar_url: string; avatar_name: string; avatar_gender: AvatarGender } {
+  return { ...row, avatar_url: avatarUrlForSeed(seed, gender), avatar_name: name, avatar_gender: gender }
 }
 
 function parsePersonalHook(raw: unknown): PersonalHook | undefined {
