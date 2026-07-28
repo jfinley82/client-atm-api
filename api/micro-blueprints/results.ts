@@ -11,6 +11,7 @@ import {
   BlueprintCardRow,
 } from '../../lib/blueprintEnrichment'
 import { getMtmSessionProgress } from '../../lib/progress'
+import { sanitizePhrasingDeep } from '../../lib/phrasing'
 
 // GET /api/micro-blueprints/results — read-only assembly of the member's own
 // Micro-Blueprints output page. requireActiveUser only, no tier gate (a read of
@@ -105,17 +106,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const status = (ready: boolean): SectionStatus => (ready ? 'ready' : 'none')
 
-    return res.status(200).json({
-      audience: { status: status(audienceReady), profile: audienceReady ? audience : null },
-      transformation: { status: status(transformationReady), analysis: transformationReady ? analysis : null },
-      framework: { status: status(frameworkReady), framework: frameworkReady ? framework : null },
-      blueprints: { status: status(cards.length > 0), items: blueprintItems },
-      core_offers: { status: status(coreOffersReady), core_offers: coreOffersReady ? coreOffers : null },
-      program: { status: status(programReady), program: programReady ? program : null },
-      runner_ups: { status: status(!!matcher), items: runnerUps },
-      // The 5-step model (audience, transformation, matcher, build, launch).
-      progress: sessions,
-    })
+    // Defensive read-sanitize: existing audience/transformation/framework/offers/
+    // program/blueprint content generated before the em-dash sanitizer still
+    // carries clause em-dashes; clean the whole payload on read so this page
+    // renders clean without a data backfill (same pattern as bodyFramework and the
+    // generate GET). Phrasing-only; there is no coach-typed field to preserve here.
+    return res.status(200).json(
+      sanitizePhrasingDeep({
+        audience: { status: status(audienceReady), profile: audienceReady ? audience : null },
+        transformation: { status: status(transformationReady), analysis: transformationReady ? analysis : null },
+        framework: { status: status(frameworkReady), framework: frameworkReady ? framework : null },
+        blueprints: { status: status(cards.length > 0), items: blueprintItems },
+        core_offers: { status: status(coreOffersReady), core_offers: coreOffersReady ? coreOffers : null },
+        program: { status: status(programReady), program: programReady ? program : null },
+        runner_ups: { status: status(!!matcher), items: runnerUps },
+        // The 5-step model (audience, transformation, matcher, build, launch).
+        progress: sessions,
+      })
+    )
   } catch (err) {
     console.error('[micro-blueprints/results] GET', err)
     return res.status(500).json({ error: 'Failed to load results' })
