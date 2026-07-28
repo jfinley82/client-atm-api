@@ -12,7 +12,7 @@ import {
 } from '../../lib/blueprintEnrichment'
 import { getMtmSessionProgress } from '../../lib/progress'
 import { sanitizePhrasingDeep } from '../../lib/phrasing'
-import { avatarUrlForSeed } from '../../lib/avatars'
+import { avatarUrlForSeed, personaSeedFromAudience } from '../../lib/avatars'
 
 // GET /api/micro-blueprints/results — read-only assembly of the member's own
 // Micro-Blueprints output page. requireActiveUser only, no tier gate (a read of
@@ -60,19 +60,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const audienceReady = isContentComplete(audienceRow?.content)
 
     // Persona avatar for the Audience step: one curated illustrated portrait
-    // (public/avatars) chosen deterministically from the persona identity so the
-    // same avatar always gets the same face. Audience is user-level, so seed from
-    // avatar_name (the stable persona name), falling back to userId. The UI reuses
-    // this single avatar_url on both the Audience avatar band and elsewhere.
+    // (public/avatars) chosen deterministically from the coach's user-level persona
+    // identity, so it's the same face the Launch persona tile shows (see
+    // personaSeedFromAudience). Seed from avatar_name, falling back to userId.
     const audienceProfile =
       audienceReady && audience && typeof audience === 'object'
         ? {
             ...(audience as Record<string, unknown>),
-            avatar_url: avatarUrlForSeed(
-              (typeof (audience as Record<string, unknown>).avatar_name === 'string'
-                ? ((audience as Record<string, unknown>).avatar_name as string)
-                : '') || userId
-            ),
+            avatar_url: avatarUrlForSeed(personaSeedFromAudience(audience, userId)),
           }
         : null
 

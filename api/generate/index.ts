@@ -42,7 +42,7 @@ import {
 import { BEAT_TEACHING } from '../../lib/slideDeckCanonical'
 import { emailBodyHasRawHtml } from '../../lib/email'
 import { sanitizePhrasingDeep } from '../../lib/phrasing'
-import { avatarUrlForSeed } from '../../lib/avatars'
+import { avatarUrlForSeed, personaSeedFromAudience } from '../../lib/avatars'
 
 // POST /api/generate — the unified Micro-Training generator. From ONE validated
 // blueprint plus a few optional recording details, it produces and persists the
@@ -287,11 +287,11 @@ function sanitizeGenRead<T extends Record<string, unknown>>(row: T): T {
   return { ...clean, delivery: row.delivery, pre_rebuild_snapshot: row.pre_rebuild_snapshot }
 }
 
-// Persona avatar for the Launch persona tile: one curated illustrated portrait
-// chosen deterministically from the card_id (stable per micro-training, per the
-// avatar set in public/avatars). Read-only, display-only — never persisted.
-function withAvatar<T extends Record<string, unknown>>(row: T): T & { avatar_url: string } {
-  const seed = typeof row.card_id === 'string' ? row.card_id : ''
+// Persona avatar for the Launch persona tile ("Who it's for"): one curated
+// illustrated portrait from public/avatars, chosen from the coach's user-level
+// persona identity (see personaSeedFromAudience) so it matches the same face
+// shown on the Audience step. Read-only, display-only — never persisted.
+function withAvatar<T extends Record<string, unknown>>(row: T, seed: string): T & { avatar_url: string } {
   return { ...row, avatar_url: avatarUrlForSeed(seed) }
 }
 
@@ -907,6 +907,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const rawId = req.query && req.query.id
     const id = Array.isArray(rawId) ? rawId[0] : rawId
 
+    // Persona avatar seed is user-level (one Audience persona per coach), so
+    // resolve it once from the coach's saved Audience — the same face the Audience
+    // step shows. Best-effort: a missing/failed audience read falls back to userId.
+    let personaSeed = userId
+    try {
+      const audienceRow = await getSavedOutput(userId, 'audience')
+      personaSeed = personaSeedFromAudience(audienceRow?.content, userId)
+    } catch {
+      /* keep userId fallback */
+    }
+
     // GET with id — return a single generation (must belong to the user)
     if (id && typeof id === 'string') {
       try {
@@ -921,7 +932,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (!data) return res.status(404).json({ error: 'Generation not found' })
         // beat_teaching is the static, universal per-beat coaching copy; the
         // frontend renders each slide's note from beat_teaching[slide.sectionName].
-        return res.status(200).json({ ...withAvatar(withAngleFields(sanitizeGenRead(data))), beat_teaching: BEAT_TEACHING })
+        return res.status(200).json({ ...withAvatar(withAngleFields(sanitizeGenRead(data)), personaSeed), beat_teaching: BEAT_TEACHING })
       } catch (err) {
         console.error('[generate] GET one', err)
         return res.status(500).json({ error: 'Failed to load generation' })
@@ -943,7 +954,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (error) throw error
         // beat_teaching is the static, universal per-beat coaching copy; the
         // frontend renders each slide's note from beat_teaching[slide.sectionName].
-        return res.status(200).json(data ? { ...withAvatar(withAngleFields(sanitizeGenRead(data))), beat_teaching: BEAT_TEACHING } : null)
+        return res.status(200).json(data ? { ...withAvatar(withAngleFields(sanitizeGenRead(data)), personaSeed), beat_teaching: BEAT_TEACHING } : null)
       } catch (err) {
         console.error('[generate] GET by card_id', err)
         return res.status(500).json({ error: 'Failed to load generation' })
