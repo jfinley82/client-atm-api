@@ -812,9 +812,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         sessionCompleted = priorCompleted === true
       }
       // Enforce the no-clause-em-dash style rule in code (the model sometimes
-      // ignores STYLE_GUIDELINES). Sanitize the audience content object only —
-      // the transcript is left verbatim. Phrasing-only, never changes meaning.
-      const contentToSave = saveToolType === 'audience' ? sanitizePhrasingDeep(base) : base
+      // ignores STYLE_GUIDELINES) across every conversational generator's saved
+      // content — audience, transformation, framework, etc. The transcript
+      // (session_history) is added below and left verbatim. Phrasing-only, never
+      // changes meaning; compounds/ranges/URLs are preserved.
+      const contentToSave = sanitizePhrasingDeep(base)
       await saveOutput(userId, saveToolType, { ...contentToSave, completed: sessionCompleted, session_history: sessionHistoryToSave })
     } catch (saveError) {
       console.error('[tools/chat] save', saveError)
