@@ -52,6 +52,34 @@ export function computeCostUsd(model: string, inputTokens: number, outputTokens:
   return Math.round(cost * 1_000_000) / 1_000_000
 }
 
+// Prompt-caching multipliers on the BASE INPUT rate (Anthropic's published
+// model): writing a 5m cache entry costs 1.25x input, a 1h entry 2x, and reading
+// any entry 0.1x. The 10x read discount is the whole point of caching — a cached
+// prefix that would cost $3/MTok is billed at $0.30/MTok on every later call.
+const CACHE_WRITE_5M_MULTIPLIER = 1.25
+const CACHE_WRITE_1H_MULTIPLIER = 2
+const CACHE_READ_MULTIPLIER = 0.1
+
+// Cost of the cache-attributed tokens. These are billed SEPARATELY from
+// input_tokens — Anthropic reports cache_creation/cache_read outside of
+// input_tokens, so this is added to (never substituted for) computeCostUsd.
+export function computeCacheCostUsd(
+  model: string,
+  cacheCreationTokens: number,
+  cacheReadTokens: number,
+  at: Date = new Date(),
+  writeMultiplier: number = CACHE_WRITE_5M_MULTIPLIER
+): number {
+  const pricing = resolvePricing(model, at)
+  if (!pricing) return 0
+  const cost =
+    (cacheCreationTokens / 1_000_000) * pricing.inputPerMTok * writeMultiplier +
+    (cacheReadTokens / 1_000_000) * pricing.inputPerMTok * CACHE_READ_MULTIPLIER
+  return Math.round(cost * 1_000_000) / 1_000_000
+}
+
+export const CACHE_WRITE_MULTIPLIERS = { '5m': CACHE_WRITE_5M_MULTIPLIER, '1h': CACHE_WRITE_1H_MULTIPLIER }
+
 // Best-effort, non-blocking telemetry: a failure to log cost must never break
 // the actual user-facing generation call it's measuring. Errors are logged,
 // never thrown. Called immediately after the Anthropic response is received
@@ -63,16 +91,28 @@ export async function logApiCost(
   toolType: string,
   model: string,
   inputTokens: number,
-  outputTokens: number
+  outputTokens: number,
+  // Prompt-cache attribution, straight off the response's usage object. Optional
+  // so the many call sites that don't cache stay unchanged; omitted => zeros,
+  // which is exactly what an uncached call reports.
+  cache?: { creation?: number | null; read?: number | null }
 ): Promise<void> {
   try {
-    const cost_usd = computeCostUsd(model, inputTokens, outputTokens)
+    const cacheCreation = cache?.creation ?? 0
+    const cacheRead = cache?.read ?? 0
+    // Cache tokens are billed on top of input_tokens (Anthropic reports them as
+    // separate buckets), so the two costs are summed, not swapped.
+    const cost_usd =
+      computeCostUsd(model, inputTokens, outputTokens) +
+      computeCacheCostUsd(model, cacheCreation, cacheRead)
     const { error } = await supabase.from('api_cost_log').insert({
       user_id: userId,
       tool_type: toolType,
       model,
       input_tokens: inputTokens,
       output_tokens: outputTokens,
+      cache_creation_input_tokens: cacheCreation,
+      cache_read_input_tokens: cacheRead,
       cost_usd,
     })
     if (error) console.error('[apiCostLog] insert failed', error)

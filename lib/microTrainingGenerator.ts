@@ -1,4 +1,3 @@
-import Anthropic from '@anthropic-ai/sdk'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
 import { extractJson, GenerationParseError } from './aiJson'
 import { logApiCost } from './apiCostLog'
@@ -7,8 +6,10 @@ import { SALES_FRAMEWORK_CANONICAL, SALES_SCRIPT_BEATS, OBJECTION_LOOPS, type Ob
 import { COPYWRITING_CANONICAL } from './copywritingCanonical'
 import { EMAIL_CANONICAL } from './emailCanonical'
 import { SLIDES_CANONICAL } from './slideDeckCanonical'
+import { buildSystem, buildUserContent, readCacheUsage, createCachingClient } from './promptCache'
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+// Caching-configured client (carries the extended-cache-ttl beta header).
+const anthropic = createCachingClient()
 
 // ── Unified Micro-Training generator ────────────────────────────────────────
 // Produces the full Step 4 (Build) / Step 5 (Launch) asset set for ONE
@@ -228,7 +229,23 @@ const asStringArray = (v: unknown): string[] =>
 // The identical block every unit call receives. The framework phases are the
 // recorded teaching arc / slide sectionNames; the optional presenter name + CTA
 // are the only delivery details.
-function buildGrounding(inputs: GeneratorInputs): string {
+// The generation grounding, split at the prompt-cache breakpoint.
+//   coachContext — user-level intelligence (audience / transformation / framework),
+//                  identical across every asset and every build for this coach, so
+//                  it carries the 5m cache breakpoint.
+//   tail         — everything per-training (blueprint card, authorship, CTA,
+//                  recording details, chosen angle). Never cached.
+// `coachContext + tail` is exactly the string this used to return.
+export type Grounding = { coachContext: string; tail: string }
+
+// Append per-call text to the tail, never the cached prefix. Every one of these
+// helpers MUST append to `tail` — appending to coachContext would change the
+// cached block per call and the cache would never hit.
+function appendTail(g: Grounding, extra: string): Grounding {
+  return { coachContext: g.coachContext, tail: `${g.tail}${extra}` }
+}
+
+function buildGrounding(inputs: GeneratorInputs): Grounding {
   const d = inputs.delivery
   const presenter = d.presenter_name && d.presenter_name.trim().length > 0 ? d.presenter_name.trim() : '(the coach)'
   const ctaLine = d.soft_cta && d.soft_cta.trim().length > 0 ? d.soft_cta.trim() : '(none provided — write a soft, teaching-first CTA grounded in the blueprint suggested_offer)'
@@ -267,9 +284,18 @@ function buildGrounding(inputs: GeneratorInputs): string {
 - book_call variant → end with the token [BOOK_A_CALL_LINK] (resolves to ${callUrl}).
 - sell_program variant → end with the token [OFFER_LINK] (resolves to ${sellUrl}).`
 
-  return `AUDIENCE INTELLIGENCE: ${JSON.stringify(inputs.audience)}
+  // Split at the per-coach / per-call boundary so the first half can carry a cache
+  // breakpoint (see lib/promptCache.ts). `coachContext` is the user-level
+  // intelligence reused by every asset and every build for this coach;
+  // `tail` is everything that varies per training. Concatenating the two
+  // reproduces the previous single string byte-for-byte — the tail carries the
+  // leading newline that used to join them — so the prompt the model sees is
+  // unchanged and only the caching behaviour differs.
+  const coachContext = `AUDIENCE INTELLIGENCE: ${JSON.stringify(inputs.audience)}
 TRANSFORMATION DATA: ${JSON.stringify(inputs.transformation)}
-RESULTS FRAMEWORK (the recorded teaching arc — use these phase names in order): ${JSON.stringify(inputs.framework)}
+RESULTS FRAMEWORK (the recorded teaching arc — use these phase names in order): ${JSON.stringify(inputs.framework)}`
+
+  const tail = `
 BLUEPRINT (the ONE problem/solution this training teaches):
 - card_name: ${JSON.stringify(inputs.card.card_name)}
 - problem_text: ${JSON.stringify(inputs.card.problem_text)}
@@ -285,6 +311,8 @@ ${bothCtaBlock}
 RECORDING DETAILS:
 - presenter name (use when signing / referring to the coach): ${JSON.stringify(presenter)}
 - coach's soft CTA line: ${ctaLine}`
+
+  return { coachContext, tail }
 }
 
 // Shared header + guardrails appended to every unit's system prompt.
@@ -828,20 +856,29 @@ function coerceCuriosityBullets(v: unknown): string[] {
 // One Anthropic call for a unit: logs cost and returns its text + whether the
 // model stopped at max_tokens (a genuine truncation, distinct from control-char
 // parse issues which extractJson repairs).
+// Prompt caching is applied here, at the single chokepoint every unit call goes
+// through, so all units inherit the same breakpoint layout (see lib/promptCache.ts):
+//   system[0] = the unit's stable prompt         -> 1h breakpoint
+//   user[0]   = the coach's reused context       -> 5m breakpoint
+//   user[1]   = the per-training tail + the ask  -> uncached
+// The concatenated prompt is byte-identical to the previous single-string form,
+// so this changes only what the API reuses, never what the model reads.
 async function callUnitOnce(
   userId: string,
-  system: string,
-  userMessage: string,
+  preamble: string,
+  voiceContext: string | undefined,
+  grounding: Grounding,
   maxTokens: number
 ): Promise<{ text: string; truncated: boolean }> {
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-5',
     max_tokens: maxTokens,
     thinking: { type: 'disabled' },
-    system,
-    messages: [{ role: 'user', content: userMessage }],
+    system: buildSystem(preamble, voiceContext),
+    messages: [{ role: 'user', content: buildUserContent(grounding.coachContext, grounding.tail) }],
   })
-  await logApiCost(userId, 'generate', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens)
+  const cache = readCacheUsage(message.usage)
+  await logApiCost(userId, 'generate', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens, cache)
   const textBlock = message.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined
   return { text: textBlock?.text ?? '', truncated: message.stop_reason === 'max_tokens' }
 }
@@ -850,8 +887,14 @@ async function callUnitOnce(
 // max_tokens headroom) when the first attempt is truncated (stop_reason
 // max_tokens) or won't parse. A still-bad retry throws GenerationParseError,
 // which the endpoint maps to 502 generation_truncated.
-async function callAndParse(userId: string, system: string, userMessage: string, maxTokens: number): Promise<any> {
-  const first = await callUnitOnce(userId, system, userMessage, maxTokens)
+async function callAndParse(
+  userId: string,
+  preamble: string,
+  voiceContext: string | undefined,
+  grounding: Grounding,
+  maxTokens: number
+): Promise<any> {
+  const first = await callUnitOnce(userId, preamble, voiceContext, grounding, maxTokens)
   if (!first.truncated) {
     try {
       return extractJson(first.text)
@@ -861,7 +904,9 @@ async function callAndParse(userId: string, system: string, userMessage: string,
     }
   }
   const retryTokens = Math.min(16000, Math.round(maxTokens * 1.6))
-  const second = await callUnitOnce(userId, system, userMessage, retryTokens)
+  // The retry reuses the same prefix, so it reads from the cache the first
+  // attempt just wrote rather than paying full price for the same input twice.
+  const second = await callUnitOnce(userId, preamble, voiceContext, grounding, retryTokens)
   return extractJson(second.text)
 }
 
@@ -872,12 +917,20 @@ async function callAndParse(userId: string, system: string, userMessage: string,
 async function runUnit(
   userId: string,
   unit: AssetUnit,
-  grounding: string,
+  grounding: Grounding,
   voiceContext?: string
 ): Promise<Partial<MicroTraining>> {
   const spec = UNIT_SPECS[unit]
-  const system = voiceContext ? `${spec.prompt}\n\n${voiceContext}` : spec.prompt
-  const parsed = await callAndParse(userId, system, `${grounding}\n\nGenerate now.`, spec.maxTokens)
+  // spec.prompt interpolates only module-level constants, so it is the same bytes
+  // on every call for every coach — the stable prefix the 1h breakpoint caches.
+  // The ask stays on the uncached tail, preserving the exact previous message text.
+  const parsed = await callAndParse(
+    userId,
+    spec.prompt,
+    voiceContext,
+    appendTail(grounding, '\n\nGenerate now.'),
+    spec.maxTokens
+  )
 
   const built = ((): Partial<MicroTraining> => {
     switch (unit) {
@@ -975,7 +1028,9 @@ ${JSON.stringify(offenders.map((o) => ({ field: o.label, text: o.value })))}`
 
   let repaired: Record<string, string> = {}
   try {
-    const parsed = await callAndParse(userId, system, userMessage, 1500)
+    // No separable per-coach block here (the message is just the offending lines),
+    // so only the constant system prompt takes a breakpoint.
+    const parsed = await callAndParse(userId, system, undefined, { coachContext: '', tail: userMessage }, 1500)
     const arr = Array.isArray(parsed.fields) ? parsed.fields : []
     for (const r of arr) {
       const o = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>
@@ -1115,8 +1170,11 @@ export async function generateMicroTraining(
   // regenerated topic list.
   const pinnedTitle = pinned?.chosen_topic?.trim() ? pinned.chosen_topic : ''
   const metaGrounding = pinnedTitle
-    ? `${grounding}
+    ? appendTail(
+        grounding,
+        `
 The training title is fixed to: ${JSON.stringify(pinnedTitle)}. Return chosen_topic exactly as this title and emit chosen_angle as the hook this title opens from.`
+      )
     : grounding
 
   const metaPart = await runUnit(userId, 'meta', metaGrounding, inputs.voiceContext)
@@ -1198,9 +1256,9 @@ export async function regenerateAsset(
   return runUnit(userId, unit, withAngle(buildGrounding(inputs), chosenTopic, chosenAngle), inputs.voiceContext)
 }
 
-function withTitle(grounding: string, chosenTopic: string): string {
+function withTitle(grounding: Grounding, chosenTopic: string): Grounding {
   return chosenTopic.trim().length > 0
-    ? `${grounding}\nCURRENT TRAINING TITLE (align this asset to it): ${JSON.stringify(chosenTopic)}`
+    ? appendTail(grounding, `\nCURRENT TRAINING TITLE (align this asset to it): ${JSON.stringify(chosenTopic)}`)
     : grounding
 }
 
@@ -1219,22 +1277,22 @@ export function resolveAngle(topics: MtTopic[], chosenTopic: string): string {
 // stay inside this hook rather than re-framing the blueprint. The blueprint
 // supplies the problem/solution content; the angle is the fixed frame. Replaces
 // withTitle everywhere an asset should stay on the coach's chosen angle.
-function withAngle(grounding: string, chosenTopic: string, angleText: string): string {
+function withAngle(grounding: Grounding, chosenTopic: string, angleText: string): Grounding {
   const title = chosenTopic.trim()
   const hook = angleText.trim()
   if (!title && !hook) return grounding
-  return `${grounding}
+  return appendTail(grounding, `
 TRAINING ANGLE (the fixed hook every asset opens from and stays inside — do not reframe the blueprint on your own):
 - Title: ${title}
 - Hook: ${hook}
-The blueprint supplies the problem/solution content; the angle is the fixed frame you view it through. Open from this hook and keep the whole training on it.`
+The blueprint supplies the problem/solution content; the angle is the fixed frame you view it through. Open from this hook and keep the whole training on it.`)
 }
 
 // Appends the candidate angle options to the grounding for the angle_previews
 // unit. The previews are one-per-option, so the unit needs the exact options.
-function withTopics(grounding: string, topics: MtTopic[]): string {
-  return `${grounding}
-ANGLE OPTIONS (produce one light preview per option, in this order, keeping each option's title and angle): ${JSON.stringify(topics)}`
+function withTopics(grounding: Grounding, topics: MtTopic[]): Grounding {
+  return appendTail(grounding, `
+ANGLE OPTIONS (produce one light preview per option, in this order, keeping each option's title and angle): ${JSON.stringify(topics)}`)
 }
 
 // Regenerate just the lightweight angle previews from the current topic options.
@@ -1281,17 +1339,29 @@ export async function regenerateScript(
     sectionName: s.sectionName,
     timing: s.timing,
   }))
-  const grounding = `${withAngle(buildGrounding(inputs), chosenTopic, chosenAngle)}
-EXISTING DECK (rewrite the script for each, keep everything else): ${JSON.stringify(deck)}`
+  const grounding = appendTail(
+    withAngle(buildGrounding(inputs), chosenTopic, chosenAngle),
+    `
+EXISTING DECK (rewrite the script for each, keep everything else): ${JSON.stringify(deck)}
+
+Rewrite the scripts now.`
+  )
 
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-5',
     max_tokens: 8000,
     thinking: { type: 'disabled' },
-    system: inputs.voiceContext ? `${SCRIPT_PROMPT}\n\n${inputs.voiceContext}` : SCRIPT_PROMPT,
-    messages: [{ role: 'user', content: `${grounding}\n\nRewrite the scripts now.` }],
+    system: buildSystem(SCRIPT_PROMPT, inputs.voiceContext),
+    messages: [{ role: 'user', content: buildUserContent(grounding.coachContext, grounding.tail) }],
   })
-  await logApiCost(userId, 'generate', 'claude-sonnet-5', message.usage.input_tokens, message.usage.output_tokens)
+  await logApiCost(
+    userId,
+    'generate',
+    'claude-sonnet-5',
+    message.usage.input_tokens,
+    message.usage.output_tokens,
+    readCacheUsage(message.usage)
+  )
 
   const textBlock = message.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined
   const parsed = extractJson(textBlock?.text ?? '')
@@ -1372,13 +1442,19 @@ Rules:
 - Ground the slide in this blueprint and the audience's language so it fits the deck; recorded solo, no live-audience or "welcome to today's session" language.
 ${SHARED_RULES}`
 
-  const system = inputs.voiceContext ? `${prompt}\n\n${inputs.voiceContext}` : prompt
-  const userMessage = `${grounding}
+  const parsed = await callAndParse(
+    userId,
+    prompt,
+    inputs.voiceContext,
+    appendTail(
+      grounding,
+      `
 COACH'S ${spec.label} (their words — the ONLY basis for the slide's substance): ${JSON.stringify(text)}
 
 Generate the one slide now.`
-
-  const parsed = await callAndParse(userId, system, userMessage, 2000)
+    ),
+    2000
+  )
   const sectionName = asString(parsed.sectionName).trim().length > 0 ? asString(parsed.sectionName) : spec.sectionName
   const dm = (parsed.deliveryMove && typeof parsed.deliveryMove === 'object' && !Array.isArray(parsed.deliveryMove) ? parsed.deliveryMove : {}) as Record<string, unknown>
   const dmKind = dm.kind === 'image' || dm.kind === 'screen_share' || dm.kind === 'just_talk' ? dm.kind : 'just_talk'

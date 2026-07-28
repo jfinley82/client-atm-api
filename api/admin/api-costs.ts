@@ -83,30 +83,71 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { data, error } = await supabase
       .from('api_cost_log')
-      .select('tool_type, cost_usd')
+      .select('tool_type, cost_usd, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens')
       .gte('created_at', start.toISOString())
       .lt('created_at', end.toISOString())
 
     if (error) throw error
 
     const rows = data || []
-    const byToolType = new Map<string, { cost_usd: number; call_count: number }>()
+    type Agg = {
+      cost_usd: number
+      call_count: number
+      input_tokens: number
+      output_tokens: number
+      cache_creation_input_tokens: number
+      cache_read_input_tokens: number
+    }
+    const emptyAgg = (): Agg => ({
+      cost_usd: 0,
+      call_count: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+    })
+    const byToolType = new Map<string, Agg>()
     let total_cost_usd = 0
+    const totals = emptyAgg()
+
+    const num = (v: unknown): number => (typeof v === 'number' ? v : Number(v) || 0)
 
     for (const row of rows) {
-      const cost = typeof row.cost_usd === 'number' ? row.cost_usd : Number(row.cost_usd) || 0
+      const cost = num(row.cost_usd)
       total_cost_usd += cost
-      const existing = byToolType.get(row.tool_type) || { cost_usd: 0, call_count: 0 }
+      const existing = byToolType.get(row.tool_type) || emptyAgg()
       existing.cost_usd += cost
       existing.call_count += 1
+      existing.input_tokens += num(row.input_tokens)
+      existing.output_tokens += num(row.output_tokens)
+      existing.cache_creation_input_tokens += num(row.cache_creation_input_tokens)
+      existing.cache_read_input_tokens += num(row.cache_read_input_tokens)
       byToolType.set(row.tool_type, existing)
+
+      totals.call_count += 1
+      totals.input_tokens += num(row.input_tokens)
+      totals.output_tokens += num(row.output_tokens)
+      totals.cache_creation_input_tokens += num(row.cache_creation_input_tokens)
+      totals.cache_read_input_tokens += num(row.cache_read_input_tokens)
     }
+
+    // Share of billable INPUT that was served from cache. Denominator is every
+    // input bucket (uncached + freshly written + read), so a period with no
+    // caching reads 0 and a fully-warm period approaches 1 — this is the single
+    // number that says whether the caching rollout is working.
+    const cacheDenom =
+      totals.input_tokens + totals.cache_creation_input_tokens + totals.cache_read_input_tokens
+    const cache_hit_rate = cacheDenom > 0 ? Math.round((totals.cache_read_input_tokens / cacheDenom) * 10_000) / 10_000 : 0
 
     const breakdown = Array.from(byToolType.entries())
       .map(([tool_type, v]) => ({
         tool_type,
         cost_usd: Math.round(v.cost_usd * 1_000_000) / 1_000_000,
         call_count: v.call_count,
+        input_tokens: v.input_tokens,
+        output_tokens: v.output_tokens,
+        cache_creation_input_tokens: v.cache_creation_input_tokens,
+        cache_read_input_tokens: v.cache_read_input_tokens,
       }))
       .sort((a, b) => b.cost_usd - a.cost_usd)
 
@@ -115,6 +156,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       date: anchor.toISOString().slice(0, 10),
       range: { start: start.toISOString(), end: end.toISOString() },
       total_cost_usd: Math.round(total_cost_usd * 1_000_000) / 1_000_000,
+      // Prompt-caching rollout metrics — the before/after signal.
+      tokens: {
+        input_tokens: totals.input_tokens,
+        output_tokens: totals.output_tokens,
+        cache_creation_input_tokens: totals.cache_creation_input_tokens,
+        cache_read_input_tokens: totals.cache_read_input_tokens,
+        cache_hit_rate,
+      },
       breakdown,
     })
   } catch (err) {
