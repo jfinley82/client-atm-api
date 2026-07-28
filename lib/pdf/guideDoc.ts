@@ -132,7 +132,7 @@ p.sig{ font-size:${px(14)}; font-weight:700; color:var(--accent-ink); margin-top
 .cover .tag{ font-size:${px(11)}; font-weight:800; color:var(--accent-ink); background:var(--accent-soft); border:1px solid var(--accent-border); border-radius:999px; padding:${px(5)} ${px(12)}; }
 
 /* exercises */
-.ex{ border:1px solid var(--line); border-radius:${px(12)}; padding:${px(16)} ${px(18)} ${px(14)}; margin-bottom:${px(16)}; }
+.ex{ margin-bottom:${px(26)}; }
 .ex .q{ display:flex; gap:${px(11)}; margin-bottom:${px(6)}; }
 .ex .qn{ width:${px(26)}; height:${px(26)}; border-radius:${px(7)}; border:2px solid var(--accent); color:var(--accent-ink); font-weight:800; font-size:${px(13)}; display:flex; align-items:center; justify-content:center; flex:0 0 auto; }
 .ex .qt{ font-size:${px(13.5)}; font-weight:700; color:var(--ink); line-height:1.5; }
@@ -187,8 +187,8 @@ const secH = (title: string): number => (11 + 7) * S + Math.max(30 * S, wraps(ti
 function exH(prompt: string, reveal: string, lines: number): number {
   const qt = wraps(prompt, 13.5 * S, CONTENT_W - 37 * S) * 13.5 * S * 1.5
   const rev = wraps(reveal, 11 * S, CONTENT_W - 37 * S) * 11 * S * 1.5
-  // padding(16+14) + q-margin(6) + rev-margin(~12) + block margin-bottom(16), all ×S.
-  return (16 + 6 + 12 + 14 + 16) * S + Math.max(24 * S, qt) + rev + lines * 24 * S
+  // borderless: q-margin(6) + rev-margin(~12) + block margin-bottom(26), all ×S.
+  return (6 + 12 + 26) * S + Math.max(24 * S, qt) + rev + lines * 24 * S
 }
 
 // ── page frame ───────────────────────────────────────────────────────────────
@@ -311,7 +311,9 @@ export function buildGuideDocument(opts: {
       .filter((e) => e.recommended !== false)
       .slice(0, 3) // up to 3 selected questions per phase
     for (const e of list) {
-      exercises.push({ prompt: str(e.prompt), reveal: str(e.collects) || str(e.why_fits), lines: Math.min(4, Math.max(2, Number(e.lines) || 3)) })
+      // +2 ruled lines beyond whatever the exercise specifies, so leads have room
+      // to write a complete response.
+      exercises.push({ prompt: str(e.prompt), reveal: str(e.collects) || str(e.why_fits), lines: Math.min(4, Math.max(2, Number(e.lines) || 3)) + 2 })
     }
   }
   const exercisePages: string[] = []
