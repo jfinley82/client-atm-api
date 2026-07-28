@@ -5,7 +5,7 @@ import { extractJson } from './aiJson'
 import { logApiCost } from './apiCostLog'
 import { sanitizePhrasingDeep } from './phrasing'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
-import { SALES_FRAMEWORK_CANONICAL, SALES_SCRIPT_BEATS, OBJECTION_LOOPS } from './salesFrameworksCanonical'
+import { SALES_FRAMEWORK_CANONICAL, SALES_SCRIPT_BEATS } from './salesFrameworksCanonical'
 
 // ── Growth Kit ───────────────────────────────────────────────────────────────
 // Per-funnel launch assets, generated on demand one asset_type at a time and
@@ -25,30 +25,37 @@ export const FUNNEL_ASSET_TYPES = [
 ] as const
 export type FunnelAssetType = (typeof FUNNEL_ASSET_TYPES)[number]
 
-// The "win the call" four. These are gated on the funnel having at least one
-// booking: before a call exists they are advice the coach cannot act on, and
-// generating them early spends tokens on output that will likely be regenerated
-// once real calls start. invite_emails and social_5day are the fill-the-calendar
-// half and are always available — they are what CREATE the booking.
-export const WIN_THE_CALL_TYPES: readonly FunnelAssetType[] = [
-  'call_flow',
-  'sales_script',
-  'objection_scripts',
-  'post_call_emails',
-]
+// Which assets are DERIVED from what the coach already built vs GENERATED fresh.
+//
+// Derived assets pass the coach's stored mtm_generations values through verbatim
+// with no model call, so the funnel shows the exact script/objections/invites the
+// coach approved in the Build wizard. They cannot drift, cost nothing, and are
+// always available — there is nothing to "generate".
+export const DERIVED_TYPES: readonly FunnelAssetType[] = ['invite_emails', 'sales_script', 'objection_scripts']
+
+// Generated fresh, and gated on the funnel having at least one booking. Only
+// these two remain gated: before a call exists they are advice the coach cannot
+// act on, and generating them early spends tokens on output that will likely be
+// redone once real calls start. social_5day generates fresh but is NOT gated —
+// it is part of what CREATES the first booking.
+export const GATED_TYPES: readonly FunnelAssetType[] = ['call_flow', 'post_call_emails']
 
 export function isFunnelAssetType(v: unknown): v is FunnelAssetType {
   return typeof v === 'string' && (FUNNEL_ASSET_TYPES as readonly string[]).includes(v)
 }
 
-export function isWinTheCall(t: FunnelAssetType): boolean {
-  return WIN_THE_CALL_TYPES.includes(t)
+export function isDerived(t: FunnelAssetType): boolean {
+  return DERIVED_TYPES.includes(t)
+}
+
+export function isGated(t: FunnelAssetType): boolean {
+  return GATED_TYPES.includes(t)
 }
 
 // Asset status as the GET grid reports it (see the Growth Kit API contract):
-//   ready     — content exists (or is derived on read, as invite_emails is)
+//   ready     — content exists, or is derived on read from the coach's own build
 //   available — nothing generated yet, but the coach can generate it now
-//   locked    — a win-the-call type while the funnel has no booking
+//   locked    — a generated+gated type while the funnel has no booking
 export type FunnelAssetStatus = 'ready' | 'available' | 'locked'
 
 // The call framework's step names + order come VERBATIM from SALES_SCRIPT_BEATS
@@ -164,6 +171,64 @@ export function deriveInviteEmails(g: FunnelGrounding): Record<string, unknown> 
   return { emails }
 }
 
+// ── sales_script / objection_scripts: derive, don't regenerate ───────────────
+// The Build wizard already generated these on SALES_SCRIPT_BEATS and the coach
+// may have edited them. Regenerating would produce a SECOND, different script for
+// the same offer; deriving guarantees the funnel shows the exact one they built.
+// No model call, so there is no cost and no drift — same contract as invite_emails.
+//
+// Text is passed through VERBATIM. The stored rows are richer than the contract
+// shape ({ beat, prospect_mindset, phrasing_options[], recommended } per beat;
+// { objection, handling, loop } per objection), so this maps rather than reshapes:
+// no wording is rewritten, only the field names and the subset the contract
+// declares. See the note in the PR about the fields the v1 contract has no slot
+// for (prospect_mindset / phrasing_options).
+export function deriveSalesScript(g: FunnelGrounding): Record<string, unknown> {
+  const raw = Array.isArray(g.generation?.sales_script) ? g.generation!.sales_script : []
+  const steps = raw
+    .map((b: any, i: number) => ({
+      n: i + 1,
+      // The beat name the coach's own script carries — already one of
+      // SALES_SCRIPT_BEATS, since the Build generator enforced that set.
+      name: String(b?.beat ?? ''),
+      // `recommended` is the coach's default line for the beat: the words they
+      // chose to say. Verbatim, never regenerated.
+      script: String(b?.recommended ?? ''),
+    }))
+    .filter((st: { name: string; script: string }) => st.name.trim().length > 0 || st.script.trim().length > 0)
+  return { steps }
+}
+
+export function deriveObjectionScripts(g: FunnelGrounding): Record<string, unknown> {
+  const raw = Array.isArray(g.generation?.objections) ? g.generation!.objections : []
+  const objections = raw
+    .map((o: any) => ({
+      objection: String(o?.objection ?? ''),
+      // Loop keys already come from OBJECTION_LOOPS in the canonical .ts.
+      loop: String(o?.loop ?? ''),
+      // Stored as `handling`; the contract calls it `response`. Rename only.
+      response: String(o?.handling ?? ''),
+    }))
+    .filter((o: { objection: string; response: string }) => o.objection.trim().length > 0 || o.response.trim().length > 0)
+  return { objections }
+}
+
+// Derive one asset from an ALREADY-LOADED grounding. Lets the read path resolve
+// all three derived types from a single grounding load instead of re-querying per
+// type. Returns null for a type that is generated rather than derived.
+export function deriveAsset(g: FunnelGrounding, assetType: FunnelAssetType): Record<string, unknown> | null {
+  switch (assetType) {
+    case 'invite_emails':
+      return deriveInviteEmails(g)
+    case 'sales_script':
+      return deriveSalesScript(g)
+    case 'objection_scripts':
+      return deriveObjectionScripts(g)
+    default:
+      return null
+  }
+}
+
 // ── Generated assets ─────────────────────────────────────────────────────────
 const SHARED_TAIL = `Output ONLY valid JSON, no preamble, no markdown, no code fences. Double quotes only.
 Ground everything in the coach's real audience language, their transformation, and this specific offer. No generic coaching-industry filler.
@@ -237,42 +302,6 @@ Rules:
 - Diagnosis-first call. No pressure tactics, no manufactured scarcity.
 ${SHARED_TAIL}`
 
-const SALES_SCRIPT_PROMPT = `You write the TALK TRACK for a coach's high-ticket implementation call: what they actually say at each of the 6 steps, in their voice, for this specific offer and audience.
-
-${SALES_FRAMEWORK_CANONICAL}
-
-{
-  "steps": [
-    { "n": 1, "name": "${SALES_SCRIPT_BEATS[0]}", "script": "the words the coach says at this step" }
-  ]
-}
-
-Rules:
-- EXACTLY ${SALES_SCRIPT_BEATS.length} steps, n 1-${SALES_SCRIPT_BEATS.length} in order, with names EXACTLY: ${JSON.stringify(SALES_SCRIPT_BEATS)}.
-- script is spoken language the coach can say as-is — the audience's vocabulary, this coach's voice, this offer's specifics. Not stage directions and not a description of what to cover.
-- Diagnosis-first. The ask at step 6 is direct and calm, never a pressure close.
-${SHARED_TAIL}`
-
-const OBJECTION_PROMPT = `You write the OBJECTION SCRIPTS for a coach's implementation call: the REAL resistance THIS audience brings (from their captured fears, past attempts, and internal dialogue), each mapped to one Objection Loop and answered.
-
-${SALES_FRAMEWORK_CANONICAL}
-
-{
-  "objections": [
-    {
-      "objection": "the objection in the PROSPECT'S own voice — what they would actually say out loud",
-      "loop": "commitment",
-      "response": "the words the coach says back — the actual response, not advice about responding"
-    }
-  ]
-}
-
-Rules:
-- EXACTLY 6 objections, each rooted in a DIFFERENT specific detail from this audience's captured fears, doubts, past attempts, or internal dialogue. No interchangeable generic money/time objections.
-- loop must be exactly one of ${JSON.stringify(OBJECTION_LOOPS)}. Cover at least three of the four across the set.
-- response dissolves the resistance inside the call. Never a close-the-no pressure mechanic.
-${SHARED_TAIL}`
-
 const POST_CALL_PROMPT = `You write the POST-CALL follow-up emails a coach sends after a high-ticket implementation call.
 
 {
@@ -296,17 +325,21 @@ export async function generateFunnelAsset(
 ): Promise<Record<string, unknown>> {
   const g = await loadFunnelGrounding(userId, funnel)
 
-  // invite_emails is a derivation of already-approved copy — no model call.
-  if (assetType === 'invite_emails') return deriveInviteEmails(g)
+  // Derived assets pass the coach's own build through verbatim — no model call.
+  const derived = deriveAsset(g, assetType)
+  if (derived) return derived
 
-  const spec: Record<Exclude<FunnelAssetType, 'invite_emails'>, { prompt: string; maxTokens: number }> = {
+  // Only the three generated types have prompts; the derived ones returned above.
+  // Partial + an explicit guard rather than a cast, so adding a new asset type
+  // without a prompt fails loudly here instead of dereferencing undefined.
+  const spec: Partial<Record<FunnelAssetType, { prompt: string; maxTokens: number }>> = {
     social_5day: { prompt: SOCIAL_PROMPT, maxTokens: 3000 },
     call_flow: { prompt: CALL_FLOW_PROMPT, maxTokens: 4000 },
-    sales_script: { prompt: SALES_SCRIPT_PROMPT, maxTokens: 5000 },
-    objection_scripts: { prompt: OBJECTION_PROMPT, maxTokens: 4000 },
     post_call_emails: { prompt: POST_CALL_PROMPT, maxTokens: 4000 },
   }
-  const { prompt, maxTokens } = spec[assetType]
+  const entry = spec[assetType]
+  if (!entry) throw new Error(`No generator for asset_type "${assetType}"`)
+  const { prompt, maxTokens } = entry
   const parsed = await callJson(userId, prompt, groundingMessage(g), maxTokens)
 
   // Same phrasing hygiene every other generator gets (strips em-dash clause splits).
@@ -356,7 +389,9 @@ export function assetStatus(
   hasContent: boolean,
   winTheCallUnlocked: boolean
 ): FunnelAssetStatus {
-  if (assetType === 'invite_emails') return 'ready'
-  if (isWinTheCall(assetType) && !winTheCallUnlocked) return 'locked'
+  // Derived assets are computed on read from what the coach already built, so
+  // they are always present and never gated.
+  if (isDerived(assetType)) return 'ready'
+  if (isGated(assetType) && !winTheCallUnlocked) return 'locked'
   return hasContent ? 'ready' : 'available'
 }

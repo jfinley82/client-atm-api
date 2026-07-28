@@ -6,11 +6,12 @@ import {
   FUNNEL_ASSET_TYPES,
   FunnelAssetType,
   isFunnelAssetType,
-  isWinTheCall,
+  isDerived,
+  isGated,
   assetStatus,
   funnelHasBooking,
   loadFunnelGrounding,
-  deriveInviteEmails,
+  deriveAsset,
   generateFunnelAsset,
   listFunnelAssets,
   upsertFunnelAsset,
@@ -53,21 +54,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const [rows, unlocked, grounding] = await Promise.all([
         listFunnelAssets(id),
         funnelHasBooking(id),
-        // Needed for invite_emails, which is derived on read rather than stored.
+        // One load serves all three derived types below.
         loadFunnelGrounding(userId, funnel),
       ])
       const byType = new Map(rows.map((r) => [r.asset_type, r]))
 
       const assets: Record<string, { status: string; generated_at: string | null; content: unknown }> = {}
       for (const asset_type of FUNNEL_ASSET_TYPES) {
-        if (asset_type === 'invite_emails') {
-          // Always present, always current: re-derived from the coach's approved
-          // warm invites on every read, so it cannot drift from what they signed
-          // off on. generated_at is null because nothing was ever generated.
+        if (isDerived(asset_type)) {
+          // Always present, always current: re-derived on every read from what
+          // the coach actually built (their approved warm invites, call script,
+          // and objections), so it can never drift from that. generated_at is
+          // null because nothing was ever generated or stored.
           assets[asset_type] = {
             status: assetStatus(asset_type, true, unlocked),
             generated_at: null,
-            content: deriveInviteEmails(grounding),
+            content: deriveAsset(grounding, asset_type),
           }
           continue
         }
@@ -103,7 +105,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // The booking gate. Enforced server-side, not just hidden in the UI — the
     // whole point is to not spend a generation on an asset the coach cannot use.
-    if (isWinTheCall(type)) {
+    if (isGated(type)) {
       const unlocked = await funnelHasBooking(id)
       if (!unlocked) return res.status(403).json({ error: 'no_booking' })
     }
@@ -111,10 +113,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
       const content = await generateFunnelAsset(userId, funnel, type)
 
-      // invite_emails is derived on read and deliberately NOT persisted —
-      // storing it would let it go stale against the coach's approved warm
-      // invites, which is the one thing this asset must never do.
-      if (type === 'invite_emails') {
+      // Derived types are computed on read and deliberately NOT persisted —
+      // storing a copy would let it go stale against the coach's own build,
+      // which is the one thing these assets must never do.
+      if (isDerived(type)) {
         return res.status(200).json({
           asset_type: type,
           status: 'ready',
