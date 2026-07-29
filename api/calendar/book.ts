@@ -7,6 +7,7 @@ import { isSchedulerSlotOpen } from '../../lib/schedulerSlots'
 import { buildBookingIcs } from '../../lib/ics'
 import { sendBookingConfirmationEmail, sendCoachBookingNotification } from '../../lib/email'
 import { funnelBookingQuestions, loadBookingQuestions, validateBookingAnswers, bookingQuestionErrorMessage, ValidatedAnswer } from '../../lib/bookingQuestions'
+import { checkGate } from '../../lib/applicationGate'
 import { resolveLiveFunnel } from '../../lib/funnels'
 import { loadUserAvailability } from '../../lib/availabilitySettings'
 import { isSlotOpen } from '../../lib/funnelAvailability'
@@ -118,6 +119,25 @@ async function logFunnelBooked(funnelId: string, email: string): Promise<string 
   }
 }
 
+// A lead the application gate turned away must NEVER become a booking row, so
+// this returns BEFORE the reservation insert on both paths — no calendar event,
+// no Zoom meeting, no confirmation email, nothing to cancel afterwards.
+//
+// It is a real enforcement point, not a mirror of the page: the two-step booking
+// page decides the same thing client-side for the screen, but a POST straight to
+// this endpoint skips that entirely. Both call the same checkGate().
+//
+// 403 rather than 400: the submission is well-formed, it is the outcome that
+// denies it. The page shows the funnel's own disqualify screen from these fields.
+function disqualified(
+  res: VercelResponse,
+  gate: { action: string; message: string; redirect_url: string | null }
+): VercelResponse {
+  return res
+    .status(403)
+    .json({ error: 'disqualified', action: gate.action, message: gate.message, redirect_url: gate.redirect_url })
+}
+
 function eventDescription(name: string, email: string, answers: ValidatedAnswer[]): string {
   const lines = ['New booking from your funnel.', `Name: ${name}`, `Email: ${email}`]
   const filled = answers.filter((a) => a.answer)
@@ -160,6 +180,9 @@ async function bookGooglePath(
       .status(400)
       .json({ error: av.error, question: av.question, message: bookingQuestionErrorMessage(av.error, av.question) })
   }
+
+  const gate = checkGate(funnelRow, questions, answersMap)
+  if (!gate.qualified) return disqualified(res, gate)
 
   // Parity: the slot must be genuinely open per the same engine the page showed.
   if (!(await isSlotOpen(owner, startIso))) return res.status(409).json({ error: 'slot_taken' })
@@ -298,6 +321,11 @@ async function bookLegacyPath(
     return res
       .status(400)
       .json({ error: av.error, question: av.question, message: bookingQuestionErrorMessage(av.error, av.question) })
+  }
+
+  if (funnelRow) {
+    const gate = checkGate(funnelRow, questions, answersMap)
+    if (!gate.qualified) return disqualified(res, gate)
   }
 
   // 1) Confirm the slot is genuinely still open — against the SAME computation
