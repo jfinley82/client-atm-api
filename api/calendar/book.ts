@@ -24,8 +24,14 @@ import { buildManageUrl } from '../../lib/bookingManage'
 //   book page shows (isSlotOpen), create the real event on the coach's Google
 //   Calendar, set coach_user_id + google_event_id + meeting_url, meeting link is
 //   the coach's zoom_link (else an auto-created Meet).
-//   LEGACY SHARED PATH — no funnel, or a funnel owner with no Google connection:
-//   the original single shared-Zoom flow, unchanged (nothing regresses).
+//   NATIVE / LEGACY PATH — a funnel whose owner has no Google connection, or no
+//   funnel at all. Both create the meeting on the shared Zoom account, but they
+//   validate the SLOT differently, because they showed the lead different
+//   calendars: a funnel validates against the coach's own availability
+//   (isSlotOpen — the same builder its booking page used), while a genuinely
+//   funnel-less booking validates against the shared Zoom Scheduler. Validating a
+//   native funnel's slots against the Zoom Scheduler compares two unrelated
+//   calendars and rejects nearly every valid pick as slot_taken.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
   if (req.method !== 'POST') return res.status(405).end()
@@ -280,7 +286,14 @@ async function bookLegacyPath(
 
   if (!isZoomConfigured()) return res.status(503).json({ error: 'calendar_unavailable' })
 
-  const endIso = new Date(startMs + slotMinutes() * 60_000).toISOString()
+  // Slot LENGTH has the same Zoom-vs-native split as slot availability: a funnel
+  // booking must use the coach's own slot_minutes (the grid the lead picked from),
+  // not the shared Zoom scheduler's, or end_time and the calendar invite disagree
+  // with the slot that was actually booked.
+  const funnelSlotMinutes = funnelRow
+    ? (await loadUserAvailability(funnelRow.user_id as string)).slot_minutes
+    : slotMinutes()
+  const endIso = new Date(startMs + funnelSlotMinutes * 60_000).toISOString()
 
   // Global custom questions for the shared path.
   // A native-calendar funnel still books through this path. When a funnel is in
@@ -294,16 +307,36 @@ async function bookLegacyPath(
       .json({ error: av.error, question: av.question, message: bookingQuestionErrorMessage(av.error, av.question) })
   }
 
-  // 1) Confirm the slot is genuinely still open per Zoom Scheduler.
-  const dayStart = new Date(startMs - 60_000).toISOString()
-  const dayEnd = new Date(startMs + slotMinutes() * 60_000 + 60_000).toISOString()
-  const slots = await getSchedulerAvailability(dayStart, dayEnd)
-  if (!slots.some((s) => new Date(s.start).getTime() === startMs)) {
-    return res.status(409).json({ error: 'slot_taken' })
+  // 1) Confirm the slot is genuinely still open — against the SAME engine that
+  // produced the slots the lead was shown, or a valid pick is rejected as taken.
+  //
+  // A native-calendar funnel (no Google connection) lands on this path, but its
+  // booking page lists slots from the coach's own availability via
+  // computeOpenSlots. Validating those against the shared Zoom Scheduler compares
+  // two unrelated calendars, so essentially every slot came back 409 slot_taken.
+  // isSlotOpen is the single-slot form of the very builder the page used, and it
+  // does NOT require Google (a connection only subtracts busy time when present).
+  //
+  // The Zoom Scheduler check still applies to a genuinely funnel-less booking on
+  // the shared calendar, which is the only case it was ever describing.
+  if (funnelRow) {
+    if (!(await isSlotOpen(funnelRow.user_id as string, startIso))) {
+      return res.status(409).json({ error: 'slot_taken' })
+    }
+  } else {
+    const dayStart = new Date(startMs - 60_000).toISOString()
+    const dayEnd = new Date(startMs + slotMinutes() * 60_000 + 60_000).toISOString()
+    const slots = await getSchedulerAvailability(dayStart, dayEnd)
+    if (!slots.some((s) => new Date(s.start).getTime() === startMs)) {
+      return res.status(409).json({ error: 'slot_taken' })
+    }
   }
 
-  // 2) Reserve (coach_user_id stays NULL — the shared calendar; the NULLS NOT
-  // DISTINCT unique index still prevents two shared bookings at the same time).
+  // 2) Reserve. coach_user_id stays NULL only for a genuinely shared booking —
+  // the NULLS NOT DISTINCT unique index then prevents two shared bookings at the
+  // same time. For a FUNNEL booking it is set to the coach, so the uniqueness
+  // backstop scopes per coach: otherwise every native funnel shared the one NULL
+  // bucket and two different coaches could not hold the same clock time.
   const { data: reserved, error: reserveErr } = await supabase
     .from('bookings')
     .insert({
@@ -314,9 +347,9 @@ async function bookLegacyPath(
       end_time: endIso,
       status: 'active',
       custom_answers: av.answers,
-      // A native-calendar funnel books through this path, so attribute it even
-      // though coach_user_id stays NULL (see the comment above).
-      ...(funnelRow ? { funnel_id: funnelRow.id as string } : {}),
+      ...(funnelRow
+        ? { funnel_id: funnelRow.id as string, coach_user_id: funnelRow.user_id as string }
+        : {}),
     })
     .select('id')
     .single()
