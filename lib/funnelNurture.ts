@@ -47,11 +47,15 @@ const HOUR = 60 * 60 * 1000
 const NURTURE_OFFSETS = [0, 1 * DAY, 3 * DAY]
 // book-a-call: 1 now / 2 +2d / 3 +4d.
 const BOOK_A_CALL_OFFSETS = [0, 2 * DAY, 4 * DAY]
+// post-call: 1 now (same-day recap) / 2 +1d / 3 +4d, measured from the moment
+// attendance is marked rather than from the call's start time.
+const POST_CALL_OFFSETS = [0, 1 * DAY, 4 * DAY]
 
 const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
 
 const NURTURE_SUBJECTS = ['Your training is ready', 'Did you get a chance to watch?', 'Last chance to watch the training']
 const BOOK_SUBJECTS = ['Ready for the next step?', 'One quick thing', 'A final invitation']
+const POST_CALL_SUBJECTS = ['Great speaking with you', 'Following up on our call', 'Still here when you are']
 
 type Funnel = Record<string, any>
 
@@ -109,13 +113,16 @@ async function scheduleSet(opts: {
   leadId: string
   to: string
   emails: MtEmail[]
-  kindPrefix: 'nurture' | 'book_a_call'
+  kindPrefix: 'nurture' | 'book_a_call' | 'post_call'
   offsets: number[]
   subdomain: string
   bookUrlForTokens: string
   guideUrl?: string
   defaultSubjects: string[]
   nowMs: number
+  // Only the post-call set is tied to a booking; it is what lets the sequence be
+  // canceled for that one call when attendance is corrected to no_show.
+  bookingId?: string
 }): Promise<void> {
   const unsub = unsubscribeUrl(opts.funnel.id as string, opts.leadId)
   const n = Math.min(opts.emails.length, opts.offsets.length)
@@ -152,6 +159,7 @@ async function scheduleSet(opts: {
         subject,
         html,
         scheduledAt,
+        ...(opts.bookingId ? { bookingId: opts.bookingId } : {}),
       })
     )
   }
@@ -281,6 +289,86 @@ export async function scheduleBookingReminders(
     await Promise.all(tasks)
   } catch (err) {
     console.error('[nurture] scheduleBookingReminders', err)
+  }
+}
+
+// Post-call follow-up: the 3 emails a coach sends after the call actually
+// happened. Scheduled from the moment attendance is marked (which is after the
+// call), NOT from start_time — a call marked days late should still get a
+// sensible cadence rather than three emails landing at once.
+//
+// The content is the coach's own post_call_emails Growth Kit asset, in its
+// stored order: (1) they said yes, (2) they are thinking about it, (3) they went
+// quiet. Nothing is generated here; if the coach has not built the asset there is
+// nothing to send and this is a silent no-op.
+//
+// This is ONLY ever reached from an attendance mark of 'showed'. Sending a
+// "great call" sequence to someone who never turned up is the failure mode the
+// no_show branch exists to prevent, so the caller's check is the contract and
+// this function never infers attendance for itself.
+export async function schedulePostCallEmails(
+  funnel: Funnel,
+  leadId: string,
+  email: string,
+  bookingId: string,
+  nowMs: number = Date.now()
+): Promise<void> {
+  try {
+    if (!email) return
+    if (await isUnsubscribed(leadId)) return
+
+    const { data: asset } = await supabase
+      .from('funnel_launch_assets')
+      .select('content')
+      .eq('funnel_id', funnel.id as string)
+      .eq('asset_type', 'post_call_emails')
+      .maybeSingle()
+    const emails = coerceEmails((asset?.content as { emails?: unknown } | null)?.emails)
+    if (!emails.length) return
+
+    const subdomain = typeof funnel.subdomain === 'string' ? funnel.subdomain : ''
+    const [brand, guideUrl] = await Promise.all([loadCoachBrand(funnel.user_id as string), loadGuideUrl(funnel)])
+    await scheduleSet({
+      funnel,
+      brand,
+      leadId,
+      to: email,
+      emails,
+      kindPrefix: 'post_call',
+      offsets: POST_CALL_OFFSETS,
+      subdomain,
+      bookUrlForTokens: subdomain ? bookUrl(subdomain) : '',
+      guideUrl,
+      defaultSubjects: POST_CALL_SUBJECTS,
+      nowMs,
+      bookingId,
+    })
+  } catch (err) {
+    console.error('[nurture] schedulePostCallEmails', err)
+  }
+}
+
+// Cancel the post-call sequence for ONE booking. Used when attendance is
+// corrected from 'showed' to 'no_show' — the follow-ups were scheduled on a
+// mistake and must not land.
+export async function cancelPostCallEmails(bookingId: string): Promise<void> {
+  try {
+    const { data } = await supabase
+      .from('funnel_email_sends')
+      .select('resend_message_id')
+      .eq('booking_id', bookingId)
+      .eq('status', 'queued')
+      .like('kind', 'post_call%')
+    const ids = (data || []).map((r) => (r as { resend_message_id: string | null }).resend_message_id).filter((x): x is string => !!x)
+    if (ids.length) await cancelFunnelSends(ids)
+    await supabase
+      .from('funnel_email_sends')
+      .update({ status: 'canceled' })
+      .eq('booking_id', bookingId)
+      .eq('status', 'queued')
+      .like('kind', 'post_call%')
+  } catch (err) {
+    console.error('[nurture] cancelPostCallEmails', err)
   }
 }
 

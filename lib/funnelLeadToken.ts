@@ -21,10 +21,14 @@ function deriveSecret(label: string): Buffer {
 const WATCH_SECRET = deriveSecret('funnel-lead-watch-v1')
 const UNSUB_SECRET = deriveSecret('funnel-lead-unsub-v1')
 const MANAGE_SECRET = deriveSecret('funnel-booking-manage-v1')
+const OFFER_SECRET = deriveSecret('funnel-offer-ref-v1')
 
 const WATCH_TTL_MS = 24 * 60 * 60 * 1000
 const UNSUB_TTL_MS = 365 * 24 * 60 * 60 * 1000
 const MANAGE_TTL_MS = 90 * 24 * 60 * 60 * 1000
+// A lead who clicks the offer today may buy in a month; the sale still belongs
+// to this funnel. Long enough to cover a real consideration window.
+const OFFER_TTL_MS = 90 * 24 * 60 * 60 * 1000
 
 function b64url(buf: Buffer): string {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
@@ -93,6 +97,28 @@ export function signUnsubscribeToken(funnelId: string, leadId: string, nowMs: nu
 // { funnelId, leadId } (or null). The endpoint then loads the lead by these ids.
 export function verifyUnsubscribeToken(token: unknown, nowMs: number = Date.now()): { funnelId: string; leadId: string } | null {
   return verifyWith(UNSUB_SECRET, token, nowMs)
+}
+
+// ---- offer attribution token (sell mode) ------------------------------------
+// Rides on the offer URL as ?ref= and comes back on the coach's thank-you page,
+// where the conversion pixel hands it to GET /api/funnels/[id]/conversion.
+//
+// It must be SIGNED and minted server-side, because it is the only thing saying
+// which lead this sale belongs to and it spends its life on someone else's
+// checkout page. An unsigned id in a query string would let anyone post
+// revenue into a funnel by guessing a uuid.
+//
+// It is also the DEDUP key: the pixel fires on every load of a thank-you page a
+// buyer may refresh or revisit, and one token means one sale.
+
+export function signOfferToken(funnelId: string, leadId: string, nowMs: number = Date.now()): string {
+  return signWith(OFFER_SECRET, funnelId, leadId, OFFER_TTL_MS, nowMs)
+}
+
+// Returns { funnelId, leadId } for a valid, unexpired, correctly-signed token.
+// The caller checks it against the funnel in the request path.
+export function verifyOfferToken(token: unknown, nowMs: number = Date.now()): { funnelId: string; leadId: string } | null {
+  return verifyWith(OFFER_SECRET, token, nowMs)
 }
 
 // ---- booking manage token (Phase 3b follow-up) ------------------------------

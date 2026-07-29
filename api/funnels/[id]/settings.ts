@@ -13,6 +13,7 @@ import {
 import { normalizeBookingQuestions } from '../../../lib/bookingQuestions'
 import { normalizeDisqualifyRules, DISQUALIFY_ACTIONS } from '../../../lib/applicationGate'
 
+// GET /api/funnels/[id]/settings — current values + the conversion snippet.
 // PATCH /api/funnels/[id]/settings — the single write the workspace Settings tab
 // makes. Owner-scoped; every field is optional, and only keys actually present in
 // the body are written, so a tab that edits one section never clears another.
@@ -51,10 +52,29 @@ function optionalUrl(v: unknown): { ok: true; value: string | null } | { ok: fal
   }
 }
 
+const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
+
+// The conversion pixel the coach pastes onto their checkout's thank-you page.
+//
+// It reads the ?ref= that /api/funnel/offer appended to the offer URL and hands
+// it back, which is the whole attribution chain: the lead clicked the offer here,
+// carried a signed token to the coach's checkout, and this reports the sale back
+// with that token. No ref on the URL means the visitor did not come through the
+// funnel, and the snippet does nothing rather than inventing a sale.
+//
+// Built here rather than in the frontend so the funnel id and endpoint path have
+// exactly one definition — a hand-written snippet that drifts silently records
+// nothing, and nobody notices until the revenue numbers are already wrong.
+function conversionSnippet(funnelId: string): string {
+  const url = `${API_URL}/api/funnels/${funnelId}/conversion`
+  return `<!-- Micro-Training Method conversion tracking -->
+<script>(function(){try{var r=new URLSearchParams(window.location.search).get('ref');if(!r)return;var i=new Image();i.referrerPolicy='no-referrer';i.src=${JSON.stringify(url)}+'?ref='+encodeURIComponent(r);}catch(e){}})();</script>`
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
   noStore(res)
-  if (req.method !== 'PATCH') return res.status(405).end()
+  if (req.method !== 'PATCH' && req.method !== 'GET') return res.status(405).end()
 
   const userId = await requireFunnelBuilder(req, res)
   if (!userId) return
@@ -62,7 +82,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const id = req.query.id as string
   if (!id) return res.status(400).json({ error: 'id required' })
 
-  const funnel = await getOwnedFunnel(userId, id, 'id, user_id, subdomain')
+  // GET returns what the tab needs to render itself: the current values plus the
+  // copy-paste conversion snippet, which is derived rather than stored.
+  if (req.method === 'GET') {
+    const full = await getOwnedFunnel(userId, id, '*')
+    if (!full) return res.status(404).json({ error: 'Funnel not found' })
+    return res.status(200).json({ funnel: full, conversion_snippet: conversionSnippet(id) })
+  }
+
+  const funnel = await getOwnedFunnel(userId, id, 'id, user_id, subdomain, offer_url')
   if (!funnel) return res.status(404).json({ error: 'Funnel not found' })
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
@@ -128,6 +156,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if ('cookie_notice_enabled' in body) {
     if (typeof body.cookie_notice_enabled !== 'boolean') return bad('cookie_notice_enabled', 'Must be true or false.')
     updates.cookie_notice_enabled = body.cookie_notice_enabled
+  }
+  // Served at /privacy and /terms on the funnel domain. Stored and rendered as
+  // PLAIN TEXT — accepting HTML here would turn an owner-writable field into
+  // stored XSS on a public page, so no markup is parsed on the way in or out.
+  for (const key of ['legal_privacy', 'legal_terms'] as const) {
+    if (key in body) {
+      const r = optionalText(body[key])
+      if (!r.ok) return bad(key, 'Must be text, or null to clear.')
+      updates[key] = r.value
+    }
   }
 
   // ── application gate ─────────────────────────────────────────────────────
@@ -204,7 +242,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .select('*')
       .single()
     if (error) throw error
-    return res.status(200).json({ funnel: data, updated: Object.keys(updates) })
+    return res.status(200).json({ funnel: data, updated: Object.keys(updates), conversion_snippet: conversionSnippet(id) })
   } catch (err) {
     console.error('[funnels/[id]/settings] PATCH', err)
     return res.status(500).json({ error: 'Failed to save settings' })

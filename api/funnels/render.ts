@@ -34,7 +34,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const rawPage = req.query?.page
   const pageParam = (Array.isArray(rawPage) ? rawPage[0] : rawPage) || 'landing'
-  const page = ['landing', 'training', 'book'].includes(String(pageParam)) ? String(pageParam) : 'landing'
+  // privacy/terms arrive as ?page= too — vercel.json rewrites /privacy and /terms
+  // on the funnel domain to this handler with the page already set, rather than
+  // relying on the post-rewrite request path.
+  const page = ['landing', 'training', 'book', 'privacy', 'terms'].includes(String(pageParam)) ? String(pageParam) : 'landing'
 
   if (!subdomain) return send404(res)
 
@@ -47,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Kept as ONE string literal on purpose: supabase-js infers the row type from
     // the select text, and a concatenated expression widens to `string`, which
     // collapses `data` to an error type and breaks every field access below.
-    .select('id, user_id, subdomain, status, generation_id, video_url, collect_name, collect_phone, landing_page, training_page, booking_page, application_questions_enabled, booking_questions, disqualify_rules, disqualify_action, disqualify_message, disqualify_redirect_url, logo_url, headshot_url, brand_primary_color, brand_secondary_color, brand_font, brand_headline_font, brand_body_font, cookie_notice_enabled')
+    .select('id, user_id, subdomain, status, generation_id, video_url, collect_name, collect_phone, landing_page, training_page, booking_page, application_questions_enabled, booking_questions, disqualify_rules, disqualify_action, disqualify_message, disqualify_redirect_url, logo_url, headshot_url, brand_primary_color, brand_secondary_color, brand_font, brand_headline_font, brand_body_font, cookie_notice_enabled, cta_mode, offer_url, offer_button_text, offer_price_display, legal_privacy, legal_terms')
     .eq('subdomain', subdomain)
     .maybeSingle()
 
@@ -74,16 +77,48 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     logoUrl: firstUrl(funnel.logo_url, settings.logo_url),
     headshotUrl: firstUrl(funnel.headshot_url, settings.headshot_url, owner.avatar_url),
     businessName: settings.business_name || (owner.name ? owner.name.trim() : null) || null,
-    legal: settings.legal || {},
+    // Hosted legal wins over the account-level link: if the coach wrote the
+    // policy here, the footer should point at the copy this domain actually
+    // serves, not at whatever they linked before.
+    legal: withHostedLegal(settings.legal || {}, funnel),
     // Legal toggle: only the explicit false switches the cookie notice off, so a
     // funnel predating the column (NULL) keeps rendering it exactly as before.
     cookieNotice: funnel.cookie_notice_enabled !== false,
+  }
+
+  // The hosted legal pages are served before anything else: they are not funnel
+  // steps, so they log no view event and take no part in the sell-mode routing.
+  if (page === 'privacy' || page === 'terms') {
+    const legalHtml = legalPage(funnel, branding, page)
+    if (!legalHtml) {
+      // Nothing written here. Fall back to the account-level link the coach set
+      // (their own hosted page) before giving up — a 404 on /privacy is a real
+      // compliance problem for anyone running ads.
+      const url = page === 'privacy' ? branding.legal.privacy_url : branding.legal.terms_url
+      if (url && isValidHttpUrl(url)) {
+        res.setHeader('Location', url)
+        return res.status(302).end()
+      }
+      return send404(res)
+    }
+    res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    return res.status(200).send(legalHtml)
   }
 
   // Best-effort page-view event. landing_view / training_view; the book page is
   // reached by clicking the "book a call" CTA, so its load is a booking_click.
   const viewEvent = page === 'training' ? 'training_view' : page === 'book' ? 'booking_click' : 'landing_view'
   logEvent(funnel.id, viewEvent)
+
+  // Sell mode has no calendar, so ?page=book has nothing to render — a lead who
+  // reaches it from an old link or a bookmark goes back to the training page,
+  // where the offer CTA is. Redirecting rather than rendering an empty booking
+  // page is what makes "no calendar in sell mode" true of every route, not just
+  // of the CTA.
+  if (page === 'book' && sellMode(funnel)) {
+    res.setHeader('Location', `?page=training${funnel.subdomain ? `&subdomain=${encodeURIComponent(funnel.subdomain as string)}` : ''}`)
+    return res.status(302).end()
+  }
 
   let html: string
   if (page === 'training') html = trainingPage(funnel, branding, await loadKeyTakeaways(funnel.generation_id))
@@ -212,6 +247,59 @@ function siteFooter(b: Branding): string {
   return footer(b.brand, b.businessName, b.legal, b.cookieNotice)
 }
 
+// ---- hosted legal (/privacy, /terms) ----------------------------------------
+
+// Point the footer's Privacy/Terms links at this funnel's own hosted pages when
+// the coach has written content for them, leaving the account-level link in
+// place when they have not.
+//
+// Absolute rather than relative because footer() emits these with target=_blank
+// after an http(s) check — the same read-side validation every other URL in the
+// footer goes through, and a relative path could not pass it.
+function withHostedLegal(legal: Legal, funnel: Record<string, any>): Legal {
+  const sub = typeof funnel.subdomain === 'string' ? funnel.subdomain.trim() : ''
+  if (!sub) return legal
+  const base = `https://${sub}.${FUNNEL_PUBLIC_DOMAIN}`
+  const has = (v: unknown) => typeof v === 'string' && v.trim().length > 0
+  return {
+    ...legal,
+    ...(has(funnel.legal_privacy) ? { privacy_url: `${base}/privacy` } : {}),
+    ...(has(funnel.legal_terms) ? { terms_url: `${base}/terms` } : {}),
+  }
+}
+
+// Serves the coach's own privacy policy / terms on the funnel domain, from the
+// text they wrote in Settings. Returns null when nothing is written, so the
+// caller can fall back to their externally-hosted link.
+//
+// The stored value is PLAIN TEXT and is rendered escaped, split on blank lines
+// into paragraphs. This is the whole reason the column is not HTML: it is
+// owner-writable content on a public page, and parsing markup here would make it
+// a stored-XSS vector for anyone who can edit a funnel.
+function legalPage(funnel: Record<string, any>, b: Branding, kind: 'privacy' | 'terms'): string | null {
+  const raw = kind === 'privacy' ? funnel.legal_privacy : funnel.legal_terms
+  const text = typeof raw === 'string' ? raw.trim() : ''
+  if (!text) return null
+
+  const title = kind === 'privacy' ? 'Privacy Policy' : 'Terms of Service'
+  const paragraphs = text
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    // Single newlines inside a paragraph stay as line breaks, which is how the
+    // coach typed it — legal text is full of short enumerated lines.
+    .map((p) => `<p class="legal-p">${escapeHtml(p).replace(/\n/g, '<br />')}</p>`)
+    .join('')
+
+  const body = `
+    ${imgTag(b.logoUrl, 'logo')}
+    <h1>${escapeHtml(title)}</h1>
+    ${b.businessName ? `<p class="sub">${escapeHtml(b.businessName)}</p>` : ''}
+    ${paragraphs}`
+
+  return shell(b.brand, title, body, '', b.head, siteFooter(b))
+}
+
 function shell(brand: Brand, title: string, body: string, script = '', head = '', footerHtml = ''): string {
   return `<!DOCTYPE html>
 <html lang="en" data-theme="${brand.isDark ? 'dark' : 'light'}">
@@ -255,6 +343,7 @@ function shell(brand: Brand, title: string, body: string, script = '', head = ''
     .err { color: #ff6b6b; font-size: .9rem; margin-top: .75rem; min-height: 1.1rem; }
     .slot { display: block; width: 100%; text-align: left; margin: .4rem 0; background: ${brand.card}; color: ${brand.text}; }
     .muted { color: ${brand.muted}; }
+    .legal-p { color: ${brand.muted}; font-size: .95rem; margin: 0 0 1rem; white-space: normal; }
     /* Application gate (?page=book with the gate on): video beside the quiz on a
        wide screen, stacked on a phone. Inert on every other page. */
     .appgrid { display: grid; gap: 1.25rem; grid-template-columns: 1fr; }
@@ -357,11 +446,25 @@ function trainingPage(funnel: Record<string, any>, b: Branding, takeaways: strin
   const tp = (funnel.training_page || {}) as Record<string, any>
   const headline = escapeWithLinks(tp.headline || 'Your training', funnel)
   const sub = tp.subheadline ? `<p class="sub">${escapeWithLinks(tp.subheadline, funnel)}</p>` : ''
-  const cta = escapeHtml(tp.cta_label || 'Book a call')
   const video = videoEmbed(funnel.video_url)
   const kt = takeaways.length
     ? `<h2>Key takeaways</h2><ul>${takeaways.map((t) => `<li>${escapeWithLinks(t, funnel)}</li>`).join('')}</ul>`
     : ''
+
+  // Sell mode: the CTA goes to the coach's offer instead of the calendar, with
+  // the price under it when they set one. It routes through /api/funnel/offer so
+  // the attribution token is minted and signed server-side — see that endpoint.
+  //
+  // The href is built here rather than pointing at offer_url directly, which is
+  // also what keeps the "no calendar" promise honest: in sell mode nothing on
+  // this page links to ?page=book at all.
+  const cta = sellMode(funnel)
+    ? `<a class="btn" href="${offerHref(funnel)}" id="offercta">${escapeHtml(funnel.offer_button_text || tp.cta_label || 'Get instant access')}</a>${
+        typeof funnel.offer_price_display === 'string' && funnel.offer_price_display.trim()
+          ? `<p class="muted" style="text-align:center;margin:.6rem 0 0;font-size:.9rem;">${escapeHtml(funnel.offer_price_display)}</p>`
+          : ''
+      }`
+    : `<a class="btn" href="?page=book${subQuery(funnel)}">${escapeHtml(tp.cta_label || 'Book a call')}</a>`
 
   const body = `
     ${imgTag(b.logoUrl, 'logo')}
@@ -369,13 +472,51 @@ function trainingPage(funnel: Record<string, any>, b: Branding, takeaways: strin
     ${sub}
     ${video.html}
     ${kt}
-    <a class="btn" href="?page=book${subQuery(funnel)}">${cta}</a>`
+    ${cta}`
 
   // Only wire the watch-tracking player when there is a real video to track; the
-  // token hand-off runs either way.
-  const script = [CARRY_WATCH_TOKEN_JS, video.init ? buildPlayerScript(funnel, video.init) : ''].filter(Boolean).join('\n')
+  // token hand-off runs either way. In sell mode it also carries the token onto
+  // the offer link, so the redirect can name the lead the sale belongs to.
+  const script = [
+    CARRY_WATCH_TOKEN_JS,
+    sellMode(funnel) ? CARRY_OFFER_TOKEN_JS : '',
+    video.init ? buildPlayerScript(funnel, video.init) : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
   return shell(b.brand, tp.headline || 'Your training', body, script, b.head, siteFooter(b))
 }
+
+// ---- sell mode ----------------------------------------------------------
+// cta_mode = 'sell' sends the training CTA to the coach's offer instead of the
+// calendar. An offer URL is required to save sell mode (the Settings endpoint
+// rejects it otherwise), but this re-checks rather than trusting it: a row
+// edited directly, or one whose offer URL was later cleared, must fall back to
+// the booking CTA rather than render a button that goes nowhere.
+function sellMode(funnel: Record<string, any>): boolean {
+  return funnel.cta_mode === 'sell' && typeof funnel.offer_url === 'string' && isValidHttpUrl(funnel.offer_url.trim())
+}
+
+// Relative, so the ?subdomain= preview keeps working, and /api/ is excluded from
+// the funnel-domain rewrite so it reaches the real function.
+function offerHref(funnel: Record<string, any>): string {
+  const sub = typeof funnel.subdomain === 'string' ? funnel.subdomain : ''
+  return `/api/funnel/offer?funnel_id=${escapeAttr(funnel.id)}${sub ? `&amp;subdomain=${escapeAttr(sub)}` : ''}`
+}
+
+// Same hand-off as the booking link, for the offer redirect: without the token
+// the redirect cannot tell which lead clicked, and the sale it later records
+// would have no one to attribute to.
+const CARRY_OFFER_TOKEN_JS = `(function(){
+    try {
+      var wt = new URLSearchParams(window.location.search).get('wt');
+      var a = document.getElementById('offercta');
+      if (!wt || !a) return;
+      var u = new URL(a.getAttribute('href'), window.location.href);
+      u.searchParams.set('wt', wt);
+      a.setAttribute('href', u.pathname + u.search);
+    } catch(e){}
+  })();`
 
 // Carry the watch token from the training page's URL onto every link into the
 // booking page (the CTA button and any [BOOK_A_CALL_LINK] the copy contains).
@@ -832,7 +973,9 @@ function send404(res: VercelResponse) {
 function escapeWithLinks(text: unknown, funnel: Record<string, any>): string {
   const sub = typeof funnel.subdomain === 'string' ? funnel.subdomain : ''
   const host = sub ? `${sub}.${FUNNEL_PUBLIC_DOMAIN}` : ''
-  const bookHref = `?page=book${subQuery(funnel)}`
+  // In sell mode the "book a call" tokens the generator wrote point at the offer
+  // instead — there is no calendar to send anyone to.
+  const bookHref = sellMode(funnel) ? offerHref(funnel) : `?page=book${subQuery(funnel)}`
   const trainingHref = `?page=training${subQuery(funnel)}`
   // Fall back to a short phrase only when there is no subdomain to show (preview).
   const label = (path: string, fallback: string) => (host ? escapeHtml(`${host}/${path}`) : fallback)
