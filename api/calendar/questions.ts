@@ -6,12 +6,16 @@ import { resolveBookingQuestions } from '../../lib/bookingQuestions'
 // public). Returns the question definitions in order so the frontend can render
 // them. Definitions only — no answers.
 //
-// funnel_id is REQUIRED for a funnel booking page: /api/calendar/book validates
-// against the funnel's own questions when the coach has Google connected, and the
-// global set otherwise. Without funnel_id this returns the global set, which for
-// a funnel booking can be the WRONG set — the live `question_required` bug, where
-// the lead was rejected for a field the form never showed. resolveBookingQuestions
-// is the single resolver both sides use.
+// funnel_id is REQUIRED for a funnel booking page. With it, the response comes
+// from that funnel's own settings: application_questions_enabled=false yields [],
+// true yields its booking_questions. WITHOUT it, this returns the LEGACY global
+// admin set, which for a funnel is the wrong answer — that mismatch is what hard
+// blocked bookings on charge-demo (the form showed no questions, the global
+// defaults were validated against, every submission 400'd).
+//
+// /api/calendar/book resolves the same way from the same helper, so the set a
+// lead is shown and the set they are validated against cannot drift.
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
   if (req.method !== 'GET') return res.status(405).end()
