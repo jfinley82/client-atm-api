@@ -289,12 +289,12 @@ function landingPage(funnel: Record<string, any>, b: Branding): string {
 
 function trainingPage(funnel: Record<string, any>, b: Branding, takeaways: string[]): string {
   const tp = (funnel.training_page || {}) as Record<string, any>
-  const headline = escapeHtml(tp.headline || 'Your training')
-  const sub = tp.subheadline ? `<p class="sub">${escapeHtml(tp.subheadline)}</p>` : ''
+  const headline = escapeWithLinks(tp.headline || 'Your training', funnel)
+  const sub = tp.subheadline ? `<p class="sub">${escapeWithLinks(tp.subheadline, funnel)}</p>` : ''
   const cta = escapeHtml(tp.cta_label || 'Book a call')
   const video = videoEmbed(funnel.video_url)
   const kt = takeaways.length
-    ? `<h2>Key takeaways</h2><ul>${takeaways.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
+    ? `<h2>Key takeaways</h2><ul>${takeaways.map((t) => `<li>${escapeWithLinks(t, funnel)}</li>`).join('')}</ul>`
     : ''
 
   const body = `
@@ -495,6 +495,30 @@ function subQuery(funnel: Record<string, any>): string {
 function send404(res: VercelResponse) {
   res.setHeader('Content-Type', 'text/html; charset=utf-8')
   return res.status(404).send('<!DOCTYPE html><html><body><h1>404</h1><p>Funnel not found</p></body></html>')
+}
+
+// Lead-facing copy comes from the generator, which writes CTA links as tokens
+// ([BOOK_A_CALL_LINK] etc). The email sender substitutes them; the training page
+// did NOT, so a lead saw a literal "[BOOK_A_CALL_LINK]" in the key takeaways.
+// This substitutes them the same way, as real clickable links.
+//
+// Targets are RELATIVE (?page=book&subdomain=…), matching the page's own CTA —
+// an absolute https://<sub>.<domain> URL would break the preview render, which is
+// served off a path with ?subdomain= rather than the live subdomain.
+//
+// Order matters: escape FIRST, then swap tokens for anchors. The tokens contain no
+// HTML-special characters so they survive escaping intact, and the hrefs are ours
+// (never lead input), so injecting the anchor after escaping stays XSS-safe.
+function escapeWithLinks(text: unknown, funnel: Record<string, any>): string {
+  const bookHref = `?page=book${subQuery(funnel)}`
+  const trainingHref = `?page=training${subQuery(funnel)}`
+  const anchor = (href: string, label: string) => `<a href="${href}">${label}</a>`
+  return escapeHtml(text)
+    .replace(/\[BOOK_A_CALL_LINK\]/g, anchor(bookHref, 'book a call'))
+    .replace(/\[OFFER_LINK\]/g, anchor(bookHref, 'book a call'))
+    .replace(/\[TRAINING_LINK\]/g, anchor(trainingHref, 'the training'))
+    .replace(/\[GUIDE_LINK\]/g, anchor(trainingHref, 'the training'))
+    .replace(/\[FUNNEL_LINK\]/g, anchor(`?${subQuery(funnel).replace(/^&amp;/, '')}`, 'the page'))
 }
 
 function escapeHtml(s: unknown): string {

@@ -5,7 +5,7 @@ import { setCors } from '../../lib/cors'
 import { isZoomConfigured, getSchedulerAvailability, createZoomMeeting, slotMinutes } from '../../lib/zoom'
 import { buildBookingIcs } from '../../lib/ics'
 import { sendBookingConfirmationEmail, sendCoachBookingNotification } from '../../lib/email'
-import { loadBookingQuestions, loadFunnelBookingQuestions, validateBookingAnswers, ValidatedAnswer } from '../../lib/bookingQuestions'
+import { resolveBookingQuestions, validateBookingAnswers, bookingQuestionErrorMessage, ValidatedAnswer } from '../../lib/bookingQuestions'
 import { resolveLiveFunnel } from '../../lib/funnels'
 import { loadUserAvailability } from '../../lib/availabilitySettings'
 import { isSlotOpen } from '../../lib/funnelAvailability'
@@ -144,10 +144,15 @@ async function bookGooglePath(
   const settings = await loadUserAvailability(owner)
   const endIso = new Date(startMs + settings.slot_minutes * 60_000).toISOString()
 
-  // Validate answers against THIS funnel's questions.
-  const questions = await loadFunnelBookingQuestions(funnelRow.id as string)
+  // Validate against the SAME set /api/calendar/questions serves this page, so a
+  // lead is never rejected for a field the form never rendered.
+  const questions = await resolveBookingQuestions(funnelRow.id as string)
   const av = validateBookingAnswers(questions, answersMap)
-  if (!av.ok) return res.status(400).json({ error: av.error, question: av.question })
+  if (!av.ok) {
+    return res
+      .status(400)
+      .json({ error: av.error, question: av.question, message: bookingQuestionErrorMessage(av.error, av.question) })
+  }
 
   // Parity: the slot must be genuinely open per the same engine the page showed.
   if (!(await isSlotOpen(owner, startIso))) return res.status(409).json({ error: 'slot_taken' })
@@ -274,9 +279,13 @@ async function bookLegacyPath(
   const endIso = new Date(startMs + slotMinutes() * 60_000).toISOString()
 
   // Global custom questions for the shared path.
-  const questions = await loadBookingQuestions()
+  const questions = await resolveBookingQuestions(null)
   const av = validateBookingAnswers(questions, answersMap)
-  if (!av.ok) return res.status(400).json({ error: av.error, question: av.question })
+  if (!av.ok) {
+    return res
+      .status(400)
+      .json({ error: av.error, question: av.question, message: bookingQuestionErrorMessage(av.error, av.question) })
+  }
 
   // 1) Confirm the slot is genuinely still open per Zoom Scheduler.
   const dayStart = new Date(startMs - 60_000).toISOString()
