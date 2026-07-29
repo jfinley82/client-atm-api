@@ -1,4 +1,6 @@
 import { supabase } from './supabase'
+import { resolveLiveFunnel } from './funnels'
+import { getValidAccessToken } from './googleCalendar'
 
 // Admin-defined custom questions for the public booking form. Stored as a JSON
 // string in app_settings under the 'booking_questions' key (reusing the
@@ -92,4 +94,39 @@ export function validateBookingAnswers(
     out.push({ id: q.id, label: q.label, type: q.type, answer })
   }
   return { ok: true, answers: out }
+}
+
+// ── Which questions actually apply to a booking ──────────────────────────────
+// /api/calendar/book picks its path from (funnel resolves && owner has Google):
+// the FUNNEL path validates against the funnel's own questions, the LEGACY path
+// against the global admin set. The public booking page must render exactly the
+// set that will be validated, or a lead sees `question_required` for a field that
+// was never on the form — which is precisely the live bug this resolves.
+//
+// Both the page (/api/calendar/questions) and the validator now call THIS, so the
+// two agree by construction rather than by two copies of the same condition.
+export async function resolveBookingQuestions(funnelId?: string | null): Promise<BookingQuestion[]> {
+  const id = typeof funnelId === 'string' ? funnelId.trim() : ''
+  if (id) {
+    const funnelRow = await resolveLiveFunnel({ funnelId: id })
+    if (funnelRow) {
+      const conn = await getValidAccessToken(funnelRow.user_id as string)
+      // Funnel path — the funnel's own questions (defaults to [], i.e. none).
+      if (conn) return loadFunnelBookingQuestions(funnelRow.id as string)
+    }
+  }
+  // Legacy shared path — the global admin question set.
+  return loadBookingQuestions()
+}
+
+// Human-readable text for a validation failure, so a lead never sees a raw code.
+export function bookingQuestionErrorMessage(error: string, question: string): string {
+  switch (error) {
+    case 'question_required':
+      return `Please answer "${question}" to complete your booking.`
+    case 'invalid_option':
+      return `Please choose one of the listed options for "${question}".`
+    default:
+      return 'Please check your answers and try again.'
+  }
 }

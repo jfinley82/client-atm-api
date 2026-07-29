@@ -194,6 +194,13 @@ export function deriveSalesScript(g: FunnelGrounding): Record<string, unknown> {
       // `recommended` is the coach's default line for the beat: the words they
       // chose to say. Verbatim, never regenerated.
       script: String(b?.recommended ?? ''),
+      // Additive per the go-live fix list, so the Growth Kit can render the beat
+      // exactly as the Build/Launch renderer does rather than showing only the
+      // default line. Both are stored on every beat; passed through verbatim.
+      prospect_mindset: String(b?.prospect_mindset ?? ''),
+      phrasing_options: Array.isArray(b?.phrasing_options)
+        ? b.phrasing_options.map((o: unknown) => String(o ?? ''))
+        : [],
     }))
     .filter((st: { name: string; script: string }) => st.name.trim().length > 0 || st.script.trim().length > 0)
   return { steps }
@@ -208,6 +215,12 @@ export function deriveObjectionScripts(g: FunnelGrounding): Record<string, unkno
       loop: String(o?.loop ?? ''),
       // Stored as `handling`; the contract calls it `response`. Rename only.
       response: String(o?.handling ?? ''),
+      // NOTE: the go-live fix list also asked for `beneath_it` here. The Build
+      // never generated or stored that field (stored objections are exactly
+      // { objection, handling, loop }), so there is nothing to derive it from —
+      // emitting it would mean inventing text, which is precisely what "derive,
+      // don't regenerate" rules out. Omitted deliberately; flagged for the
+      // frontend so it does not wait on a field that will never arrive.
     }))
     .filter((o: { objection: string; response: string }) => o.objection.trim().length > 0 || o.response.trim().length > 0)
   return { objections }
