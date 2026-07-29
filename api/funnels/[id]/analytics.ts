@@ -32,6 +32,22 @@ async function countLeads(funnelId: string, w?: Window): Promise<number> {
   return count ?? 0
 }
 
+// Distinct PEOPLE who produced an event, not raw event rows. An anonymous event
+// (lead_id null) is its own person, since there is nothing to dedupe it against.
+// Used for the funnel chain, where a lead who re-submits an application must not
+// widen the step above the one below it and make the chain read as if it grew.
+async function countDistinctLeadEvents(funnelId: string, eventType: string): Promise<number> {
+  const { data } = await supabase
+    .from('funnel_events')
+    .select('lead_id')
+    .eq('funnel_id', funnelId)
+    .eq('event_type', eventType)
+  const rows = (data as { lead_id: string | null }[]) || []
+  const named = new Set(rows.map((r) => r.lead_id).filter((x): x is string => !!x))
+  const anonymous = rows.filter((r) => !r.lead_id).length
+  return named.size + anonymous
+}
+
 type WindowKpis = { visits: number; leads: number; appointments: number; closed: number; revenue: number }
 
 // Windowed KPIs. closed + revenue come from WON engagement events (sold/closed)
@@ -93,6 +109,69 @@ async function loadUpcomingCalls(funnelId: string) {
   }))
 }
 
+// The conversion chain, which is a different chain depending on what the funnel
+// is FOR. Reporting "booked" on a funnel that sells straight off the training
+// page would show a permanent zero and read as a broken funnel; reporting
+// "offer clicks" on a booking funnel is equally meaningless.
+//
+//   book: visits -> opt-ins -> applied -> qualified -> booked -> closed
+//   sell: visits -> opt-ins -> offer clicks -> sales (+ revenue)
+//
+// The application steps only appear when the gate is actually on. A booking
+// funnel without it goes straight from opt-ins to booked, which is what really
+// happens there.
+type ChainStep = { key: string; label: string; count: number }
+
+async function buildChain(
+  funnelId: string,
+  funnel: Record<string, any>,
+  visits: number,
+  leads: number,
+  appointments: number,
+  closedCount: number,
+  totalRevenue: number
+): Promise<{ mode: 'book' | 'sell'; steps: ChainStep[]; revenue?: number }> {
+  const head: ChainStep[] = [
+    { key: 'visits', label: 'Visits', count: visits },
+    { key: 'opt_ins', label: 'Opt-ins', count: leads },
+  ]
+
+  if (funnel.cta_mode === 'sell') {
+    const [offerClicks, sales] = await Promise.all([
+      countDistinctLeadEvents(funnelId, 'offer_click'),
+      countEvents(funnelId, 'sold'),
+    ])
+    return {
+      mode: 'sell',
+      steps: [...head, { key: 'offer_clicks', label: 'Offer clicks', count: offerClicks }, { key: 'sales', label: 'Sales', count: sales }],
+      revenue: totalRevenue,
+    }
+  }
+
+  const gated = funnel.application_questions_enabled === true
+  const [applied, qualified] = gated
+    ? await Promise.all([
+        countDistinctLeadEvents(funnelId, 'application_submitted'),
+        countDistinctLeadEvents(funnelId, 'qualified'),
+      ])
+    : [0, 0]
+
+  return {
+    mode: 'book',
+    steps: [
+      ...head,
+      ...(gated
+        ? [
+            { key: 'applied', label: 'Applied', count: applied },
+            { key: 'qualified', label: 'Qualified', count: qualified },
+          ]
+        : []),
+      { key: 'booked', label: 'Booked', count: appointments },
+      { key: 'closed', label: 'Closed', count: closedCount },
+    ],
+  }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
   if (req.method !== 'GET') return res.status(405).end()
@@ -104,7 +183,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const id = req.query.id as string
   if (!id) return res.status(400).json({ error: 'id required' })
 
-  const funnel = await getOwnedFunnel(userId, id)
+  // The two columns buildChain branches on must be SELECTED — getOwnedFunnel
+  // defaults to 'id, user_id', which would leave both undefined and silently
+  // report every funnel as an ungated booking funnel.
+  const funnel = await getOwnedFunnel(userId, id, 'id, user_id, cta_mode, application_questions_enabled')
   if (!funnel) return res.status(404).json({ error: 'Funnel not found' })
 
   const period = normalizePeriod(Array.isArray(req.query.period) ? req.query.period[0] : req.query.period)
@@ -128,6 +210,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const total_revenue = closedAmounts.reduce((s, n) => s + n, 0)
     const avg_deal = closed_count > 0 ? Math.round((total_revenue / closed_count) * 100) / 100 : 0
 
+    const chain = await buildChain(id, funnel, visits, leads, appointments, closed_count, total_revenue)
+
     const ratio = (num: number, den: number) => (den > 0 ? Math.round((num / den) * 10000) / 10000 : 0)
 
     const delta_pct = {
@@ -149,6 +233,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         close_rate: ratio(closed_count, leads),
       },
       totals: { closed_count, total_revenue, avg_deal },
+      // Mode-adaptive conversion chain — book vs sell. See buildChain.
+      chain,
       // Upcoming Calls panel — active future bookings for this funnel.
       upcoming_calls,
       // period-over-period

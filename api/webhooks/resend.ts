@@ -12,6 +12,9 @@ import { cancelLeadQueue } from '../../lib/funnelNurture'
 // records engagement.
 //
 // Handled events:
+//   email.sent / email.delivered -> stamp funnel_email_sends.sent_at /
+//     delivered_at (and settle a scheduled row's status). These are what the
+//     per-email analytics feed divides by.
 //   email.opened  -> funnel_events 'email_opened' (deduped to one per message)
 //   email.clicked -> funnel_events 'email_clicked' (every click; stores the url)
 //   email.bounced / email.complained -> unsubscribe the lead + cancel their
@@ -108,6 +111,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const messageId = typeof body.data?.email_id === 'string' ? body.data.email_id : ''
 
   try {
+    // Delivery lifecycle. Without these two the analytics feed has no honest
+    // denominator: a SCHEDULED send is recorded 'queued' at schedule time and
+    // nothing ever moved it, so every future-dated email looked unsent forever.
+    // email.sent is when Resend dispatched it; email.delivered is when the
+    // receiving server accepted it, which is what open/click rates divide by.
+    if (type === 'email.sent' || type === 'email.delivered') {
+      if (messageId) {
+        const stamp = { [type === 'email.sent' ? 'sent_at' : 'delivered_at']: new Date().toISOString() }
+        // Also settle the status for a scheduled send that has now gone out.
+        // Never overwrite 'failed' — a later delivered event for a bounced
+        // message would otherwise erase the bounce.
+        const { error } = await supabase
+          .from('funnel_email_sends')
+          .update({ ...stamp, status: 'sent' })
+          .eq('resend_message_id', messageId)
+          .neq('status', 'failed')
+        if (error) console.error('[webhooks/resend] delivery update', error)
+      }
+      return res.status(200).json({ received: true })
+    }
+
     if (type === 'email.opened' || type === 'email.clicked') {
       const send = await lookupSend(messageId)
       // No matching send row (e.g. a non-funnel email) → nothing to attribute.
@@ -133,8 +157,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (type === 'email.bounced' || type === 'email.complained') {
       const send = await lookupSend(messageId)
       if (send) {
-        // Mark this specific send failed.
-        await supabase.from('funnel_email_sends').update({ status: 'failed' }).eq('resend_message_id', messageId)
+        // Mark this specific send failed, and stamp when — the analytics feed
+        // reports a bounce rate per email.
+        await supabase
+          .from('funnel_email_sends')
+          .update({ status: 'failed', bounced_at: new Date().toISOString() })
+          .eq('resend_message_id', messageId)
         if (send.lead_id) {
           // Suppress the lead and cancel any of their still-scheduled sends —
           // cancelLeadQueue also cancels them at Resend (Phase 5b), not just in

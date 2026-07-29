@@ -26,6 +26,16 @@
       "destination": "/api/hub/render"
     },
     {
+      "source": "/privacy",
+      "has": [{ "type": "host", "value": "([^.]+)\\.freeminiworkshop\\.com" }],
+      "destination": "/api/funnels/render?page=privacy"
+    },
+    {
+      "source": "/terms",
+      "has": [{ "type": "host", "value": "([^.]+)\\.freeminiworkshop\\.com" }],
+      "destination": "/api/funnels/render?page=terms"
+    },
+    {
       "source": "/((?!api/).*)",
       "has": [{ "type": "host", "value": "([^.]+)\\.freeminiworkshop\\.com" }],
       "destination": "/api/funnels/render"
