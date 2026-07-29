@@ -2,7 +2,8 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { getSessionFromRequest, verifySessionToken } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
-import { isZoomConfigured, getSchedulerAvailability, createZoomMeeting, slotMinutes } from '../../lib/zoom'
+import { isZoomConfigured, createZoomMeeting, slotMinutes } from '../../lib/zoom'
+import { isSchedulerSlotOpen } from '../../lib/schedulerSlots'
 import { buildBookingIcs } from '../../lib/ics'
 import { sendBookingConfirmationEmail, sendCoachBookingNotification } from '../../lib/email'
 import { funnelBookingQuestions, loadBookingQuestions, validateBookingAnswers, bookingQuestionErrorMessage, ValidatedAnswer } from '../../lib/bookingQuestions'
@@ -24,14 +25,12 @@ import { buildManageUrl } from '../../lib/bookingManage'
 //   book page shows (isSlotOpen), create the real event on the coach's Google
 //   Calendar, set coach_user_id + google_event_id + meeting_url, meeting link is
 //   the coach's zoom_link (else an auto-created Meet).
-//   NATIVE / LEGACY PATH — a funnel whose owner has no Google connection, or no
-//   funnel at all. Both create the meeting on the shared Zoom account, but they
-//   validate the SLOT differently, because they showed the lead different
-//   calendars: a funnel validates against the coach's own availability
-//   (isSlotOpen — the same builder its booking page used), while a genuinely
-//   funnel-less booking validates against the shared Zoom Scheduler. Validating a
-//   native funnel's slots against the Zoom Scheduler compares two unrelated
-//   calendars and rejects nearly every valid pick as slot_taken.
+//   SHARED-ZOOM PATH — a funnel whose owner has no Google connection, or no
+//   funnel at all. Creates the meeting on the shared Zoom account and validates
+//   the slot with isSchedulerSlotOpen — the SAME computation behind
+//   GET /api/calendar/availability, which is the list the booking page renders.
+//   That shared source is the invariant: whenever the two have diverged, every
+//   listed slot was rejected as slot_taken.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
   if (req.method !== 'POST') return res.status(405).end()
@@ -286,14 +285,8 @@ async function bookLegacyPath(
 
   if (!isZoomConfigured()) return res.status(503).json({ error: 'calendar_unavailable' })
 
-  // Slot LENGTH has the same Zoom-vs-native split as slot availability: a funnel
-  // booking must use the coach's own slot_minutes (the grid the lead picked from),
-  // not the shared Zoom scheduler's, or end_time and the calendar invite disagree
-  // with the slot that was actually booked.
-  const funnelSlotMinutes = funnelRow
-    ? (await loadUserAvailability(funnelRow.user_id as string)).slot_minutes
-    : slotMinutes()
-  const endIso = new Date(startMs + funnelSlotMinutes * 60_000).toISOString()
+  // Length comes from the same Zoom grid the slot was listed on.
+  const endIso = new Date(startMs + slotMinutes() * 60_000).toISOString()
 
   // Global custom questions for the shared path.
   // A native-calendar funnel still books through this path. When a funnel is in
@@ -307,36 +300,22 @@ async function bookLegacyPath(
       .json({ error: av.error, question: av.question, message: bookingQuestionErrorMessage(av.error, av.question) })
   }
 
-  // 1) Confirm the slot is genuinely still open — against the SAME engine that
-  // produced the slots the lead was shown, or a valid pick is rejected as taken.
+  // 1) Confirm the slot is genuinely still open — against the SAME computation
+  // that produced the list the lead picked from (lib/schedulerSlots.ts). The page
+  // calls GET /api/calendar/availability, which now shares this exact function,
+  // so a listed slot always books.
   //
-  // A native-calendar funnel (no Google connection) lands on this path, but its
-  // booking page lists slots from the coach's own availability via
-  // computeOpenSlots. Validating those against the shared Zoom Scheduler compares
-  // two unrelated calendars, so essentially every slot came back 409 slot_taken.
-  // isSlotOpen is the single-slot form of the very builder the page used, and it
-  // does NOT require Google (a connection only subtracts busy time when present).
-  //
-  // The Zoom Scheduler check still applies to a genuinely funnel-less booking on
-  // the shared calendar, which is the only case it was ever describing.
-  if (funnelRow) {
-    if (!(await isSlotOpen(funnelRow.user_id as string, startIso))) {
-      return res.status(409).json({ error: 'slot_taken' })
-    }
-  } else {
-    const dayStart = new Date(startMs - 60_000).toISOString()
-    const dayEnd = new Date(startMs + slotMinutes() * 60_000 + 60_000).toISOString()
-    const slots = await getSchedulerAvailability(dayStart, dayEnd)
-    if (!slots.some((s) => new Date(s.start).getTime() === startMs)) {
-      return res.status(409).json({ error: 'slot_taken' })
-    }
+  // Two earlier attempts got this wrong in the same way, both rejecting every
+  // valid pick: querying Zoom over a ~31-minute window (its available_times is
+  // DAY-granular, so nothing came back to match), then validating against the
+  // coach's own availability engine (which yields nothing for a coach who never
+  // configured custom availability). The fix is not a better window or a better
+  // engine — it is using ONE source for both sides.
+  if (!(await isSchedulerSlotOpen(startIso))) {
+    return res.status(409).json({ error: 'slot_taken' })
   }
 
-  // 2) Reserve. coach_user_id stays NULL only for a genuinely shared booking —
-  // the NULLS NOT DISTINCT unique index then prevents two shared bookings at the
-  // same time. For a FUNNEL booking it is set to the coach, so the uniqueness
-  // backstop scopes per coach: otherwise every native funnel shared the one NULL
-  // bucket and two different coaches could not hold the same clock time.
+  // 2) Reserve.
   const { data: reserved, error: reserveErr } = await supabase
     .from('bookings')
     .insert({
@@ -347,9 +326,11 @@ async function bookLegacyPath(
       end_time: endIso,
       status: 'active',
       custom_answers: av.answers,
-      ...(funnelRow
-        ? { funnel_id: funnelRow.id as string, coach_user_id: funnelRow.user_id as string }
-        : {}),
+      // funnel_id only. coach_user_id stays NULL on purpose: this path books the
+      // ONE shared Zoom host, so the NULLS NOT DISTINCT uniqueness backstop must
+      // keep these globally unique per start_time. Scoping them per coach (tried
+      // in #104) would let two coaches double-book the same shared host.
+      ...(funnelRow ? { funnel_id: funnelRow.id as string } : {}),
     })
     .select('id')
     .single()

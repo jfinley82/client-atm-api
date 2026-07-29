@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { supabase } from '../../lib/supabase'
 import { setCors, noStore } from '../../lib/cors'
-import { isZoomConfigured, getSchedulerAvailability } from '../../lib/zoom'
+import { isZoomConfigured } from '../../lib/zoom'
+import { listOpenSchedulerSlots } from '../../lib/schedulerSlots'
 
 // GET /api/calendar/availability?from=<ISO date>&to=<ISO date>
 // Public (booking a call doesn't require an account). Returns open slots in
@@ -30,19 +30,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       : new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
 
   try {
-    const slots = await getSchedulerAvailability(from.toISOString(), to.toISOString())
-
-    // Drop any slot we already hold an active booking for.
-    const { data: booked, error } = await supabase
-      .from('bookings')
-      .select('start_time')
-      .eq('status', 'active')
-      .gte('start_time', from.toISOString())
-      .lte('start_time', to.toISOString())
-    if (error) throw error
-
-    const takenMs = new Set((booked || []).map((b) => new Date(b.start_time as string).getTime()))
-    const open = slots.filter((s) => !takenMs.has(new Date(s.start).getTime()))
+    // Shared with POST /api/calendar/book's validation (lib/schedulerSlots.ts):
+    // the list the page renders and the check that accepts a booking are the
+    // same computation, so a listed slot always books.
+    const open = await listOpenSchedulerSlots(from.toISOString(), to.toISOString())
 
     return res.status(200).json({ slots: open })
   } catch (err) {
