@@ -1,6 +1,5 @@
 import { supabase } from './supabase'
 import { resolveLiveFunnel } from './funnels'
-import { getValidAccessToken } from './googleCalendar'
 
 // Admin-defined custom questions for the public booking form. Stored as a JSON
 // string in app_settings under the 'booking_questions' key (reusing the
@@ -97,25 +96,38 @@ export function validateBookingAnswers(
 }
 
 // ── Which questions actually apply to a booking ──────────────────────────────
-// /api/calendar/book picks its path from (funnel resolves && owner has Google):
-// the FUNNEL path validates against the funnel's own questions, the LEGACY path
-// against the global admin set. The public booking page must render exactly the
-// set that will be validated, or a lead sees `question_required` for a field that
-// was never on the form — which is precisely the live bug this resolves.
+// A FUNNEL's questions come from its own two settings and nothing else:
+//   application_questions_enabled = false  -> no questions at all
+//   application_questions_enabled = true   -> its booking_questions (may be [])
 //
-// Both the page (/api/calendar/questions) and the validator now call THIS, so the
-// two agree by construction rather than by two copies of the same condition.
+// The global app_settings set is for the LEGACY non-funnel booking page only. It
+// is never a fallback for a funnel: falling back to it is what hard-blocked
+// bookings on charge-demo, where the funnel has questions disabled but the global
+// defaults (q_challenge / q_goal / q_revenue) were served and then validated
+// against, so a lead was asked nothing and could never satisfy the check.
+//
+// Note this is deliberately independent of the calendar mode. An earlier revision
+// only read the funnel's questions when the coach had Google connected, which left
+// every native-calendar funnel on the global defaults — the same bug by a
+// narrower route.
+export function funnelBookingQuestions(funnelRow: Record<string, any>): BookingQuestion[] {
+  // Strict === true: the column defaults to FALSE, and a missing/NULL value must
+  // mean "off", matching the default rather than silently enabling questions.
+  if (funnelRow.application_questions_enabled !== true) return []
+  return normalizeBookingQuestions(funnelRow.booking_questions)
+}
+
+// Resolve the question set for a booking context. Both the public questions
+// endpoint and the booking validator call this, so the set a lead is SHOWN and
+// the set they are VALIDATED against are the same by construction.
 export async function resolveBookingQuestions(funnelId?: string | null): Promise<BookingQuestion[]> {
   const id = typeof funnelId === 'string' ? funnelId.trim() : ''
   if (id) {
     const funnelRow = await resolveLiveFunnel({ funnelId: id })
-    if (funnelRow) {
-      const conn = await getValidAccessToken(funnelRow.user_id as string)
-      // Funnel path — the funnel's own questions (defaults to [], i.e. none).
-      if (conn) return loadFunnelBookingQuestions(funnelRow.id as string)
-    }
+    // A resolved funnel answers entirely from its own settings — never the global set.
+    if (funnelRow) return funnelBookingQuestions(funnelRow)
   }
-  // Legacy shared path — the global admin question set.
+  // No funnel in play: the legacy shared booking page, unchanged.
   return loadBookingQuestions()
 }
 

@@ -5,7 +5,7 @@ import { setCors } from '../../lib/cors'
 import { isZoomConfigured, getSchedulerAvailability, createZoomMeeting, slotMinutes } from '../../lib/zoom'
 import { buildBookingIcs } from '../../lib/ics'
 import { sendBookingConfirmationEmail, sendCoachBookingNotification } from '../../lib/email'
-import { resolveBookingQuestions, validateBookingAnswers, bookingQuestionErrorMessage, ValidatedAnswer } from '../../lib/bookingQuestions'
+import { funnelBookingQuestions, loadBookingQuestions, validateBookingAnswers, bookingQuestionErrorMessage, ValidatedAnswer } from '../../lib/bookingQuestions'
 import { resolveLiveFunnel } from '../../lib/funnels'
 import { loadUserAvailability } from '../../lib/availabilitySettings'
 import { isSlotOpen } from '../../lib/funnelAvailability'
@@ -145,8 +145,10 @@ async function bookGooglePath(
   const endIso = new Date(startMs + settings.slot_minutes * 60_000).toISOString()
 
   // Validate against the SAME set /api/calendar/questions serves this page, so a
-  // lead is never rejected for a field the form never rendered.
-  const questions = await resolveBookingQuestions(funnelRow.id as string)
+  // lead is never rejected for a field the form never rendered. Read straight off
+  // the already-loaded funnel row: its own application_questions_enabled +
+  // booking_questions, never the global defaults.
+  const questions = funnelBookingQuestions(funnelRow)
   const av = validateBookingAnswers(questions, answersMap)
   if (!av.ok) {
     return res
@@ -279,7 +281,10 @@ async function bookLegacyPath(
   const endIso = new Date(startMs + slotMinutes() * 60_000).toISOString()
 
   // Global custom questions for the shared path.
-  const questions = await resolveBookingQuestions(null)
+  // A native-calendar funnel still books through this path. When a funnel is in
+  // play its OWN settings decide the questions; the global set applies only to a
+  // genuinely funnel-less booking.
+  const questions = funnelRow ? funnelBookingQuestions(funnelRow) : await loadBookingQuestions()
   const av = validateBookingAnswers(questions, answersMap)
   if (!av.ok) {
     return res
