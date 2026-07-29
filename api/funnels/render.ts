@@ -1,5 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
+
+const FUNNEL_PUBLIC_DOMAIN = process.env.FUNNEL_PUBLIC_DOMAIN || 'freeminiworkshop.com'
 import { sanitizeBrandColor, sanitizeBrandFont, sanitizeTracking, Tracking, DEFAULT_BRAND_PRIMARY, DEFAULT_BRAND_SECONDARY } from '../../lib/funnels'
 import { loadBusinessSettings, isValidHttpUrl, BusinessSettings, Legal } from '../../lib/businessSettings'
 
@@ -502,23 +504,35 @@ function send404(res: VercelResponse) {
 // did NOT, so a lead saw a literal "[BOOK_A_CALL_LINK]" in the key takeaways.
 // This substitutes them the same way, as real clickable links.
 //
-// Targets are RELATIVE (?page=book&subdomain=…), matching the page's own CTA —
-// an absolute https://<sub>.<domain> URL would break the preview render, which is
-// served off a path with ?subdomain= rather than the live subdomain.
+// The anchor TEXT is the destination URL, not a phrase. An earlier version used
+// the label "book a call", which doubled up against copy that already names the
+// action: "Book a call with Jamaul at book a call to see whether…". Showing the
+// address reads naturally after the prepositions the generator actually writes
+// ("at …", "here: …") and never repeats the surrounding words.
+//
+// The href stays RELATIVE (?page=book&subdomain=…), matching the page's own CTA —
+// an absolute href would break the preview render, which is served off a path with
+// ?subdomain= rather than the live subdomain. Only the visible label is absolute.
 //
 // Order matters: escape FIRST, then swap tokens for anchors. The tokens contain no
-// HTML-special characters so they survive escaping intact, and the hrefs are ours
-// (never lead input), so injecting the anchor after escaping stays XSS-safe.
+// HTML-special characters so they survive escaping intact, and both href and label
+// are ours (never lead input), so injecting the anchor after escaping stays XSS-safe.
 function escapeWithLinks(text: unknown, funnel: Record<string, any>): string {
+  const sub = typeof funnel.subdomain === 'string' ? funnel.subdomain : ''
+  const host = sub ? `${sub}.${FUNNEL_PUBLIC_DOMAIN}` : ''
   const bookHref = `?page=book${subQuery(funnel)}`
   const trainingHref = `?page=training${subQuery(funnel)}`
-  const anchor = (href: string, label: string) => `<a href="${href}">${label}</a>`
+  // Fall back to a short phrase only when there is no subdomain to show (preview).
+  const label = (path: string, fallback: string) => (host ? escapeHtml(`${host}/${path}`) : fallback)
+  const anchor = (href: string, text: string) => `<a href="${href}">${text}</a>`
+  const bookLink = anchor(bookHref, label('?page=book', 'book a call'))
+  const trainingLink = anchor(trainingHref, label('?page=training', 'the training'))
   return escapeHtml(text)
-    .replace(/\[BOOK_A_CALL_LINK\]/g, anchor(bookHref, 'book a call'))
-    .replace(/\[OFFER_LINK\]/g, anchor(bookHref, 'book a call'))
-    .replace(/\[TRAINING_LINK\]/g, anchor(trainingHref, 'the training'))
-    .replace(/\[GUIDE_LINK\]/g, anchor(trainingHref, 'the training'))
-    .replace(/\[FUNNEL_LINK\]/g, anchor(`?${subQuery(funnel).replace(/^&amp;/, '')}`, 'the page'))
+    .replace(/\[BOOK_A_CALL_LINK\]/g, bookLink)
+    .replace(/\[OFFER_LINK\]/g, bookLink)
+    .replace(/\[TRAINING_LINK\]/g, trainingLink)
+    .replace(/\[GUIDE_LINK\]/g, trainingLink)
+    .replace(/\[FUNNEL_LINK\]/g, anchor(`?${subQuery(funnel).replace(/^&amp;/, '')}`, host ? escapeHtml(host) : 'the page'))
 }
 
 function escapeHtml(s: unknown): string {

@@ -166,6 +166,8 @@ async function bookGooglePath(
     .insert({
       user_id: userId,
       coach_user_id: owner,
+      // Which funnel this call came from — the Upcoming Calls panel filters on it.
+      funnel_id: funnelRow.id as string,
       name,
       email,
       start_time: startIso,
@@ -304,7 +306,18 @@ async function bookLegacyPath(
   // DISTINCT unique index still prevents two shared bookings at the same time).
   const { data: reserved, error: reserveErr } = await supabase
     .from('bookings')
-    .insert({ user_id: userId, name, email, start_time: startIso, end_time: endIso, status: 'active', custom_answers: av.answers })
+    .insert({
+      user_id: userId,
+      name,
+      email,
+      start_time: startIso,
+      end_time: endIso,
+      status: 'active',
+      custom_answers: av.answers,
+      // A native-calendar funnel books through this path, so attribute it even
+      // though coach_user_id stays NULL (see the comment above).
+      ...(funnelRow ? { funnel_id: funnelRow.id as string } : {}),
+    })
     .select('id')
     .single()
 
@@ -352,7 +365,20 @@ async function bookLegacyPath(
   // Nurture suppression + reminders when this legacy booking came from a funnel.
   if (funnelRow && leadId) {
     await cancelLeadOutreach(leadId)
-    await scheduleBookingReminders(funnelRow, leadId, email, startIso, meeting.join_url, reserved.id as string)
+    // manageUrl was missing here, so native-booking reminders lacked the
+    // reschedule/cancel link the Google path's reminders carry. Parity fix.
+    const legacyManageUrl = funnelRow.subdomain
+      ? buildManageUrl(funnelRow.subdomain as string, reserved.id as string)
+      : undefined
+    await scheduleBookingReminders(
+      funnelRow,
+      leadId,
+      email,
+      startIso,
+      meeting.join_url,
+      reserved.id as string,
+      legacyManageUrl
+    )
   }
 
   return res.status(200).json({ booking_id: reserved.id, join_url: meeting.join_url, start_time: startIso })

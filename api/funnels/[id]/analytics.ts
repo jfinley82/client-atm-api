@@ -60,6 +60,39 @@ async function windowKpis(funnelId: string, w: Window): Promise<WindowKpis> {
   return { visits, leads, appointments, closed: leadIds.length, revenue }
 }
 
+// Upcoming calls for this funnel's dashboard panel. Active bookings from now
+// forward, soonest first. Sourced from bookings.funnel_id (added in migration
+// 062) — before that column existed there was no funnel-scoped source at all,
+// which is why the panel read empty while the KPI counted the booking from
+// funnel_events.
+//
+// Capped: the panel is a "what's next" list, not a calendar. A coach with a full
+// pipeline does not need every future call serialized into the dashboard payload.
+const UPCOMING_CALLS_LIMIT = 25
+
+async function loadUpcomingCalls(funnelId: string) {
+  const { data, error } = await supabase
+    .from('bookings')
+    .select('id, name, email, start_time, end_time, zoom_join_url, meeting_url')
+    .eq('funnel_id', funnelId)
+    .eq('status', 'active')
+    .gte('start_time', new Date().toISOString())
+    .order('start_time', { ascending: true })
+    .limit(UPCOMING_CALLS_LIMIT)
+  if (error) throw error
+  return (data || []).map((b: any) => ({
+    id: b.id,
+    name: b.name,
+    email: b.email,
+    start_time: b.start_time,
+    end_time: b.end_time,
+    // Google-path bookings store the link in meeting_url, Zoom-path in
+    // zoom_join_url. The panel wants one field, so surface whichever exists
+    // under the documented name rather than making the frontend know the split.
+    zoom_join_url: b.zoom_join_url || b.meeting_url || null,
+  }))
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
   if (req.method !== 'GET') return res.status(405).end()
@@ -78,7 +111,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const windows = computePeriodWindows(period, Date.now())
 
   try {
-    const [visits, appointments, leads, closedRows, current, previous] = await Promise.all([
+    const [visits, appointments, leads, closedRows, current, previous, upcoming_calls] = await Promise.all([
       countEvents(id, 'landing_view'),
       countEvents(id, 'booked'),
       countLeads(id),
@@ -87,6 +120,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       supabase.from('funnel_leads').select('close_amount').eq('funnel_id', id).in('status', ['sold', 'closed']),
       windowKpis(id, windows.current),
       windowKpis(id, windows.previous),
+      loadUpcomingCalls(id),
     ])
 
     const closedAmounts = (closedRows.data || []).map((r) => Number((r as { close_amount: unknown }).close_amount) || 0)
@@ -115,6 +149,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         close_rate: ratio(closed_count, leads),
       },
       totals: { closed_count, total_revenue, avg_deal },
+      // Upcoming Calls panel — active future bookings for this funnel.
+      upcoming_calls,
       // period-over-period
       period,
       window: windows,
