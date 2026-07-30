@@ -11,13 +11,15 @@ import { gateApplies } from '../../lib/applicationGate'
 // serves its real pages, routed by ?page= (landing | training | book; default
 // landing).
 //
-// Tracking pixels and legal come from the funnel OWNER's ACCOUNT-LEVEL business
-// settings (funnel_business_settings). Brand identity is now a PER-FUNNEL
-// override with the account-level value as the fallback: the workspace Settings
-// tab writes colors / fonts / logo / headshot onto the funnel row, and a funnel
-// that has never been edited there holds NULLs and renders exactly as it did
-// when those columns were vestigial. The headshot chain ends at the owner's
-// profile avatar.
+// Branding and legal are BUSINESS-global, not per-funnel: one coach's funnels
+// all show the same logo, colors, font, theme, and legal links, sourced entirely
+// from the owner's funnel_business_settings row (joined on funnels.user_id).
+// A funnel row carries none of this — brand_font, brand_headline_font,
+// brand_body_font, brand_primary_color, brand_secondary_color, logo_url,
+// headshot_url, legal_privacy, legal_terms are dead columns (kept for now, to be
+// dropped in a later migration) and are never read here. No funnel_business_settings
+// row for the owner falls back to the product defaults below. The headshot chain
+// ends at the owner's profile avatar when the business has not set one.
 //
 // ?page=book renders in ONE step normally, and in TWO when the funnel's
 // application gate is on — see bookPage().
@@ -44,13 +46,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const { data: funnel, error } = await supabase
     .from('funnels')
     // Content, then the application-gate columns (migration 063) that decide
-    // whether ?page=book renders in one step or two, then the per-funnel brand
-    // overrides + legal toggle the Settings tab writes.
+    // whether ?page=book renders in one step or two, then cta_mode/offer. NO
+    // brand or legal columns — those are business-global, loaded separately from
+    // funnel_business_settings below.
     //
     // Kept as ONE string literal on purpose: supabase-js infers the row type from
     // the select text, and a concatenated expression widens to `string`, which
     // collapses `data` to an error type and breaks every field access below.
-    .select('id, user_id, subdomain, status, generation_id, video_url, collect_name, collect_phone, landing_page, training_page, booking_page, application_questions_enabled, booking_questions, disqualify_rules, disqualify_action, disqualify_message, disqualify_redirect_url, logo_url, headshot_url, brand_primary_color, brand_secondary_color, brand_font, brand_headline_font, brand_body_font, cookie_notice_enabled, cta_mode, offer_url, offer_button_text, offer_price_display, legal_privacy, legal_terms')
+    .select('id, user_id, subdomain, status, generation_id, video_url, collect_name, collect_phone, landing_page, training_page, booking_page, application_questions_enabled, booking_questions, disqualify_rules, disqualify_action, disqualify_message, disqualify_redirect_url, cookie_notice_enabled, cta_mode, offer_url, offer_button_text, offer_price_display')
     .eq('subdomain', subdomain)
     .maybeSingle()
 
@@ -68,41 +71,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   ])
   const owner = (ownerRes.data || {}) as { name?: string | null; avatar_url?: string | null }
 
-  const brand = brandKit(settings, funnel)
-  // Per-funnel logo/headshot (the Settings tab's fields) take precedence over the
-  // account-level ones, which in turn fall back to the owner's profile avatar.
+  const brand = brandKit(settings)
+  // Business-global logo/headshot; headshot falls further back to the owner's
+  // profile avatar when the business hasn't set one.
   const branding: Branding = {
     brand,
     head: trackingHead(sanitizeTracking(settings.tracking)),
-    logoUrl: firstUrl(funnel.logo_url, settings.logo_url),
-    headshotUrl: firstUrl(funnel.headshot_url, settings.headshot_url, owner.avatar_url),
+    logoUrl: firstUrl(settings.logo_url),
+    headshotUrl: firstUrl(settings.headshot_url, owner.avatar_url),
     businessName: settings.business_name || (owner.name ? owner.name.trim() : null) || null,
-    // Hosted legal wins over the account-level link: if the coach wrote the
-    // policy here, the footer should point at the copy this domain actually
-    // serves, not at whatever they linked before.
-    legal: withHostedLegal(settings.legal || {}, funnel),
+    legal: settings.legal || {},
     // Legal toggle: only the explicit false switches the cookie notice off, so a
     // funnel predating the column (NULL) keeps rendering it exactly as before.
+    // This one stays per-funnel — different funnels can run different ad
+    // platforms with different compliance needs.
     cookieNotice: funnel.cookie_notice_enabled !== false,
   }
 
-  // The hosted legal pages are served before anything else: they are not funnel
-  // steps, so they log no view event and take no part in the sell-mode routing.
+  // /privacy and /terms redirect straight to the business's own legal links —
+  // there is no per-funnel hosted content anymore (legal is business-global).
+  // Logged as neither a page view nor part of sell-mode routing; they are not
+  // funnel steps.
   if (page === 'privacy' || page === 'terms') {
-    const legalHtml = legalPage(funnel, branding, page)
-    if (!legalHtml) {
-      // Nothing written here. Fall back to the account-level link the coach set
-      // (their own hosted page) before giving up — a 404 on /privacy is a real
-      // compliance problem for anyone running ads.
-      const url = page === 'privacy' ? branding.legal.privacy_url : branding.legal.terms_url
-      if (url && isValidHttpUrl(url)) {
-        res.setHeader('Location', url)
-        return res.status(302).end()
-      }
-      return send404(res)
+    const url = page === 'privacy' ? branding.legal.privacy_url : branding.legal.terms_url
+    if (url && isValidHttpUrl(url)) {
+      res.setHeader('Location', url)
+      return res.status(302).end()
     }
-    res.setHeader('Content-Type', 'text/html; charset=utf-8')
-    return res.status(200).send(legalHtml)
+    return send404(res)
   }
 
   // Best-effort page-view event. landing_view / training_view; the book page is
@@ -149,7 +145,7 @@ function logEvent(funnelId: string, eventType: string): void {
 
 // ---- rendering ----------------------------------------------------------
 
-type Brand = { primary: string; secondary: string; isDark: boolean; text: string; bg: string; muted: string; card: string; font: string; headlineFont: string }
+type Brand = { primary: string; secondary: string; isDark: boolean; text: string; bg: string; muted: string; card: string; font: string }
 type Branding = { brand: Brand; head: string; logoUrl: string | null; headshotUrl: string | null; businessName: string | null; legal: Legal; cookieNotice: boolean }
 
 // First value that is a usable http(s) URL. Used for the logo/headshot precedence
@@ -162,28 +158,20 @@ function firstUrl(...candidates: unknown[]): string | null {
   return null
 }
 
-function brandKit(settings: BusinessSettings, funnel: Record<string, any>): Brand {
-  // Per-funnel brand wins, account-level settings are the fallback. Every funnel
-  // that predates the Settings tab has NULLs in these columns and therefore
-  // renders byte-identically to before.
-  //
-  // Sanitize on read — every value is emitted into <style>/<script>, so it must
-  // be a validated color / allowlisted font or fall back to a safe default.
-  const pick = (a: unknown, b: unknown): unknown => (typeof a === 'string' && a.trim() ? a : b)
-  const primary = sanitizeBrandColor(pick(funnel.brand_primary_color, settings.brand_primary_color), DEFAULT_BRAND_PRIMARY)
-  const secondary = sanitizeBrandColor(pick(funnel.brand_secondary_color, settings.brand_secondary_color), DEFAULT_BRAND_SECONDARY)
+function brandKit(settings: BusinessSettings): Brand {
+  // Business-global brand — one set of colors/font/theme for every funnel this
+  // owner has. Sanitize on read — every value is emitted into <style>/<script>,
+  // so it must be a validated color / allowlisted font or fall back to a safe
+  // default, whether or not it already passed validation on write.
+  const primary = sanitizeBrandColor(settings.brand_primary_color, DEFAULT_BRAND_PRIMARY)
+  const secondary = sanitizeBrandColor(settings.brand_secondary_color, DEFAULT_BRAND_SECONDARY)
   const isDark = settings.theme_mode !== 'light'
-  // brand_body_font is the per-funnel body face; the older single brand_font (per
-  // funnel, then per account) is what it supersedes. Headline defaults to the body
-  // face, so setting only one still gives a coherent page.
-  const font = sanitizeBrandFont(pick(funnel.brand_body_font, pick(funnel.brand_font, settings.brand_font)))
-  const headlineFont = sanitizeBrandFont(pick(funnel.brand_headline_font, font))
+  const font = sanitizeBrandFont(settings.brand_font)
   return {
     primary,
     secondary,
     isDark,
     font,
-    headlineFont,
     text: isDark ? '#ffffff' : primary,
     bg: isDark ? primary : '#ffffff',
     muted: isDark ? 'rgba(255,255,255,.72)' : 'rgba(2,12,49,.72)',
@@ -247,59 +235,6 @@ function siteFooter(b: Branding): string {
   return footer(b.brand, b.businessName, b.legal, b.cookieNotice)
 }
 
-// ---- hosted legal (/privacy, /terms) ----------------------------------------
-
-// Point the footer's Privacy/Terms links at this funnel's own hosted pages when
-// the coach has written content for them, leaving the account-level link in
-// place when they have not.
-//
-// Absolute rather than relative because footer() emits these with target=_blank
-// after an http(s) check — the same read-side validation every other URL in the
-// footer goes through, and a relative path could not pass it.
-function withHostedLegal(legal: Legal, funnel: Record<string, any>): Legal {
-  const sub = typeof funnel.subdomain === 'string' ? funnel.subdomain.trim() : ''
-  if (!sub) return legal
-  const base = `https://${sub}.${FUNNEL_PUBLIC_DOMAIN}`
-  const has = (v: unknown) => typeof v === 'string' && v.trim().length > 0
-  return {
-    ...legal,
-    ...(has(funnel.legal_privacy) ? { privacy_url: `${base}/privacy` } : {}),
-    ...(has(funnel.legal_terms) ? { terms_url: `${base}/terms` } : {}),
-  }
-}
-
-// Serves the coach's own privacy policy / terms on the funnel domain, from the
-// text they wrote in Settings. Returns null when nothing is written, so the
-// caller can fall back to their externally-hosted link.
-//
-// The stored value is PLAIN TEXT and is rendered escaped, split on blank lines
-// into paragraphs. This is the whole reason the column is not HTML: it is
-// owner-writable content on a public page, and parsing markup here would make it
-// a stored-XSS vector for anyone who can edit a funnel.
-function legalPage(funnel: Record<string, any>, b: Branding, kind: 'privacy' | 'terms'): string | null {
-  const raw = kind === 'privacy' ? funnel.legal_privacy : funnel.legal_terms
-  const text = typeof raw === 'string' ? raw.trim() : ''
-  if (!text) return null
-
-  const title = kind === 'privacy' ? 'Privacy Policy' : 'Terms of Service'
-  const paragraphs = text
-    .split(/\n\s*\n/)
-    .map((p) => p.trim())
-    .filter(Boolean)
-    // Single newlines inside a paragraph stay as line breaks, which is how the
-    // coach typed it — legal text is full of short enumerated lines.
-    .map((p) => `<p class="legal-p">${escapeHtml(p).replace(/\n/g, '<br />')}</p>`)
-    .join('')
-
-  const body = `
-    ${imgTag(b.logoUrl, 'logo')}
-    <h1>${escapeHtml(title)}</h1>
-    ${b.businessName ? `<p class="sub">${escapeHtml(b.businessName)}</p>` : ''}
-    ${paragraphs}`
-
-  return shell(b.brand, title, body, '', b.head, siteFooter(b))
-}
-
 function shell(brand: Brand, title: string, body: string, script = '', head = '', footerHtml = ''): string {
   return `<!DOCTYPE html>
 <html lang="en" data-theme="${brand.isDark ? 'dark' : 'light'}">
@@ -318,7 +253,7 @@ function shell(brand: Brand, title: string, body: string, script = '', head = ''
     }
     .wrap { max-width: 720px; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
     .logo { max-height: 44px; margin-bottom: 2rem; }
-    h1, h2 { font-family: ${brand.headlineFont}; }
+    h1, h2 { font-family: ${brand.font}; }
     h1 { font-size: clamp(1.8rem, 5vw, 2.6rem); line-height: 1.15; margin: 0 0 .75rem; }
     .sub { font-size: 1.15rem; color: ${brand.muted}; margin: 0 0 2rem; }
     h2 { font-size: 1.25rem; margin: 2rem 0 .75rem; }
@@ -343,7 +278,6 @@ function shell(brand: Brand, title: string, body: string, script = '', head = ''
     .err { color: #ff6b6b; font-size: .9rem; margin-top: .75rem; min-height: 1.1rem; }
     .slot { display: block; width: 100%; text-align: left; margin: .4rem 0; background: ${brand.card}; color: ${brand.text}; }
     .muted { color: ${brand.muted}; }
-    .legal-p { color: ${brand.muted}; font-size: .95rem; margin: 0 0 1rem; white-space: normal; }
     /* Application gate (?page=book with the gate on): video beside the quiz on a
        wide screen, stacked on a phone. Inert on every other page. */
     .appgrid { display: grid; gap: 1.25rem; grid-template-columns: 1fr; }
@@ -351,7 +285,7 @@ function shell(brand: Brand, title: string, body: string, script = '', head = ''
     .appvideo .video { margin-bottom: 0; }
     .appquiz { display: flex; flex-direction: column; }
     .qprog { font-size: .8rem; letter-spacing: .04em; text-transform: uppercase; }
-    .qlabel { font-family: ${brand.headlineFont}; font-size: 1.35rem; line-height: 1.25; margin: .5rem 0 1rem; }
+    .qlabel { font-family: ${brand.font}; font-size: 1.35rem; line-height: 1.25; margin: .5rem 0 1rem; }
     #qfield select, #qfield textarea, #qfield input {
       width: 100%; padding: .8rem .9rem; border-radius: 10px; font-size: 1rem; font-family: inherit;
       border: 1px solid ${brand.isDark ? 'rgba(255,255,255,.2)' : 'rgba(2,12,49,.2)'};
