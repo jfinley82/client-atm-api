@@ -39,6 +39,17 @@ async function countLeadsAll(funnelIds: string[], w?: Window): Promise<number> {
   return count ?? 0
 }
 
+// Real appointment count across many funnels — see the per-funnel endpoint's
+// countBookings for why `funnel_events` 'booked' rows overcounted (a second,
+// legitimate writer logs one whenever a coach manually sets a lead's CRM status
+// to "booked", with no calendar booking required). Same fix, widened to a set.
+async function countBookingsAll(funnelIds: string[], w?: Window): Promise<number> {
+  let q = supabase.from('bookings').select('*', { count: 'exact', head: true }).in('funnel_id', funnelIds)
+  if (w) q = q.gte('created_at', w.start).lt('created_at', w.end)
+  const { count } = await q
+  return count ?? 0
+}
+
 // Windowed rollup. closed/revenue come from WON engagement events in the window
 // (so they carry a timestamp) → distinct leads → their close_amount, deduped by
 // lead so a lead with both 'sold' and 'closed' counts once. Same method as the
@@ -46,7 +57,7 @@ async function countLeadsAll(funnelIds: string[], w?: Window): Promise<number> {
 async function windowKpisAll(funnelIds: string[], w: Window): Promise<Kpis> {
   const [visits, appointments, leads, closedEvents] = await Promise.all([
     countEventsAll(funnelIds, 'landing_view', w),
-    countEventsAll(funnelIds, 'booked', w),
+    countBookingsAll(funnelIds, w),
     countLeadsAll(funnelIds, w),
     supabase
       .from('funnel_events')
@@ -113,7 +124,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const [visits, appointments, leads, closedRows, current, previous, leadsByFunnel] = await Promise.all([
       countEventsAll(funnelIds, 'landing_view'),
-      countEventsAll(funnelIds, 'booked'),
+      countBookingsAll(funnelIds),
       countLeadsAll(funnelIds),
       // All-time revenue — sum of close_amount over WON leads. A lead holds one
       // status, so there is no double count.
