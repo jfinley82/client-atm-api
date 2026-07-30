@@ -357,6 +357,13 @@ function shell(brand: Brand, title: string, body: string, script = '', head = ''
       border: 1px solid ${brand.isDark ? 'rgba(255,255,255,.2)' : 'rgba(2,12,49,.2)'};
       background: ${brand.isDark ? 'rgba(255,255,255,.04)' : '#fff'}; color: ${brand.text};
     }
+    .qchoices { display: flex; flex-direction: column; gap: .6rem; margin-bottom: .5rem; }
+    .qchoice {
+      width: 100%; text-align: left; padding: .85rem 1rem; border-radius: 10px; font-size: 1rem; cursor: pointer;
+      border: 1px solid ${brand.isDark ? 'rgba(255,255,255,.2)' : 'rgba(2,12,49,.2)'};
+      background: ${brand.isDark ? 'rgba(255,255,255,.04)' : '#fff'}; color: ${brand.text};
+    }
+    .qchoice.selected { border-color: ${brand.secondary}; border-width: 2px; }
     .qnav { display: flex; gap: .75rem; }
     .qnav button { flex: 1; }
     .qnav .ghost { background: transparent; color: ${brand.muted}; border: 1px solid ${brand.isDark ? 'rgba(255,255,255,.2)' : 'rgba(2,12,49,.2)'}; flex: 0 0 auto; padding-left: 1.4rem; padding-right: 1.4rem; }
@@ -759,7 +766,26 @@ function gatedBookPage(funnel: Record<string, any>, b: Branding, questions: Book
       var host = document.getElementById('qfield');
       host.innerHTML = '';
       var el;
-      if (q.type === 'dropdown') {
+      if (q.type === 'choice') {
+        // Typeform-style tappable options rather than a native <select> — the
+        // hidden input is what currentValue()/next() already read, so the quiz's
+        // nav (Back/Next, required check, answer restore on Back) needs no
+        // separate path for this type.
+        el = document.createElement('input'); el.type = 'hidden';
+        var group = document.createElement('div'); group.className = 'qchoices';
+        (q.options || []).forEach(function(o){
+          var btn = document.createElement('button'); btn.type = 'button'; btn.className = 'qchoice'; btn.textContent = o;
+          if (answers[q.id] === o) btn.classList.add('selected');
+          btn.addEventListener('click', function(){
+            el.value = o;
+            group.querySelectorAll('.qchoice').forEach(function(b){ b.classList.remove('selected'); });
+            btn.classList.add('selected');
+            next();
+          });
+          group.appendChild(btn);
+        });
+        host.appendChild(group);
+      } else if (q.type === 'dropdown') {
         el = document.createElement('select');
         var blank = document.createElement('option'); blank.value=''; blank.textContent='Choose one…'; el.appendChild(blank);
         (q.options || []).forEach(function(o){ var op = document.createElement('option'); op.value=o; op.textContent=o; el.appendChild(op); });
@@ -771,7 +797,7 @@ function gatedBookPage(funnel: Record<string, any>, b: Branding, questions: Book
       el.id = 'qinput';
       if (answers[q.id]) el.value = answers[q.id];
       host.appendChild(el);
-      el.focus();
+      if (q.type !== 'choice') el.focus();
       document.getElementById('qback').style.visibility = idx === 0 ? 'hidden' : 'visible';
       document.getElementById('qnext').textContent = idx === QUESTIONS.length - 1 ? 'Submit application' : 'Next';
       document.getElementById('qerr').textContent = '';

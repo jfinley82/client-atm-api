@@ -6,7 +6,14 @@ import { resolveLiveFunnel } from './funnels'
 // existing settings mechanism — least new code), managed by the admin UI.
 // Name + email stay fixed fields on the form (needed for the Zoom meeting +
 // confirmation); these are everything else.
-export type BookingQuestionType = 'single_line' | 'multi_line' | 'dropdown'
+//
+// 'dropdown' and 'choice' are both single-select-from-a-list, same options:
+// string[] shape and the same "must be one of them" validation — they differ
+// only in how the public quiz renders them (a native <select> vs tappable
+// option buttons). 'choice' is the one the Typeform-style application quiz
+// wants: a coach's revenue-bracket or yes/no question reads as a real quiz
+// question, not a form dropdown.
+export type BookingQuestionType = 'single_line' | 'multi_line' | 'dropdown' | 'choice'
 
 export type BookingQuestion = {
   id: string
@@ -17,7 +24,9 @@ export type BookingQuestion = {
   order: number
 }
 
-const VALID_TYPES: BookingQuestionType[] = ['single_line', 'multi_line', 'dropdown']
+const VALID_TYPES: BookingQuestionType[] = ['single_line', 'multi_line', 'dropdown', 'choice']
+// Both option-bearing types validate identically — see the type comment above.
+const OPTION_TYPES: BookingQuestionType[] = ['dropdown', 'choice']
 
 // Tolerant validator — malformed admin input is skipped rather than crashing
 // the public booking form. Only well-formed question objects survive.
@@ -27,8 +36,10 @@ function isValidQuestion(v: unknown): v is BookingQuestion {
   if (typeof q.id !== 'string' || !q.id.trim()) return false
   if (typeof q.label !== 'string' || !q.label.trim()) return false
   if (typeof q.type !== 'string' || !VALID_TYPES.includes(q.type as BookingQuestionType)) return false
-  if (q.type === 'dropdown') {
-    if (!Array.isArray(q.options) || !q.options.every((o) => typeof o === 'string')) return false
+  if (OPTION_TYPES.includes(q.type as BookingQuestionType)) {
+    if (!Array.isArray(q.options) || q.options.length === 0 || !q.options.every((o) => typeof o === 'string' && o.trim())) {
+      return false
+    }
   }
   return true
 }
@@ -44,7 +55,7 @@ export function normalizeBookingQuestions(raw: unknown): BookingQuestion[] {
       label: q.label,
       type: q.type,
       required: q.required === true,
-      ...(q.type === 'dropdown' ? { options: q.options as string[] } : {}),
+      ...(OPTION_TYPES.includes(q.type) ? { options: q.options as string[] } : {}),
       order: typeof q.order === 'number' ? q.order : 0,
     }))
     .sort((a, b) => a.order - b.order)
@@ -87,7 +98,7 @@ export function validateBookingAnswers(
     const raw = answersMap[q.id]
     const answer = typeof raw === 'string' ? raw.trim() : raw != null ? String(raw).trim() : ''
     if (q.required && !answer) return { ok: false, error: 'question_required', question: q.label }
-    if (q.type === 'dropdown' && answer && !(q.options || []).includes(answer)) {
+    if (OPTION_TYPES.includes(q.type) && answer && !(q.options || []).includes(answer)) {
       return { ok: false, error: 'invalid_option', question: q.label }
     }
     out.push({ id: q.id, label: q.label, type: q.type, answer })
