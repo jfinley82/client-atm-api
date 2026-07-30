@@ -32,6 +32,26 @@ async function countLeads(funnelId: string, w?: Window): Promise<number> {
   return count ?? 0
 }
 
+// Real appointment count: rows in `bookings`, not `funnel_events` rows tagged
+// 'booked'. That event has a SECOND writer — api/funnels/[id]/leads/[leadId].ts
+// logs one whenever a coach manually moves a lead's CRM status to "booked",
+// which requires no calendar booking to exist at all. That log is correct for
+// its own purpose (the lead's engagement timeline needs a timestamped record of
+// the status change), but counting it here inflated "appointments"/chain.booked
+// above the funnel's real booking count — e.g. 3 events for 2 actual bookings.
+// bookings.status is only ever 'active' or 'canceled' (migration 031); both
+// count here, deliberately unfiltered by status: a canceled booking still WAS a
+// real appointment at the moment it was made, the same fact the old 'booked'
+// event recorded permanently regardless of what happened afterward. Windowed by
+// created_at as the events version was, so a period comparison still means "how
+// many calls got booked in this window."
+async function countBookings(funnelId: string, w?: Window): Promise<number> {
+  let q = supabase.from('bookings').select('*', { count: 'exact', head: true }).eq('funnel_id', funnelId)
+  if (w) q = q.gte('created_at', w.start).lt('created_at', w.end)
+  const { count } = await q
+  return count ?? 0
+}
+
 // Distinct PEOPLE who produced an event, not raw event rows. An anonymous event
 // (lead_id null) is its own person, since there is nothing to dedupe it against.
 // Used for the funnel chain, where a lead who re-submits an application must not
@@ -56,7 +76,7 @@ type WindowKpis = { visits: number; leads: number; appointments: number; closed:
 async function windowKpis(funnelId: string, w: Window): Promise<WindowKpis> {
   const [visits, appointments, leads, closedEvents] = await Promise.all([
     countEvents(funnelId, 'landing_view', w),
-    countEvents(funnelId, 'booked', w),
+    countBookings(funnelId, w),
     countLeads(funnelId, w),
     supabase
       .from('funnel_events')
@@ -195,7 +215,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const [visits, appointments, leads, closedRows, current, previous, upcoming_calls] = await Promise.all([
       countEvents(id, 'landing_view'),
-      countEvents(id, 'booked'),
+      countBookings(id),
       countLeads(id),
       // All-time revenue rollup — sum of close_amount over WON leads (sold or
       // closed). A lead only ever holds one status, so no double-count.
