@@ -6,28 +6,28 @@ import {
   isValidSubdomain,
   isReservedSubdomain,
   subdomainTaken,
-  isValidBrandColor,
-  isValidBrandFont,
   validateTrackingInput,
 } from '../../../lib/funnels'
 
 const THEME_MODES = ['dark', 'light']
 
+// Brand/logo/headshot are business-global now (funnel_business_settings, via
+// PATCH /api/funnel-business-settings) — this endpoint no longer writes them.
+// Silently stripped below rather than rejected: a stale caller that still
+// sends one of these alongside otherwise-valid fields should save what's
+// left, not 400.
+const DEAD_KEYS = new Set(['brand_primary_color', 'brand_secondary_color', 'brand_font', 'logo_url', 'headshot_url'])
+
 // Every field a member may PATCH on their own funnel. A body key outside this
 // set is rejected (unknown_field) rather than silently ignored.
 const EDITABLE_KEYS = new Set([
   'subdomain',
-  'brand_primary_color',
-  'brand_secondary_color',
   'theme_mode',
   'collect_name',
   'collect_phone',
   'landing_page',
   'training_page',
   'booking_page',
-  'logo_url',
-  'headshot_url',
-  'brand_font',
   'video_url',
   'tracking',
   'watch_threshold_pct',
@@ -37,9 +37,8 @@ const EDITABLE_KEYS = new Set([
 // is NOT here: its IDs are injected into the public page's <script>, so it is
 // strictly validated separately (validateTrackingInput).
 const OBJECT_FIELDS = ['landing_page', 'training_page', 'booking_page']
-// free-text fields — accept a string (trimmed), or null to clear. (brand_font is
-// NOT here — it is allowlist-validated separately, and colors are pattern-checked.)
-const TEXT_FIELDS = ['logo_url', 'headshot_url', 'video_url']
+// free-text fields — accept a string (trimmed), or null to clear.
+const TEXT_FIELDS = ['video_url']
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v)
@@ -74,7 +73,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   if (req.method === 'PATCH') {
-    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
+    const rawBody = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
+    // Strip the dead brand/logo/headshot keys before the unknown-key check, so
+    // a caller still sending one alongside real fields isn't rejected for it.
+    const body: Record<string, unknown> = {}
+    for (const key of Object.keys(rawBody)) {
+      if (!DEAD_KEYS.has(key)) body[key] = rawBody[key]
+    }
     const updates: Record<string, unknown> = {}
 
     // Reject unknown keys rather than silently dropping them.
@@ -108,26 +113,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         updates.subdomain = subdomain
       }
-    }
-
-    // Brand colors are interpolated into the public page's CSS/JS — validate
-    // strictly (hex or rgb()/hsl()) so a value can't break out of that context.
-    for (const field of ['brand_primary_color', 'brand_secondary_color']) {
-      if (field in body) {
-        if (!isValidBrandColor(body[field])) {
-          return res.status(400).json({ error: 'invalid_field', field, message: 'must be a hex or rgb()/hsl() color' })
-        }
-        updates[field] = (body[field] as string).trim()
-      }
-    }
-
-    // brand_font must be an allowlisted font-family string (never free text) —
-    // same public-CSS injection surface as colors.
-    if ('brand_font' in body) {
-      if (body.brand_font !== null && !isValidBrandFont(body.brand_font)) {
-        return res.status(400).json({ error: 'invalid_field', field: 'brand_font', message: 'must be an allowed font-family' })
-      }
-      updates.brand_font = body.brand_font === null ? null : (body.brand_font as string).trim()
     }
 
     if ('theme_mode' in body) {

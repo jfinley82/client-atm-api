@@ -14,12 +14,13 @@ import { gateApplies } from '../../lib/applicationGate'
 // Branding and legal are BUSINESS-global, not per-funnel: one coach's funnels
 // all show the same logo, colors, font, theme, and legal links, sourced entirely
 // from the owner's funnel_business_settings row (joined on funnels.user_id).
-// A funnel row carries none of this — brand_font, brand_headline_font,
-// brand_body_font, brand_primary_color, brand_secondary_color, logo_url,
-// headshot_url, legal_privacy, legal_terms are dead columns (kept for now, to be
-// dropped in a later migration) and are never read here. No funnel_business_settings
-// row for the owner falls back to the product defaults below. The headshot chain
-// ends at the owner's profile avatar when the business has not set one.
+// A funnel row carries none of this — the per-funnel brand_font/
+// brand_headline_font/brand_body_font/brand_primary_color/brand_secondary_color/
+// logo_url/headshot_url/legal_privacy/legal_terms columns were dropped from
+// `funnels` in migration 067, once this file stopped reading them. No
+// funnel_business_settings row for the owner falls back to the product defaults
+// below. The headshot chain ends at the owner's profile avatar when the
+// business has not set one.
 //
 // ?page=book renders in ONE step normally, and in TWO when the funnel's
 // application gate is on — see bookPage().
