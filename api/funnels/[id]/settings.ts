@@ -7,8 +7,6 @@ import {
   isValidSubdomain,
   isReservedSubdomain,
   subdomainTaken,
-  isValidBrandColor,
-  isValidBrandFont,
 } from '../../../lib/funnels'
 import { normalizeBookingQuestions } from '../../../lib/bookingQuestions'
 import { normalizeDisqualifyRules, DISQUALIFY_ACTIONS } from '../../../lib/applicationGate'
@@ -18,12 +16,15 @@ import { normalizeDisqualifyRules, DISQUALIFY_ACTIONS } from '../../../lib/appli
 // makes. Owner-scoped; every field is optional, and only keys actually present in
 // the body are written, so a tab that edits one section never clears another.
 //
-// Grouped as the tab presents them: brand, subdomain, video, calendar,
-// collect_phone, legal, application gate, CTA mode + offer.
+// Grouped as the tab presents them: subdomain, video, calendar, collect_phone,
+// cookie notice, application gate, CTA mode + offer.
 //
-// Validation reuses lib/funnels' validators rather than re-deriving the rules —
-// brand colors/fonts are interpolated into the public render's <style>, so a
-// second, looser copy of those checks here would be a stored-XSS hole.
+// Brand and legal are business-global now (funnel_business_settings, via
+// PATCH /api/funnel-business-settings) — NOT written here. brand_primary_color,
+// brand_secondary_color, brand_headline_font, brand_body_font, logo_url,
+// headshot_url, legal_privacy, and legal_terms in the request body are silently
+// ignored rather than rejected: a stale frontend caller that still sends one of
+// these alongside otherwise-valid fields should save what's left, not 400.
 export const config = { maxDuration: 30 }
 
 const CALENDAR_MODES = ['native', 'calendly', 'google', 'external']
@@ -97,27 +98,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const updates: Record<string, unknown> = {}
   const bad = (field: string, why: string) => res.status(400).json({ error: 'invalid_field', field, message: why })
 
-  // ── brand ────────────────────────────────────────────────────────────────
-  for (const key of ['brand_primary_color', 'brand_secondary_color'] as const) {
-    if (key in body) {
-      if (body[key] !== null && !isValidBrandColor(body[key])) return bad(key, 'Must be a hex color like #1a2b3c.')
-      updates[key] = body[key]
-    }
-  }
-  for (const key of ['brand_headline_font', 'brand_body_font'] as const) {
-    if (key in body) {
-      if (body[key] !== null && !isValidBrandFont(body[key])) return bad(key, 'Font is not in the allowed list.')
-      updates[key] = body[key]
-    }
-  }
-  for (const key of ['logo_url', 'headshot_url'] as const) {
-    if (key in body) {
-      const r = optionalUrl(body[key])
-      if (!r.ok) return bad(key, 'Must be an http(s) URL, or null to clear.')
-      updates[key] = r.value
-    }
-  }
-
   // ── subdomain ────────────────────────────────────────────────────────────
   if ('subdomain' in body) {
     const sub = typeof body.subdomain === 'string' ? body.subdomain.trim().toLowerCase() : ''
@@ -152,20 +132,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     updates.collect_phone = body.collect_phone
   }
 
-  // ── legal ────────────────────────────────────────────────────────────────
+  // ── cookie notice ────────────────────────────────────────────────────────
   if ('cookie_notice_enabled' in body) {
     if (typeof body.cookie_notice_enabled !== 'boolean') return bad('cookie_notice_enabled', 'Must be true or false.')
     updates.cookie_notice_enabled = body.cookie_notice_enabled
-  }
-  // Served at /privacy and /terms on the funnel domain. Stored and rendered as
-  // PLAIN TEXT — accepting HTML here would turn an owner-writable field into
-  // stored XSS on a public page, so no markup is parsed on the way in or out.
-  for (const key of ['legal_privacy', 'legal_terms'] as const) {
-    if (key in body) {
-      const r = optionalText(body[key])
-      if (!r.ok) return bad(key, 'Must be text, or null to clear.')
-      updates[key] = r.value
-    }
   }
 
   // ── application gate ─────────────────────────────────────────────────────
