@@ -3,6 +3,7 @@ import { supabase } from '../../../lib/supabase'
 import { setCors, noStore } from '../../../lib/cors'
 import { requireFunnelBuilder, getOwnedFunnel } from '../../../lib/funnels'
 import { computePeriodWindows, normalizePeriod, pctDelta, Window } from '../../../lib/analyticsPeriod'
+import { loadPageCovers } from '../../../lib/funnelCovers'
 
 // GET /api/funnels/[id]/analytics?period=month — owner-scoped funnel metrics from
 // funnel_events + funnel_leads. Returns:
@@ -234,7 +235,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const windows = computePeriodWindows(period, Date.now())
 
   try {
-    const [visits, appointments, leads, closedRows, current, previous, upcoming_calls, applications] = await Promise.all([
+    const [visits, appointments, leads, closedRows, current, previous, upcoming_calls, applications, page_covers] = await Promise.all([
       countEvents(id, 'landing_view'),
       countBookings(id),
       countLeads(id),
@@ -245,6 +246,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       windowKpis(id, windows.previous),
       loadUpcomingCalls(id),
       countApplications(id),
+      loadPageCovers(id),
     ])
 
     const closedAmounts = (closedRows.data || []).map((r) => Number((r as { close_amount: unknown }).close_amount) || 0)
@@ -285,6 +287,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         application: applications,
         booking: { count: appointments },
       },
+      // Pages tab cover thumbnails. null for a page whose cover was never
+      // generated (funnel has never published, or generation failed) — the
+      // frontend shows a placeholder in that case, same as any draft page.
+      page_covers,
       // Upcoming Calls panel — active future bookings for this funnel.
       upcoming_calls,
       // period-over-period

@@ -64,30 +64,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
   if (!funnel || funnel.status !== 'live') return send404(res)
 
-  // Account-level branding/tracking/legal from the funnel owner, plus the owner's
-  // profile name/avatar for the business-name + headshot fallbacks.
-  const [settings, ownerRes] = await Promise.all([
-    loadBusinessSettings(funnel.user_id as string),
-    supabase.from('users').select('name, avatar_url').eq('id', funnel.user_id).maybeSingle(),
-  ])
-  const owner = (ownerRes.data || {}) as { name?: string | null; avatar_url?: string | null }
-
-  const brand = brandKit(settings)
-  // Business-global logo/headshot; headshot falls further back to the owner's
-  // profile avatar when the business hasn't set one.
-  const branding: Branding = {
-    brand,
-    head: trackingHead(sanitizeTracking(settings.tracking)),
-    logoUrl: firstUrl(settings.logo_url),
-    headshotUrl: firstUrl(settings.headshot_url, owner.avatar_url),
-    businessName: settings.business_name || (owner.name ? owner.name.trim() : null) || null,
-    legal: settings.legal || {},
-    // Legal toggle: only the explicit false switches the cookie notice off, so a
-    // funnel predating the column (NULL) keeps rendering it exactly as before.
-    // This one stays per-funnel — different funnels can run different ad
-    // platforms with different compliance needs.
-    cookieNotice: funnel.cookie_notice_enabled !== false,
-  }
+  const branding = await loadBranding(funnel)
 
   // /privacy and /terms redirect straight to the business's own legal links —
   // there is no per-funnel hosted content anymore (legal is business-global).
@@ -128,7 +105,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 // ---- data helpers -------------------------------------------------------
 
-async function loadKeyTakeaways(generationId: string | null): Promise<string[]> {
+export async function loadKeyTakeaways(generationId: string | null): Promise<string[]> {
   if (!generationId) return []
   const { data } = await supabase.from('mtm_generations').select('workbook').eq('id', generationId).maybeSingle()
   const kt = (data?.workbook as { keyTakeaways?: unknown } | null)?.keyTakeaways
@@ -147,7 +124,7 @@ function logEvent(funnelId: string, eventType: string): void {
 // ---- rendering ----------------------------------------------------------
 
 type Brand = { primary: string; secondary: string; isDark: boolean; text: string; bg: string; muted: string; card: string; font: string }
-type Branding = { brand: Brand; head: string; logoUrl: string | null; headshotUrl: string | null; businessName: string | null; legal: Legal; cookieNotice: boolean }
+export type Branding = { brand: Brand; head: string; logoUrl: string | null; headshotUrl: string | null; businessName: string | null; legal: Legal; cookieNotice: boolean }
 
 // First value that is a usable http(s) URL. Used for the logo/headshot precedence
 // chain; re-validating here means a per-funnel value written before the URL check
@@ -196,6 +173,29 @@ function trackingHead(t: Tracking): string {
     out += `<script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');fbq('init','${t.fb_pixel_id}');fbq('track','PageView');</script>`
   }
   return out
+}
+
+// Account-level branding/tracking/legal for a funnel's owner, plus the owner's
+// profile name/avatar for the business-name + headshot fallbacks. Exported so
+// lib/funnelCovers.ts can build the exact same Branding a live page render
+// would use, without duplicating this lookup.
+export async function loadBranding(funnel: Record<string, any>): Promise<Branding> {
+  const [settings, ownerRes] = await Promise.all([
+    loadBusinessSettings(funnel.user_id as string),
+    supabase.from('users').select('name, avatar_url').eq('id', funnel.user_id).maybeSingle(),
+  ])
+  const owner = (ownerRes.data || {}) as { name?: string | null; avatar_url?: string | null }
+
+  const brand = brandKit(settings)
+  return {
+    brand,
+    head: trackingHead(sanitizeTracking(settings.tracking)),
+    logoUrl: firstUrl(settings.logo_url),
+    headshotUrl: firstUrl(settings.headshot_url, owner.avatar_url),
+    businessName: settings.business_name || (owner.name ? owner.name.trim() : null) || null,
+    legal: settings.legal || {},
+    cookieNotice: funnel.cookie_notice_enabled !== false,
+  }
 }
 
 const PIXEL_EVENT_JS = `
@@ -354,7 +354,7 @@ function imgTag(url: string | null, cls: string): string {
   return url ? `<img class="${cls}" src="${escapeAttr(url)}" alt="" />` : ''
 }
 
-function landingPage(funnel: Record<string, any>, b: Branding): string {
+export function landingPage(funnel: Record<string, any>, b: Branding): string {
   const lp = (funnel.landing_page || {}) as Record<string, any>
   const headline = escapeHtml(lp.headline || 'A free training for you')
   const sub = lp.subheadline ? `<p class="sub">${escapeHtml(lp.subheadline)}</p>` : ''
@@ -415,7 +415,7 @@ function landingPage(funnel: Record<string, any>, b: Branding): string {
   return shell(b.brand, lp.headline || 'Free training', body, script, b.head, siteFooter(b))
 }
 
-function trainingPage(funnel: Record<string, any>, b: Branding, takeaways: string[]): string {
+export function trainingPage(funnel: Record<string, any>, b: Branding, takeaways: string[]): string {
   const tp = (funnel.training_page || {}) as Record<string, any>
   const headline = escapeWithLinks(tp.headline || 'Your training', funnel)
   const sub = tp.subheadline ? `<p class="sub">${escapeWithLinks(tp.subheadline, funnel)}</p>` : ''
@@ -554,7 +554,7 @@ function buildPlayerScript(funnel: Record<string, any>, init: string): string {
 // to be built. That is a rendering decision, not the enforcement — a disqualified
 // lead is kept out of the bookings table by checkGate() inside /api/calendar/book,
 // which this page cannot bypass.
-function bookPage(funnel: Record<string, any>, b: Branding): string {
+export function bookPage(funnel: Record<string, any>, b: Branding): string {
   const questions = funnelBookingQuestions(funnel)
   return gateApplies(funnel, questions)
     ? gatedBookPage(funnel, b, questions)
