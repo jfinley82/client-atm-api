@@ -3,13 +3,15 @@ import { supabase } from '../../lib/supabase'
 import { setCors, noStore } from '../../lib/cors'
 import { requireFunnelBuilder } from '../../lib/funnels'
 import { computePeriodWindows, normalizePeriod, pctDelta, Window } from '../../lib/analyticsPeriod'
+import { countEventsAll, countLeadsAll, countBookingsAll } from '../../lib/funnelAggregates'
 
 // GET /api/funnels/analytics?period=month — ALL-FUNNELS rollup for the Overview.
 //
-// Sibling to /api/funnels/[id]/analytics (which stays the per-funnel view). This
-// exists rather than having the frontend sum the per-funnel endpoint because that
-// would cost one HTTP round trip AND ~10 Supabase queries PER FUNNEL; this runs a
-// fixed handful of queries for the whole set by filtering on `funnel_id in (...)`.
+// Sibling to /api/funnels/[id]/analytics (which stays the per-funnel view) and to
+// /api/funnels/portfolio (the portfolio-home shape). This exists rather than
+// having the frontend sum the per-funnel endpoint because that would cost one
+// HTTP round trip AND ~10 Supabase queries PER FUNNEL; this runs a fixed handful
+// of queries for the whole set by filtering on `funnel_id in (...)`.
 //
 // Shape deliberately mirrors the per-funnel endpoint (visits/leads/appointments/
 // rates/totals + current/previous/delta_pct) so the Overview card can reuse the
@@ -19,36 +21,6 @@ export const config = { maxDuration: 30 }
 type Kpis = { visits: number; leads: number; appointments: number; closed: number; revenue: number }
 
 const emptyKpis = (): Kpis => ({ visits: 0, leads: 0, appointments: 0, closed: 0, revenue: 0 })
-
-// Count events of a type across MANY funnels at once.
-async function countEventsAll(funnelIds: string[], eventType: string, w?: Window): Promise<number> {
-  let q = supabase
-    .from('funnel_events')
-    .select('*', { count: 'exact', head: true })
-    .in('funnel_id', funnelIds)
-    .eq('event_type', eventType)
-  if (w) q = q.gte('created_at', w.start).lt('created_at', w.end)
-  const { count } = await q
-  return count ?? 0
-}
-
-async function countLeadsAll(funnelIds: string[], w?: Window): Promise<number> {
-  let q = supabase.from('funnel_leads').select('*', { count: 'exact', head: true }).in('funnel_id', funnelIds)
-  if (w) q = q.gte('opted_in_at', w.start).lt('opted_in_at', w.end)
-  const { count } = await q
-  return count ?? 0
-}
-
-// Real appointment count across many funnels — see the per-funnel endpoint's
-// countBookings for why `funnel_events` 'booked' rows overcounted (a second,
-// legitimate writer logs one whenever a coach manually sets a lead's CRM status
-// to "booked", with no calendar booking required). Same fix, widened to a set.
-async function countBookingsAll(funnelIds: string[], w?: Window): Promise<number> {
-  let q = supabase.from('bookings').select('*', { count: 'exact', head: true }).in('funnel_id', funnelIds)
-  if (w) q = q.gte('created_at', w.start).lt('created_at', w.end)
-  const { count } = await q
-  return count ?? 0
-}
 
 // Windowed rollup. closed/revenue come from WON engagement events in the window
 // (so they carry a timestamp) → distinct leads → their close_amount, deduped by
