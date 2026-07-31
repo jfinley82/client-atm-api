@@ -202,6 +202,36 @@ const PIXEL_EVENT_JS = `
     function fbTrack(ev){ try { if (window.fbq) fbq('track', ev); } catch(e){} }
     function gaEvent(ev){ try { if (window.gtag) gtag('event', ev); } catch(e){} }`
 
+// Per-page conversion event (landing_page/training_page/booking_page.conversion_event)
+// — fired once on load against the funnel-wide pixels already initialized in
+// <head> (trackingHead/branding.head), same fb_pixel_id/google_tag_id every page
+// on this funnel already shares. 'schedule'/'lead'/'view_content'/'purchase' map
+// to the same FB/GA event names the action blocks below already fire on submit;
+// anything else is a free-text custom event name, passed straight through to
+// both fbTrack/gaEvent exactly as those helpers already handle any string.
+//
+// This is a SEPARATE signal from the action-block events (opt-in submit fires
+// Lead/generate_lead, booking confirm fires Schedule/schedule) — it fires at
+// page LOAD, they fire on the user's ACTION, and neither call site here touches
+// those. A coach who sets the same event name for both gets it fired twice
+// (once per visit, once per completed action), which is their call to make, not
+// a duplicate this code needs to suppress.
+const STANDARD_CONVERSION_EVENTS: Record<string, { fb: string; ga: string }> = {
+  schedule: { fb: 'Schedule', ga: 'schedule' },
+  lead: { fb: 'Lead', ga: 'generate_lead' },
+  view_content: { fb: 'ViewContent', ga: 'view_content' },
+  purchase: { fb: 'Purchase', ga: 'purchase' },
+}
+
+function pageConversionJs(pageObj: Record<string, any> | null | undefined): string {
+  const raw = pageObj && typeof pageObj.conversion_event === 'string' ? pageObj.conversion_event.trim() : ''
+  if (!raw || raw === 'none') return ''
+  const std = STANDARD_CONVERSION_EVENTS[raw]
+  const fbName = std ? std.fb : raw
+  const gaName = std ? std.ga : raw
+  return `fbTrack(${JSON.stringify(fbName)}); gaEvent(${JSON.stringify(gaName)});`
+}
+
 // Compliance footer: business name + privacy/terms/contact links (only those
 // set) + the coach's custom disclaimer (plain escaped text, no inline HTML) +
 // the cookie note. A privacy link + disclaimer are effectively required to run
@@ -357,6 +387,7 @@ function landingPage(funnel: Record<string, any>, b: Branding): string {
     </div>`
 
   const script = `${PIXEL_EVENT_JS}
+    ${pageConversionJs(lp)}
     var FUNNEL_ID = ${JSON.stringify(funnel.id)};
     var SUB = ${JSON.stringify(funnel.subdomain)};
     document.getElementById('optin').addEventListener('submit', function(e){
@@ -419,7 +450,10 @@ function trainingPage(funnel: Record<string, any>, b: Branding, takeaways: strin
   // Only wire the watch-tracking player when there is a real video to track; the
   // token hand-off runs either way. In sell mode it also carries the token onto
   // the offer link, so the redirect can name the lead the sale belongs to.
+  const conversionJs = pageConversionJs(tp)
   const script = [
+    conversionJs ? PIXEL_EVENT_JS : '',
+    conversionJs,
     CARRY_WATCH_TOKEN_JS,
     sellMode(funnel) ? CARRY_OFFER_TOKEN_JS : '',
     video.init ? buildPlayerScript(funnel, video.init) : '',
@@ -624,6 +658,7 @@ function classicBookPage(funnel: Record<string, any>, b: Branding): string {
     ${bookingFormHtml(false)}`
 
   const script = `${PIXEL_EVENT_JS}
+    ${pageConversionJs(bp)}
     var FUNNEL_ID = ${JSON.stringify(funnel.id)};
     var BRAND_SECONDARY = ${JSON.stringify(b.brand.secondary)};
     ${BOOKING_JS}
@@ -668,6 +703,7 @@ function gatedBookPage(funnel: Record<string, any>, b: Branding, questions: Book
     <div id="blocked" style="display:none;" class="card"></div>`
 
   const script = `${PIXEL_EVENT_JS}
+    ${pageConversionJs(bp)}
     var FUNNEL_ID = ${JSON.stringify(funnel.id)};
     var BRAND_SECONDARY = ${JSON.stringify(b.brand.secondary)};
     var QUESTIONS = ${jsonForScript(questions)};
