@@ -68,6 +68,27 @@ async function countDistinctLeadEvents(funnelId: string, eventType: string): Pro
   return named.size + anonymous
 }
 
+// Forms tab counts: application submitted/fit/not_fit. fit/not_fit read
+// application_status directly rather than re-running checkGate — that column is
+// written by the SAME checkGate() call at submission time (api/funnel/application.ts),
+// so reading it back is reading the live gate's own verdict, not a second
+// definition of disqualified. optin count/rate and booking count are the
+// already-computed leads/visits/appointments below, per the Forms tab's sourcing.
+async function countApplications(funnelId: string): Promise<{ submitted: number; fit: number; not_fit: number }> {
+  const { data, error } = await supabase
+    .from('funnel_leads')
+    .select('application_status')
+    .eq('funnel_id', funnelId)
+    .not('application_submitted_at', 'is', null)
+  if (error) throw error
+  const rows = (data || []) as { application_status: string | null }[]
+  return {
+    submitted: rows.length,
+    fit: rows.filter((r) => r.application_status === 'qualified').length,
+    not_fit: rows.filter((r) => r.application_status === 'disqualified').length,
+  }
+}
+
 type WindowKpis = { visits: number; leads: number; appointments: number; closed: number; revenue: number }
 
 // Windowed KPIs. closed + revenue come from WON engagement events (sold/closed)
@@ -213,7 +234,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const windows = computePeriodWindows(period, Date.now())
 
   try {
-    const [visits, appointments, leads, closedRows, current, previous, upcoming_calls] = await Promise.all([
+    const [visits, appointments, leads, closedRows, current, previous, upcoming_calls, applications] = await Promise.all([
       countEvents(id, 'landing_view'),
       countBookings(id),
       countLeads(id),
@@ -223,6 +244,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       windowKpis(id, windows.current),
       windowKpis(id, windows.previous),
       loadUpcomingCalls(id),
+      countApplications(id),
     ])
 
     const closedAmounts = (closedRows.data || []).map((r) => Number((r as { close_amount: unknown }).close_amount) || 0)
@@ -255,6 +277,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       totals: { closed_count, total_revenue, avg_deal },
       // Mode-adaptive conversion chain — book vs sell. See buildChain.
       chain,
+      // Forms tab: this funnel's three forms. optin/booking reuse the counts
+      // above; application submitted/fit/not_fit come from application_status,
+      // written by the same checkGate() the live gate enforces with.
+      forms: {
+        optin: { count: leads, rate: ratio(leads, visits) },
+        application: applications,
+        booking: { count: appointments },
+      },
       // Upcoming Calls panel — active future bookings for this funnel.
       upcoming_calls,
       // period-over-period
