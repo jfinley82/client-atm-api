@@ -4,6 +4,7 @@ import { setCors, noStore } from '../../../lib/cors'
 import { requireFunnelBuilder, getOwnedFunnel } from '../../../lib/funnels'
 import { computePeriodWindows, normalizePeriod, pctDelta, Window } from '../../../lib/analyticsPeriod'
 import { loadPageCovers } from '../../../lib/funnelCovers'
+import { countWatched } from '../../../lib/funnelVideo'
 
 // GET /api/funnels/[id]/analytics?period=month — owner-scoped funnel metrics from
 // funnel_events + funnel_leads. Returns:
@@ -214,6 +215,26 @@ async function buildChain(
   }
 }
 
+// The redesigned Overview's page-reach funnel — distinct from `chain` above
+// (which tracks OUTCOMES: opt-ins, applications, bookings). This tracks how
+// many visitors actually REACHED each of the funnel's 3 pages. "Training"
+// deliberately uses the "watched" count (video started + reached the first
+// tracking milestone — see lib/funnelVideo.ts), not the raw training_view
+// page-load count: a visitor who bounced before the video played past its
+// opening seconds never really reached the training content, just its URL.
+type FlowStep = { key: string; label: string; count: number; reached_pct: number; step_conversion_pct: number | null }
+
+function buildFunnelFlow(visits: number, watched: number, bookingViews: number): { steps: FlowStep[] } {
+  const ratio = (num: number, den: number) => (den > 0 ? Math.round((num / den) * 10000) / 10000 : 0)
+  return {
+    steps: [
+      { key: 'landing', label: 'Landing', count: visits, reached_pct: visits > 0 ? 1 : 0, step_conversion_pct: null },
+      { key: 'training', label: 'Training (watched)', count: watched, reached_pct: ratio(watched, visits), step_conversion_pct: ratio(watched, visits) },
+      { key: 'booking', label: 'Booking', count: bookingViews, reached_pct: ratio(bookingViews, visits), step_conversion_pct: ratio(bookingViews, watched) },
+    ],
+  }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
   if (req.method !== 'GET') return res.status(405).end()
@@ -235,19 +256,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const windows = computePeriodWindows(period, Date.now())
 
   try {
-    const [visits, appointments, leads, closedRows, current, previous, upcoming_calls, applications, page_covers] = await Promise.all([
-      countEvents(id, 'landing_view'),
-      countBookings(id),
-      countLeads(id),
-      // All-time revenue rollup — sum of close_amount over WON leads (sold or
-      // closed). A lead only ever holds one status, so no double-count.
-      supabase.from('funnel_leads').select('close_amount').eq('funnel_id', id).in('status', ['sold', 'closed']),
-      windowKpis(id, windows.current),
-      windowKpis(id, windows.previous),
-      loadUpcomingCalls(id),
-      countApplications(id),
-      loadPageCovers(id),
-    ])
+    const [visits, appointments, leads, closedRows, current, previous, upcoming_calls, applications, page_covers, watched, bookingViews] =
+      await Promise.all([
+        countEvents(id, 'landing_view'),
+        countBookings(id),
+        countLeads(id),
+        // All-time revenue rollup — sum of close_amount over WON leads (sold or
+        // closed). A lead only ever holds one status, so no double-count.
+        supabase.from('funnel_leads').select('close_amount').eq('funnel_id', id).in('status', ['sold', 'closed']),
+        windowKpis(id, windows.current),
+        windowKpis(id, windows.previous),
+        loadUpcomingCalls(id),
+        countApplications(id),
+        loadPageCovers(id),
+        countWatched(id),
+        countEvents(id, 'booking_click'),
+      ])
 
     const closedAmounts = (closedRows.data || []).map((r) => Number((r as { close_amount: unknown }).close_amount) || 0)
     const closed_count = closedAmounts.length
@@ -255,6 +279,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const avg_deal = closed_count > 0 ? Math.round((total_revenue / closed_count) * 100) / 100 : 0
 
     const chain = await buildChain(id, funnel, visits, leads, appointments, closed_count, total_revenue)
+    const funnel_flow = buildFunnelFlow(visits, watched, bookingViews)
 
     const ratio = (num: number, den: number) => (den > 0 ? Math.round((num / den) * 10000) / 10000 : 0)
 
@@ -279,6 +304,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       totals: { closed_count, total_revenue, avg_deal },
       // Mode-adaptive conversion chain — book vs sell. See buildChain.
       chain,
+      // Overview's page-reach funnel — landing/training(watched)/booking
+      // counts, each with reached_pct (share of visits) and
+      // step_conversion_pct (share of the immediately-previous step). Distinct
+      // from `chain` above: this tracks page reach, not opt-in/booking outcomes.
+      funnel_flow,
       // Forms tab: this funnel's three forms. optin/booking reuse the counts
       // above; application submitted/fit/not_fit come from application_status,
       // written by the same checkGate() the live gate enforces with.
