@@ -49,6 +49,7 @@ type SendRow = {
   sent_at: string | null
   delivered_at: string | null
   bounced_at: string | null
+  complained_at: string | null
   resend_message_id: string | null
 }
 
@@ -56,6 +57,7 @@ type Tally = {
   sent: number
   delivered: number
   bounced: number
+  complained: number
   opened: number
   clicked: number
   queued: number
@@ -67,7 +69,7 @@ type Tally = {
 
 function emptyTally(): Tally {
   return {
-    sent: 0, delivered: 0, bounced: 0, opened: 0, clicked: 0, queued: 0, canceled: 0,
+    sent: 0, delivered: 0, bounced: 0, complained: 0, opened: 0, clicked: 0, queued: 0, canceled: 0,
     messageIds: new Set(), openedIds: new Set(), clickedIds: new Set(),
   }
 }
@@ -75,6 +77,49 @@ function emptyTally(): Tally {
 function pct(n: number, d: number): number | null {
   if (!d) return null
   return Math.round((n / d) * 1000) / 10
+}
+
+// A null rate (no denominator yet — nothing sent/delivered) contributes
+// nothing to the score rather than being read as 0%, so a funnel that hasn't
+// sent anything yet doesn't score as if it had a terrible track record.
+function rateOrZero(v: number | null): number {
+  return v === null ? 0 : v
+}
+
+type EmailTotals = { sent: number; delivered: number; bounced: number; complained: number; opened: number; clicked: number }
+
+// Health score: a 0-100 weighted rollup of deliverability, engagement, and
+// spam complaints, so the frontend only ever displays a number this backend
+// already decided. "Delivered" means bounce-free delivery (email accepted by
+// the receiving server), NOT inbox-folder placement — that isn't measurable
+// from Resend's webhooks, so the label/field name says delivery, not inbox.
+//
+// Weights: deliverability is foundational (up to 50 pts) — a bad bounce rate
+// poisons everything downstream. Opens (up to 30) and clicks (up to 20) are
+// engagement, weighted by how deep the action is. Spam complaints are
+// disproportionately punished (a real deliverability problem — mailbox
+// providers throttle/block senders well below 1% complaints) relative to how
+// small spam_rate numerically is: a 1% complaint rate (already bad) costs 15
+// points, not a barely-visible fraction of one.
+const SPAM_PENALTY_MULTIPLIER = 15
+
+function emailHealth(totals: EmailTotals): { score: number; delivered_rate: number; open_rate: number; click_rate: number; spam_rate: number } {
+  const basis = totals.delivered > 0 ? totals.delivered : totals.sent
+  const delivered_rate = rateOrZero(pct(totals.delivered, totals.sent))
+  const open_rate = rateOrZero(pct(totals.opened, basis))
+  const click_rate = rateOrZero(pct(totals.clicked, basis))
+  // Spam_rate's own denominator is DELIVERED specifically (a complaint can only
+  // happen after delivery) — distinct from delivered_rate's sent-based basis.
+  const spam_rate = rateOrZero(pct(totals.complained, totals.delivered))
+
+  const raw =
+    (delivered_rate / 100) * 50 +
+    (open_rate / 100) * 30 +
+    (click_rate / 100) * 20 -
+    (spam_rate / 100) * 100 * SPAM_PENALTY_MULTIPLIER
+  const score = Math.max(0, Math.min(100, Math.round(raw)))
+
+  return { score, delivered_rate, open_rate, click_rate, spam_rate }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -95,7 +140,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const [sendsRes, eventsRes] = await Promise.all([
       supabase
         .from('funnel_email_sends')
-        .select('kind, status, scheduled_at, sent_at, delivered_at, bounced_at, resend_message_id')
+        .select('kind, status, scheduled_at, sent_at, delivered_at, bounced_at, complained_at, resend_message_id')
         .eq('funnel_id', id),
       supabase
         .from('funnel_events')
@@ -130,6 +175,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       t.sent++
       if (raw.delivered_at) t.delivered++
       if (raw.bounced_at || raw.status === 'failed') t.bounced++
+      // Complaints require prior delivery — never overlaps with a bounce (see
+      // the resend webhook's split of the two).
+      if (raw.complained_at) t.complained++
     }
 
     // Opens are deduped to one event per message by a partial unique index (048),
@@ -174,6 +222,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         sent: t.sent,
         delivered: t.delivered,
         bounced: t.bounced,
+        complained: t.complained,
         queued: t.queued,
         canceled: t.canceled,
         opened: t.opened,
@@ -194,11 +243,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         sent: acc.sent + e.sent,
         delivered: acc.delivered + e.delivered,
         bounced: acc.bounced + e.bounced,
+        complained: acc.complained + e.complained,
         opened: acc.opened + e.opened,
         clicked: acc.clicked + e.clicked,
         queued: acc.queued + e.queued,
       }),
-      { sent: 0, delivered: 0, bounced: 0, opened: 0, clicked: 0, queued: 0 }
+      { sent: 0, delivered: 0, bounced: 0, complained: 0, opened: 0, clicked: 0, queued: 0 }
     )
     const totalBasis = totals.delivered > 0 ? totals.delivered : totals.sent
 
@@ -213,6 +263,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         bounce_pct: pct(totals.bounced, totals.sent),
         rate_basis: totals.delivered > 0 ? 'delivered' : 'sent',
       },
+      // Health rollup — same 0-100 percent scale as every other rate in this
+      // response ("_pct"/"_rate" above), just documented once here rather than
+      // per field. The frontend displays these; it never computes them.
+      health: emailHealth(totals),
     })
   } catch (err) {
     console.error('[funnels/[id]/emails] GET', err)

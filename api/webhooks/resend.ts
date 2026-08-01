@@ -17,8 +17,11 @@ import { cancelLeadQueue } from '../../lib/funnelNurture'
 //     per-email analytics feed divides by.
 //   email.opened  -> funnel_events 'email_opened' (deduped to one per message)
 //   email.clicked -> funnel_events 'email_clicked' (every click; stores the url)
-//   email.bounced / email.complained -> unsubscribe the lead + cancel their
-//     still-queued sends (so 5b's nurture engine skips them)
+//   email.bounced    -> status='failed' + bounced_at; unsubscribe the lead +
+//     cancel their still-queued sends (so 5b's nurture engine skips them).
+//   email.complained -> complained_at ONLY (delivered_at/status untouched — a
+//     complaint means it WAS delivered, unlike a bounce); same unsubscribe +
+//     cancel as a bounce, since either way this lead should get no more mail.
 // Attribution is always via funnel_email_sends.resend_message_id — the send row
 // we wrote at send time — never via client-supplied data.
 export const config = {
@@ -157,16 +160,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (type === 'email.bounced' || type === 'email.complained') {
       const send = await lookupSend(messageId)
       if (send) {
-        // Mark this specific send failed, and stamp when — the analytics feed
-        // reports a bounce rate per email.
-        await supabase
-          .from('funnel_email_sends')
-          .update({ status: 'failed', bounced_at: new Date().toISOString() })
-          .eq('resend_message_id', messageId)
+        // Bounced and complained are DISTINCT outcomes, not the same failure:
+        // a bounce means the message was never delivered; a complaint requires
+        // the opposite — it was delivered, and the recipient then marked it
+        // spam. Stamping both the same way (as this used to) corrupted both
+        // the bounce rate and any complaint/spam rate. A bounce marks the send
+        // failed; a complaint stamps complained_at only and leaves
+        // delivered_at/status exactly as the delivery webhook already set them.
+        if (type === 'email.bounced') {
+          await supabase
+            .from('funnel_email_sends')
+            .update({ status: 'failed', bounced_at: new Date().toISOString() })
+            .eq('resend_message_id', messageId)
+        } else {
+          await supabase
+            .from('funnel_email_sends')
+            .update({ complained_at: new Date().toISOString() })
+            .eq('resend_message_id', messageId)
+        }
         if (send.lead_id) {
           // Suppress the lead and cancel any of their still-scheduled sends —
           // cancelLeadQueue also cancels them at Resend (Phase 5b), not just in
-          // our table.
+          // our table. Applies to both: a bounced address is undeliverable and
+          // a complaint means they explicitly don't want this mail.
           await supabase.from('funnel_leads').update({ email_unsubscribed: true }).eq('id', send.lead_id)
           await cancelLeadQueue(send.lead_id)
         }
