@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
 import { setCors, noStore } from '../../../lib/cors'
 import { requireFunnelBuilder, getOwnedFunnel } from '../../../lib/funnels'
+import { loadFurthestPercentBySession } from '../../../lib/funnelVideo'
 
 // GET /api/funnels/[id]/video-analytics — owner-scoped video drop-off for the
 // dashboard's Video Performance panel. A SIBLING to analytics.ts (not an
@@ -30,33 +31,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!funnel) return res.status(404).json({ error: 'Funnel not found' })
 
   try {
-    const [playsRes, eventsRes] = await Promise.all([
+    const [playsRes, furthest] = await Promise.all([
       supabase
         .from('funnel_events')
         .select('*', { count: 'exact', head: true })
         .eq('funnel_id', id)
         .eq('event_type', 'training_view'),
-      supabase
-        .from('funnel_events')
-        .select('metadata')
-        .eq('funnel_id', id)
-        .in('event_type', ['video_watched', 'video_completed']),
+      loadFurthestPercentBySession(id),
     ])
 
     const plays = playsRes.count ?? 0
-
-    // Reduce every video beacon to each session's furthest percent. Anonymous
-    // rows with no session_id can't be tied to a viewing session, so they don't
-    // enter the drop-off (they'd double-count); plays remains the honest top.
-    const furthest = new Map<string, number>()
-    for (const row of (eventsRes.data as { metadata: unknown }[]) || []) {
-      const m = (row?.metadata || {}) as { session_id?: unknown; percent?: unknown }
-      const sid = typeof m.session_id === 'string' && m.session_id ? m.session_id : null
-      const pct = Number(m.percent)
-      if (!sid || !Number.isFinite(pct)) continue
-      if (pct > (furthest.get(sid) ?? 0)) furthest.set(sid, pct)
-    }
-
     const video_sessions = furthest.size
     const reached: Record<number, number> = { 25: 0, 50: 0, 75: 0, 100: 0 }
     for (const f of furthest.values()) {

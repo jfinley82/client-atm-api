@@ -23,19 +23,26 @@ export const config = { maxDuration: 30 }
 
 // The full set the tab lists, in send order, so an email the coach has never sent
 // still appears as a zero row instead of vanishing.
-const KNOWN_KINDS: { kind: string; label: string; group: string }[] = [
-  { kind: 'nurture_1', label: 'Nurture 1', group: 'nurture' },
-  { kind: 'nurture_2', label: 'Nurture 2', group: 'nurture' },
-  { kind: 'nurture_3', label: 'Nurture 3', group: 'nurture' },
-  { kind: 'book_a_call_1', label: 'Book a call 1', group: 'book_a_call' },
-  { kind: 'book_a_call_2', label: 'Book a call 2', group: 'book_a_call' },
-  { kind: 'book_a_call_3', label: 'Book a call 3', group: 'book_a_call' },
-  { kind: 'booking_confirmation', label: 'Booking confirmation', group: 'booking' },
-  { kind: 'reminder_24h', label: 'Reminder — 24 hours', group: 'booking' },
-  { kind: 'reminder_1h', label: 'Reminder — 1 hour', group: 'booking' },
-  { kind: 'post_call_1', label: 'Post-call 1', group: 'post_call' },
-  { kind: 'post_call_2', label: 'Post-call 2', group: 'post_call' },
-  { kind: 'post_call_3', label: 'Post-call 3', group: 'post_call' },
+//
+// sequence_number/interval_label mirror the FIXED offsets lib/funnelNurture.ts
+// actually schedules each kind at (NURTURE_OFFSETS/BOOK_A_CALL_OFFSETS/
+// POST_CALL_OFFSETS, and the reminder times in scheduleBookingReminders) — kept
+// in sync by hand since the schedule is a small, static design choice, not a
+// per-send DB value. If that schedule ever changes, this table must change with
+// it.
+const KNOWN_KINDS: { kind: string; label: string; group: string; sequence_number: number; interval_label: string }[] = [
+  { kind: 'nurture_1', label: 'Nurture 1', group: 'nurture', sequence_number: 1, interval_label: 'Immediately' },
+  { kind: 'nurture_2', label: 'Nurture 2', group: 'nurture', sequence_number: 2, interval_label: '1 day later' },
+  { kind: 'nurture_3', label: 'Nurture 3', group: 'nurture', sequence_number: 3, interval_label: '3 days later' },
+  { kind: 'book_a_call_1', label: 'Book a call 1', group: 'book_a_call', sequence_number: 1, interval_label: 'Immediately' },
+  { kind: 'book_a_call_2', label: 'Book a call 2', group: 'book_a_call', sequence_number: 2, interval_label: '2 days later' },
+  { kind: 'book_a_call_3', label: 'Book a call 3', group: 'book_a_call', sequence_number: 3, interval_label: '4 days later' },
+  { kind: 'booking_confirmation', label: 'Booking confirmation', group: 'booking', sequence_number: 1, interval_label: 'Immediately' },
+  { kind: 'reminder_24h', label: 'Reminder — 24 hours', group: 'booking', sequence_number: 2, interval_label: '24 hours before the call' },
+  { kind: 'reminder_1h', label: 'Reminder — 1 hour', group: 'booking', sequence_number: 3, interval_label: '1 hour before the call' },
+  { kind: 'post_call_1', label: 'Post-call 1', group: 'post_call', sequence_number: 1, interval_label: 'Immediately' },
+  { kind: 'post_call_2', label: 'Post-call 2', group: 'post_call', sequence_number: 2, interval_label: '1 day later' },
+  { kind: 'post_call_3', label: 'Post-call 3', group: 'post_call', sequence_number: 3, interval_label: '4 days later' },
 ]
 
 // Sent to the COACH, not the lead. Counting it alongside lead emails would put a
@@ -205,7 +212,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const seen = new Set(KNOWN_KINDS.map((k) => k.kind))
     const rows = [
       ...KNOWN_KINDS,
-      ...[...tallies.keys()].filter((k) => !seen.has(k)).sort().map((kind) => ({ kind, label: kind, group: 'other' })),
+      // A kind added later (no fixed schedule known here yet) still shows up
+      // rather than being silently dropped — sequence_number/interval_label are
+      // null rather than guessed.
+      ...[...tallies.keys()]
+        .filter((k) => !seen.has(k))
+        .sort()
+        .map((kind) => ({ kind, label: kind, group: 'other', sequence_number: null, interval_label: null })),
     ]
 
     const emails = rows.map((meta) => {
@@ -219,6 +232,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         kind: meta.kind,
         label: meta.label,
         group: meta.group,
+        // This email's position within its sequence (1-indexed) and how long
+        // after the trigger it sends — a fixed schedule, not a per-send value.
+        sequence_number: meta.sequence_number,
+        interval_label: meta.interval_label,
         sent: t.sent,
         delivered: t.delivered,
         bounced: t.bounced,
