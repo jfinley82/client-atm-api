@@ -8,6 +8,7 @@ import {
   subdomainTaken,
   validateTrackingInput,
 } from '../../../lib/funnels'
+import { coerceEmails } from '../../../lib/microTrainingGenerator'
 
 const THEME_MODES = ['dark', 'light']
 
@@ -31,7 +32,18 @@ const EDITABLE_KEYS = new Set([
   'video_url',
   'tracking',
   'watch_threshold_pct',
+  'nurture_emails',
+  'book_a_call_emails',
 ])
+
+// The funnel's own copy of its email sequences (jsonb, seeded once at funnel
+// creation from mtm_generations — see api/funnels/index.ts). Editable HERE so
+// there is finally a write path after creation; lib/funnelNurture.ts already
+// reads these two columns through the same coerceEmails on every send, so an
+// edit takes effect on the next scheduled send with no other change needed.
+// booking_confirmation/reminder_24h/reminder_1h/post_call_* are system
+// templates, not stored per funnel — out of scope, no column for them.
+const EMAIL_SEQUENCE_FIELDS = ['nurture_emails', 'book_a_call_emails']
 
 // jsonb page/config fields — accept a plain object, or null to clear. tracking
 // is NOT here: its IDs are injected into the public page's <script>, so it is
@@ -163,6 +175,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ error: 'invalid_field', field: 'watch_threshold_pct', message: 'must be 0-100' })
       }
       updates.watch_threshold_pct = Math.round(n)
+    }
+
+    // The funnel's own nurture/book-a-call email sequences — an array, or 400.
+    // Normalized through the exact same coerceEmails the send path reads with,
+    // so what's stored is byte-for-byte what a send will use.
+    for (const field of EMAIL_SEQUENCE_FIELDS) {
+      if (field in body) {
+        const v = body[field]
+        if (!Array.isArray(v)) {
+          return res.status(400).json({ error: 'invalid_field', field, message: `${field} must be an array` })
+        }
+        updates[field] = coerceEmails(v)
+      }
     }
 
     if (Object.keys(updates).length === 0) {
