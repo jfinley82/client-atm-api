@@ -9,6 +9,10 @@
     "api/pdf/document.ts": {
       "maxDuration": 60,
       "includeFiles": "api/pdf/assets/**"
+    },
+    "api/funnels/[id]/publish.ts": {
+      "memory": 1024,
+      "includeFiles": "node_modules/@sparticuz/chromium/**"
     }
   },
   "redirects": [

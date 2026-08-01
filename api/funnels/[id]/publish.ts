@@ -3,9 +3,17 @@ import { supabase } from '../../../lib/supabase'
 import { setCors } from '../../../lib/cors'
 import { requireFunnelBuilder } from '../../../lib/funnels'
 import { landingPageHasCopy } from '../../../lib/funnelLanding'
+import { generateFunnelCovers } from '../../../lib/funnelCovers'
 
 // The public host funnels are served under.
 const FUNNEL_DOMAIN = 'microtrainingmethod.com'
+
+// generateFunnelCovers launches headless Chromium (api/pdf/render.ts's same
+// @sparticuz/chromium + puppeteer-core pair) — enough time for 3 sequential
+// screenshots. Memory + the bundled chromium binary are configured in
+// vercel.json, same as api/pdf/render.ts (memory/includeFiles aren't valid
+// keys in this per-file config, only maxDuration is).
+export const config = { maxDuration: 45 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
@@ -53,6 +61,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .single()
 
     if (error) throw error
+
+    // Refresh the Pages tab cover thumbnails on every publish (first AND every
+    // re-publish, unlike published_at). Best-effort: a screenshot failure must
+    // never turn a successful publish into a 500 — the funnel is live either
+    // way, and a failed/stale cover just stays null/old until the next retry.
+    try {
+      await generateFunnelCovers(id)
+    } catch (coverErr) {
+      console.error('[funnels/[id]/publish] cover generation', coverErr)
+    }
+
     const url = `https://${data.subdomain}.${FUNNEL_DOMAIN}`
     return res.status(200).json({ funnel: data, url })
   } catch (err) {
