@@ -14,8 +14,13 @@ export const WON_STATUSES = ['sold', 'closed'] as const
 // Terminal not-won (migration 075). Deliberately outside WON_STATUSES.
 export const LOST_STATUS = 'lost'
 
-export type Stage = 'lead' | 'opted_in' | 'booked' | 'won' | 'nurture' | 'not_fit' | 'lost'
-export const STAGES: Stage[] = ['lead', 'opted_in', 'booked', 'won', 'nurture', 'not_fit', 'lost']
+// One "Leads" stage by product decision — an opted-in contact that has done
+// nothing further is still just a lead, so there is no separate opted_in stage
+// and stage_counts carries no such key. opted_in_at is still read: it drives the
+// "Opted in <date>" activity label below, which is about what HAPPENED, not
+// about where the contact sits in the pipeline.
+export type Stage = 'lead' | 'booked' | 'won' | 'nurture' | 'not_fit' | 'lost'
+export const STAGES: Stage[] = ['lead', 'booked', 'won', 'nurture', 'not_fit', 'lost']
 
 export type BookingRow = {
   id: string
@@ -70,7 +75,8 @@ export function deriveStage(lead: LeadRow, booking: BookingRow | null): Stage {
   if (lead.application_status === 'disqualified' || lead.qualification_status === 'disqualified') return 'not_fit'
   if (booking) return 'booked'
   if (lead.nurture_pivoted === true) return 'nurture'
-  if (lead.opted_in_at) return 'opted_in'
+  // Opted in but nothing since — collapses into 'lead' rather than a stage of
+  // its own.
   return 'lead'
 }
 
