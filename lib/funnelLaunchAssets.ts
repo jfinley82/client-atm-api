@@ -5,7 +5,9 @@ import { extractJson } from './aiJson'
 import { logApiCost } from './apiCostLog'
 import { sanitizePhrasingDeep } from './phrasing'
 import { GENDER_NEUTRAL_INSTRUCTION, STYLE_GUIDELINES } from './promptGuidelines'
+import { getVoiceContext } from './voiceGuide'
 import { SALES_FRAMEWORK_CANONICAL, SALES_SCRIPT_BEATS } from './salesFrameworksCanonical'
+import { BlueprintSynopsis } from './blueprintSynopsis'
 
 // ── Growth Kit ───────────────────────────────────────────────────────────────
 // Per-funnel launch assets, generated on demand one asset_type at a time and
@@ -22,6 +24,8 @@ export const FUNNEL_ASSET_TYPES = [
   'sales_script',
   'objection_scripts',
   'post_call_emails',
+  'one_pager',
+  'price_value',
 ] as const
 export type FunnelAssetType = (typeof FUNNEL_ASSET_TYPES)[number]
 
@@ -136,6 +140,61 @@ export async function loadFunnelGrounding(
     generation: (genRes as any)?.data ?? null,
     urls: funnelUrls(String(funnel.subdomain || '')),
   }
+}
+
+// ── Offer grounding (one_pager / price_value) ───────────────────────────────
+// The offer these two "Frame the offer" tools describe: the account-level
+// high-ticket offer's NAME (lib/coreOffersAnalysis.ts's CoreOffer, via the
+// core_offers saved output) and THIS funnel's own configured PRICE
+// (funnels.offer_price_display — a per-funnel field, since one account can run
+// several funnels at different price points). The synopsis is the same
+// problem/solution conviction data (offer_includes, transformation,
+// cost_of_inaction, solution_summary, audience_quote, objection_dissolved,
+// teaching_outline) already resolved onto problem_solution_cards.synopsis for
+// this funnel's blueprint card by the existing lazy-synopsis path
+// (lib/blueprintEnrichment.ts) — read here, never regenerated: if a card was
+// never viewed through /api/my-micro-trainings or /api/micro-blueprints/results
+// and so has no synopsis yet, that's a real "not ready" state, not something
+// this endpoint should trigger a second generation pipeline to fill.
+export class LaunchAssetNotReadyError extends Error {
+  missing: ('offer' | 'synopsis')[]
+  constructor(missing: ('offer' | 'synopsis')[]) {
+    super(`launch asset not ready: missing ${missing.join(', ')}`)
+    this.missing = missing
+  }
+}
+
+export type OfferGrounding = {
+  ready: boolean
+  missing: ('offer' | 'synopsis')[]
+  offerName: string
+  price: string
+  synopsis: BlueprintSynopsis | null
+}
+
+export async function loadOfferGrounding(
+  userId: string,
+  funnel: Record<string, any>,
+  g: FunnelGrounding
+): Promise<OfferGrounding> {
+  const cardId = typeof g.generation?.card_id === 'string' ? g.generation.card_id : null
+  const [coreOffersRow, cardRes] = await Promise.all([
+    getSavedOutput(userId, 'core_offers'),
+    cardId
+      ? supabase.from('problem_solution_cards').select('synopsis').eq('id', cardId).maybeSingle()
+      : Promise.resolve({ data: null } as any),
+  ])
+
+  const highTicket = (coreOffersRow?.content as { high_ticket?: { name?: unknown } } | undefined)?.high_ticket
+  const offerName = typeof highTicket?.name === 'string' ? highTicket.name.trim() : ''
+  const price = typeof funnel.offer_price_display === 'string' ? funnel.offer_price_display.trim() : ''
+  const synopsis = ((cardRes as any)?.data?.synopsis ?? null) as BlueprintSynopsis | null
+
+  const missing: ('offer' | 'synopsis')[] = []
+  if (!offerName || !price) missing.push('offer')
+  if (!synopsis) missing.push('synopsis')
+
+  return { ready: missing.length === 0, missing, offerName, price, synopsis }
 }
 
 // ── invite_emails: surface, don't rewrite ────────────────────────────────────
@@ -265,6 +324,63 @@ FUNNEL LINKS:
 Generate now.`
 }
 
+// one_pager / price_value need the coach's voice guide layered on the shared
+// style rules (STYLE_GUIDELINES) when one exists, same as other app-generated
+// marketing copy (lib/voiceGuide.ts's getVoiceContext) — the sibling generators
+// above don't use a voice guide today, so this is scoped to these two only
+// rather than changing SHARED_TAIL's fallback-only behavior for everyone else.
+async function voiceAwareTail(userId: string): Promise<string> {
+  return `Output ONLY valid JSON, no preamble, no markdown, no code fences. Double quotes only.
+Ground everything in the coach's real audience language, their transformation, and this specific offer. No generic coaching-industry filler.
+${GENDER_NEUTRAL_INSTRUCTION}
+${await getVoiceContext(userId)}`
+}
+
+// Appended to groundingMessage()'s `extra` for one_pager/price_value — the
+// HIGH-TICKET offer's name + this funnel's own price, plus the full
+// problem/solution synopsis (see OfferGrounding above). Labeled distinctly from
+// groundingMessage's own "THIS OFFER" section, which describes the free
+// training, not the paid offer these two tools frame.
+function offerGroundingBlock(offer: OfferGrounding): string {
+  return `
+HIGH-TICKET OFFER:
+- name: ${JSON.stringify(offer.offerName)}
+- price: ${JSON.stringify(offer.price)}
+PROBLEM/SOLUTION SYNOPSIS: ${JSON.stringify(offer.synopsis)}`
+}
+
+const ONE_PAGER_PROMPT = `You write the ONE-PAGER for a coach's high-ticket offer — a single page a lead can read in under a minute that makes the offer's value and fit obvious. Ground every line in the HIGH-TICKET OFFER and PROBLEM/SOLUTION SYNOPSIS below — never generic coaching-industry copy.
+
+{
+  "who_its_for": "one short paragraph — the specific person this offer is for, in their own language (drawn from the synopsis's audience_quote)",
+  "what_you_get": "one short paragraph — the concrete components of the offer, stated plainly (drawn from the synopsis's offer_includes)",
+  "the_outcome": "one short paragraph — the transformation this offer produces (drawn from the synopsis's transformation and cost_of_inaction)",
+  "said_plainly": "one or two sentences — the offer stated as plainly and honestly as possible, the way the coach would explain it to a friend, not a sales pitch"
+}
+
+Rules:
+- Each paragraph is 2-4 sentences, concrete and specific to this offer/audience — never generic.
+- Do NOT state the offer's name or price anywhere in your output — those are supplied separately and merged in verbatim.
+- No hype, no fake urgency, no invented specifics beyond what the synopsis and offer provide.`
+
+const PRICE_VALUE_PROMPT = `You write the PRICE & VALUE moment of a coach's live 1:1 call for their high-ticket offer — three beats: stack the value already established, state the price plainly, then hold the silence. Ground every line in the HIGH-TICKET OFFER and PROBLEM/SOLUTION SYNOPSIS below.
+
+{
+  "beats": [
+    { "n": 1, "name": "Stack the value", "goal": "one line — what this beat must accomplish before the price is said", "script": "the word-for-word talk track the coach says out loud" },
+    { "n": 2, "name": "State the price", "goal": "one line — what this beat must accomplish", "script": "the word-for-word talk track" },
+    { "n": 3, "name": "Hold it", "goal": "one line — what this beat must accomplish", "script": "the word-for-word talk track" }
+  ]
+}
+
+Rules:
+- EXACTLY 3 beats, in this order, with names EXACTLY "Stack the value", "State the price", "Hold it".
+- Stack the value: recap what's included and the transformation it produces (drawn from the synopsis's offer_includes / transformation / solution_summary) so the price lands against value already established, not cold.
+- State the price: state the ACTUAL price from the HIGH-TICKET OFFER above, plainly and without flinching — no discounting language, no apology, no softening it with a range.
+- Hold it: a short line that states the price then stops — coach the coach to go silent, not fill it. If it addresses a hesitation, ground it in the synopsis's objection_dissolved.
+- The prospect is a REAL person whose name we do not know: use a neutral address or a bracketed [name] placeholder in script text — never a fabricated or persona name — the exact convention this coach's own sales call script already uses.
+- Warm, plain, specific to this offer/audience. No pressure tactics, no manufactured scarcity, no fake urgency.`
+
 async function callJson(userId: string, system: string, user: string, maxTokens: number): Promise<any> {
   const message = await anthropic.messages.create({
     model: 'claude-sonnet-5',
@@ -341,6 +457,28 @@ export async function generateFunnelAsset(
   // Derived assets pass the coach's own build through verbatim — no model call.
   const derived = deriveAsset(g, assetType)
   if (derived) return derived
+
+  // one_pager / price_value need offer + synopsis grounding the other three
+  // generated types don't, and gate on that grounding actually being present —
+  // "not ready" (same actionable state POST /api/funnels/[id]/publish returns
+  // when its own inputs are missing), not a generation attempted against an
+  // invented offer.
+  if (assetType === 'one_pager' || assetType === 'price_value') {
+    const offer = await loadOfferGrounding(userId, funnel, g)
+    if (!offer.ready) throw new LaunchAssetNotReadyError(offer.missing)
+
+    const system = `${assetType === 'one_pager' ? ONE_PAGER_PROMPT : PRICE_VALUE_PROMPT}\n${await voiceAwareTail(userId)}`
+    const parsed = await callJson(userId, system, groundingMessage(g, offerGroundingBlock(offer)), 3000)
+    const cleaned = sanitizePhrasingDeep(parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, unknown>
+
+    if (assetType === 'one_pager') {
+      // offer_name/price are deterministic facts, not model output — spread
+      // FIRST then override, so these two always win even if the model ignored
+      // the "don't include them" instruction and emitted its own version.
+      return { ...cleaned, offer_name: offer.offerName, price: offer.price }
+    }
+    return cleaned
+  }
 
   // Only the three generated types have prompts; the derived ones returned above.
   // Partial + an explicit guard rather than a cast, so adding a new asset type
