@@ -22,10 +22,15 @@ const WATCH_SECRET = deriveSecret('funnel-lead-watch-v1')
 const UNSUB_SECRET = deriveSecret('funnel-lead-unsub-v1')
 const MANAGE_SECRET = deriveSecret('funnel-booking-manage-v1')
 const OFFER_SECRET = deriveSecret('funnel-offer-ref-v1')
+const COACH_SECRET = deriveSecret('funnel-lead-coach-v1')
 
 const WATCH_TTL_MS = 24 * 60 * 60 * 1000
 const UNSUB_TTL_MS = 365 * 24 * 60 * 60 * 1000
 const MANAGE_TTL_MS = 90 * 24 * 60 * 60 * 1000
+// The AI coach is a surface a lead comes back to over days, unlike the watch
+// token's single page visit. 30 days covers a real consideration window without
+// being effectively permanent.
+const COACH_TTL_MS = 30 * 24 * 60 * 60 * 1000
 // A lead who clicks the offer today may buy in a month; the sale still belongs
 // to this funnel. Long enough to cover a real consideration window.
 const OFFER_TTL_MS = 90 * 24 * 60 * 60 * 1000
@@ -119,6 +124,28 @@ export function signOfferToken(funnelId: string, leadId: string, nowMs: number =
 // The caller checks it against the funnel in the request path.
 export function verifyOfferToken(token: unknown, nowMs: number = Date.now()): { funnelId: string; leadId: string } | null {
   return verifyWith(OFFER_SECRET, token, nowMs)
+}
+
+// ---- AI coach lead token ----------------------------------------------------
+// The lead's session for the hosted AI coach. It gets its OWN derived key like
+// every other purpose here, deliberately rather than reusing the watch or offer
+// token: those are attribution markers with different lifetimes, and a token
+// minted to attribute a video view must not also open a conversation. The
+// one-purpose-one-key rule at the top of this file is what makes that true —
+// a watch token cannot verify here, and this cannot verify as a session.
+//
+// It NAMES the (funnel, lead) pair. It does not by itself grant anything: the
+// endpoints still re-check that the lead belongs to that funnel, that the coach
+// is entitled, and that the bot is activated (see lib/aiCoachSession.ts).
+
+export function signCoachToken(funnelId: string, leadId: string, nowMs: number = Date.now()): string {
+  return signWith(COACH_SECRET, funnelId, leadId, COACH_TTL_MS, nowMs)
+}
+
+// Returns the decoded { funnelId, leadId }, or null on tampered/expired/
+// wrong-purpose. The caller re-reads both rows rather than trusting the pair.
+export function verifyCoachToken(token: unknown, nowMs: number = Date.now()): { funnelId: string; leadId: string } | null {
+  return verifyWith(COACH_SECRET, token, nowMs)
 }
 
 // ---- booking manage token (Phase 3b follow-up) ------------------------------
