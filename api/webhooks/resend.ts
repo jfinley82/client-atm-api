@@ -78,6 +78,31 @@ async function lookupSend(messageId: string): Promise<ResendSend | null> {
   return (data as ResendSend) ?? null
 }
 
+// Stamp opened_at/clicked_at + bump the counter on the send row, and hand back
+// the row that matched — one atomic statement (migration 074), so a repeated
+// open can never move the first-touch timestamp and two simultaneous pixel
+// fires can't lose a count to each other.
+//
+// Falls back to a plain lookup when the RPC is unavailable: code deploys and
+// migrations are separate steps, and until 074 lands this function does not
+// exist. Degrading to today's behavior (funnel_events row written, no stamp) is
+// right — dropping the engagement entirely because the column isn't there yet
+// would lose data we cannot get back.
+async function recordEngagement(messageId: string, event: 'opened' | 'clicked'): Promise<ResendSend | null> {
+  if (!messageId) return null
+  const { data, error } = await supabase.rpc('record_email_engagement', {
+    p_message_id: messageId,
+    p_event: event,
+    p_at: new Date().toISOString(),
+  })
+  if (error) {
+    console.error('[webhooks/resend] engagement stamp failed — falling back to lookup', error)
+    return lookupSend(messageId)
+  }
+  const row = (Array.isArray(data) ? data[0] : null) as ResendSend | null
+  return row ?? null
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end()
 
@@ -136,11 +161,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (type === 'email.opened' || type === 'email.clicked') {
-      const send = await lookupSend(messageId)
+      const isOpen = type === 'email.opened'
+      // Stamps the send row AND resolves it in one round trip.
+      const send = await recordEngagement(messageId, isOpen ? 'opened' : 'clicked')
       // No matching send row (e.g. a non-funnel email) → nothing to attribute.
       if (!send) return res.status(200).json({ received: true })
 
-      const isOpen = type === 'email.opened'
       const metadata: Record<string, unknown> = { resend_message_id: messageId, kind: send.kind }
       if (!isOpen && typeof body.data?.click?.link === 'string') metadata.url = body.data.click.link
 

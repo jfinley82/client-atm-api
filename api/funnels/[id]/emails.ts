@@ -57,27 +57,37 @@ type SendRow = {
   delivered_at: string | null
   bounced_at: string | null
   complained_at: string | null
+  opened_at: string | null
+  clicked_at: string | null
+  open_count: number | null
+  click_count: number | null
   resend_message_id: string | null
 }
 
+// Engagement is tallied TWICE, against the two possible denominators, because a
+// rate is only meaningful when its numerator is drawn from the same rows as its
+// basis. Counting every open ever recorded over just the delivery-stamped sends
+// is what produced 8 opens / 1 delivered = 800% on live data.
 type Tally = {
   sent: number
   delivered: number
   bounced: number
   complained: number
-  opened: number
-  clicked: number
   queued: number
   canceled: number
-  messageIds: Set<string>
-  openedIds: Set<string>
-  clickedIds: Set<string>
+  openedAmongSent: number
+  openedAmongDelivered: number
+  clickedAmongSent: number
+  clickedAmongDelivered: number
+  totalOpens: number
+  totalClicks: number
 }
 
 function emptyTally(): Tally {
   return {
-    sent: 0, delivered: 0, bounced: 0, complained: 0, opened: 0, clicked: 0, queued: 0, canceled: 0,
-    messageIds: new Set(), openedIds: new Set(), clickedIds: new Set(),
+    sent: 0, delivered: 0, bounced: 0, complained: 0, queued: 0, canceled: 0,
+    openedAmongSent: 0, openedAmongDelivered: 0, clickedAmongSent: 0, clickedAmongDelivered: 0,
+    totalOpens: 0, totalClicks: 0,
   }
 }
 
@@ -147,7 +157,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const [sendsRes, eventsRes] = await Promise.all([
       supabase
         .from('funnel_email_sends')
-        .select('kind, status, scheduled_at, sent_at, delivered_at, bounced_at, complained_at, resend_message_id')
+        .select('kind, status, scheduled_at, sent_at, delivered_at, bounced_at, complained_at, opened_at, clicked_at, open_count, click_count, resend_message_id')
         .eq('funnel_id', id),
       supabase
         .from('funnel_events')
@@ -165,46 +175,71 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return t
     }
 
+    // Engagement recorded BEFORE migration 074 exists only as funnel_events rows,
+    // so those are folded in by message id rather than dropped — every such event
+    // was written only after its send row was resolved by that same id, so the
+    // join is exact and no historical open is lost. Going forward the send row's
+    // own opened_at/open_count is the authoritative source; keyed by message id,
+    // the two never double-count the same send.
+    const eventOpens = new Map<string, number>()
+    const eventClicks = new Map<string, number>()
+    for (const ev of (eventsRes.data || []) as { event_type: string; metadata: Record<string, unknown> | null }[]) {
+      const messageId = typeof ev.metadata?.resend_message_id === 'string' ? ev.metadata.resend_message_id : ''
+      if (!messageId) continue
+      const target = ev.event_type === 'email_opened' ? eventOpens : eventClicks
+      target.set(messageId, (target.get(messageId) || 0) + 1)
+    }
+
     for (const raw of (sendsRes.data || []) as SendRow[]) {
       const kind = typeof raw.kind === 'string' ? raw.kind : ''
       if (!kind || EXCLUDED_KINDS.has(kind)) continue
       const t = get(kind)
-      if (raw.resend_message_id) t.messageIds.add(raw.resend_message_id)
 
       // 'canceled' means it never went out (the lead booked, unsubscribed, or
       // bounced first). Counting it as sent would understate every rate.
       if (raw.status === 'canceled') { t.canceled++; continue }
 
+      const messageId = raw.resend_message_id || ''
+      const legacyOpens = messageId ? eventOpens.get(messageId) || 0 : 0
+      const legacyClicks = messageId ? eventClicks.get(messageId) || 0 : 0
+      const opened = !!raw.opened_at || legacyOpens > 0
+      const clicked = !!raw.clicked_at || legacyClicks > 0
+
       // Still waiting on its scheduled time — real, but not yet a send.
-      const dispatched = !!raw.sent_at || !!raw.delivered_at || raw.status === 'sent' || raw.status === 'failed'
+      // Engagement counts as proof of dispatch: an email cannot be opened
+      // before it goes out, so a row still marked 'queued' that has an open
+      // against it demonstrably went out and its delivery webhook simply never
+      // landed. Without this, every kind whose sends predate the delivery
+      // webhook has a denominator of 0 and its rate renders "—" forever
+      // despite recorded opens — which is the reported symptom.
+      const dispatched =
+        !!raw.sent_at || !!raw.delivered_at || raw.status === 'sent' || raw.status === 'failed' || opened || clicked
       if (!dispatched) { t.queued++; continue }
 
       t.sent++
-      if (raw.delivered_at) t.delivered++
+      const delivered = !!raw.delivered_at
+      if (delivered) t.delivered++
       if (raw.bounced_at || raw.status === 'failed') t.bounced++
       // Complaints require prior delivery — never overlaps with a bounce (see
       // the resend webhook's split of the two).
       if (raw.complained_at) t.complained++
-    }
 
-    // Opens are deduped to one event per message by a partial unique index (048),
-    // so counting rows gives unique opens. Clicks are deliberately NOT deduped, so
-    // count distinct message ids for unique clickers and rows for total clicks.
-    let totalClicks = 0
-    for (const ev of (eventsRes.data || []) as { event_type: string; metadata: Record<string, unknown> | null }[]) {
-      const meta = ev.metadata || {}
-      const kind = typeof meta.kind === 'string' ? meta.kind : ''
-      const messageId = typeof meta.resend_message_id === 'string' ? meta.resend_message_id : ''
-      if (!kind || EXCLUDED_KINDS.has(kind)) continue
-      const t = get(kind)
-      if (ev.event_type === 'email_opened') {
-        t.opened++
-        if (messageId) t.openedIds.add(messageId)
-      } else {
-        totalClicks++
-        t.clicked++
-        if (messageId) t.clickedIds.add(messageId)
+      // Opened/clicked at all — one send counts once however many times the
+      // pixel fired, which is what an open/click RATE means.
+      if (opened) {
+        t.openedAmongSent++
+        if (delivered) t.openedAmongDelivered++
       }
+      if (clicked) {
+        t.clickedAmongSent++
+        if (delivered) t.clickedAmongDelivered++
+      }
+
+      // Raw totals. max() rather than a sum: for a send stamped after 074 the
+      // counter is authoritative, for a pre-074 send only the events exist, and
+      // a send straddling the migration must not have its opens counted twice.
+      t.totalOpens += Math.max(raw.open_count || 0, legacyOpens)
+      t.totalClicks += Math.max(raw.click_count || 0, legacyClicks)
     }
 
     // Known kinds first in send order, then anything else that has data (a kind
@@ -223,11 +258,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const emails = rows.map((meta) => {
       const t = tallies.get(meta.kind) || emptyTally()
-      // Unique clickers, not raw clicks — one lead clicking three links is one
-      // click-through, which is what a click rate means. Falls back to the raw
-      // count only if no event carried a message id to dedupe on.
-      const uniqueClicked = t.clickedIds.size > 0 ? t.clickedIds.size : t.clicked
-      const basis = t.delivered > 0 ? t.delivered : t.sent
+      // Whichever denominator this kind is using, the numerator is counted over
+      // that SAME set of sends, so a rate can never exceed 100% or read "—"
+      // while opens plainly exist.
+      const onDelivered = t.delivered > 0
+      const basis = onDelivered ? t.delivered : t.sent
+      const opened = onDelivered ? t.openedAmongDelivered : t.openedAmongSent
+      const clicked = onDelivered ? t.clickedAmongDelivered : t.clickedAmongSent
       return {
         kind: meta.kind,
         label: meta.label,
@@ -242,12 +279,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         complained: t.complained,
         queued: t.queued,
         canceled: t.canceled,
-        opened: t.opened,
-        clicked: uniqueClicked,
-        total_clicks: t.clicked,
+        // Sends that were opened / clicked at least once, within the basis set.
+        opened,
+        clicked,
+        // Raw engagement events, which can exceed `opened`/`clicked` — one lead
+        // reopening an email five times is five opens but one opened send.
+        total_opens: t.totalOpens,
+        total_clicks: t.totalClicks,
         delivered_pct: pct(t.delivered, t.sent),
-        open_pct: pct(t.opened, basis),
-        click_pct: pct(uniqueClicked, basis),
+        open_pct: pct(opened, basis),
+        click_pct: pct(clicked, basis),
         bounce_pct: pct(t.bounced, t.sent),
         // Which denominator the two engagement rates used, so the tab can say so
         // instead of implying a precision the data does not have.
@@ -255,30 +296,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     })
 
-    const totals = emails.reduce(
-      (acc, e) => ({
-        sent: acc.sent + e.sent,
-        delivered: acc.delivered + e.delivered,
-        bounced: acc.bounced + e.bounced,
-        complained: acc.complained + e.complained,
-        opened: acc.opened + e.opened,
-        clicked: acc.clicked + e.clicked,
-        queued: acc.queued + e.queued,
-      }),
-      { sent: 0, delivered: 0, bounced: 0, complained: 0, opened: 0, clicked: 0, queued: 0 }
-    )
-    const totalBasis = totals.delivered > 0 ? totals.delivered : totals.sent
+    // Summed from the tallies, NOT from the per-email rows: each row already
+    // picked its own basis, and adding those together would mix a sent-based
+    // numerator into a delivered-based denominator — the same category error at
+    // funnel level that this change fixes per email. The whole-funnel basis is
+    // chosen once here, then its matching numerator is used.
+    const grand = [...tallies.values()].reduce((acc, t) => {
+      for (const k of Object.keys(acc) as (keyof Tally)[]) acc[k] += t[k]
+      return acc
+    }, emptyTally())
+    const totalsOnDelivered = grand.delivered > 0
+    const totalBasis = totalsOnDelivered ? grand.delivered : grand.sent
+    const totals = {
+      sent: grand.sent,
+      delivered: grand.delivered,
+      bounced: grand.bounced,
+      complained: grand.complained,
+      queued: grand.queued,
+      opened: totalsOnDelivered ? grand.openedAmongDelivered : grand.openedAmongSent,
+      clicked: totalsOnDelivered ? grand.clickedAmongDelivered : grand.clickedAmongSent,
+    }
 
     return res.status(200).json({
       emails,
       totals: {
         ...totals,
-        total_clicks: totalClicks,
+        total_opens: grand.totalOpens,
+        total_clicks: grand.totalClicks,
         delivered_pct: pct(totals.delivered, totals.sent),
         open_pct: pct(totals.opened, totalBasis),
         click_pct: pct(totals.clicked, totalBasis),
         bounce_pct: pct(totals.bounced, totals.sent),
-        rate_basis: totals.delivered > 0 ? 'delivered' : 'sent',
+        rate_basis: totalsOnDelivered ? 'delivered' : 'sent',
       },
       // Health rollup — same 0-100 percent scale as every other rate in this
       // response ("_pct"/"_rate" above), just documented once here rather than
