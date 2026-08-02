@@ -3,6 +3,7 @@ import crypto from 'crypto'
 import { supabase } from './supabase'
 import { loadBusinessSettings, isValidHttpUrl } from './businessSettings'
 import { sanitizeBrandColor, DEFAULT_BRAND_PRIMARY } from './funnels'
+import { loadUserAvailability } from './availabilitySettings'
 
 const resend = new Resend(process.env.RESEND_API_KEY!)
 // The API's own public base URL — NOT the frontend (that's APP_URL). The
@@ -11,6 +12,9 @@ const resend = new Resend(process.env.RESEND_API_KEY!)
 // 302-redirects to the frontend's /auth-callback route with a session token.
 // Pointing the email at the frontend 404s: the SPA has no /auth/callback.
 const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
+// The FRONTEND's own base URL — used for coach-notification links that point
+// INTO the builder (e.g. a specific lead), as opposed to API_URL above.
+const APP_URL = process.env.APP_URL || 'https://app.clientatmbuilder.com'
 
 export async function sendMagicLinkEmail(email: string, name: string, token: string) {
   const link = `${API_URL}/api/auth/callback?token=${encodeURIComponent(token)}`
@@ -609,26 +613,104 @@ export async function sendBookingConfirmationEmail(opts: {
   }
 }
 
+// ---- coach notifications (new booking / application / opt-in) --------------
+// Additive coach-facing operational notices, all sharing this file's Resend
+// sender + coach-brand layout with the existing booking notices below. Each is
+// gated on the coach's own funnel_business_settings.notification_prefs, and
+// each claims a *_notified_at marker on the row the event fires from BEFORE
+// sending — a retry/re-run that finds the marker already set skips silently,
+// so a send is exactly-once per event no matter how many times the caller runs.
+// Copy is plain and coach-facing (no internal jargon or system terms), per the
+// language rule in STYLE_GUIDELINES (lib/promptGuidelines.ts).
+
+// Funnel rows arrive here as the same loosely-typed Record<string, any> every
+// call site already reads them as (resolveLiveFunnel's return type) — id and
+// user_id are always present in practice (every row in `funnels` has both).
+type NotifyFunnel = Record<string, any>
+
+// Human-readable funnel name for notification copy. Mirrors the same
+// label -> landing_page.headline -> subdomain fallback api/funnels/portfolio.ts
+// uses for its display name — funnels has no dedicated `name` column.
+function funnelDisplayName(f: NotifyFunnel): string {
+  const label = typeof f.problem_solution_label === 'string' ? f.problem_solution_label.trim() : ''
+  if (label) return label
+  const headline = (f.landing_page && typeof f.landing_page === 'object' ? (f.landing_page as any).headline : null) as unknown
+  if (typeof headline === 'string' && headline.trim()) return headline.trim()
+  if (typeof f.subdomain === 'string' && f.subdomain.trim()) return f.subdomain.trim()
+  return 'your funnel'
+}
+
+function coachLeadUrl(funnelId: string, leadId: string | null): string | null {
+  return leadId ? `${APP_URL}/funnels/${funnelId}/leads/${leadId}` : null
+}
+
+// Claim a coach-notification send: UPDATE ... WHERE <column> IS NULL, so only
+// the first caller to run this for a given row ever gets true back. A retry, a
+// duplicate webhook, or a resubmission all find the marker already set and
+// skip — the send itself never has to be idempotent, only this claim does.
+async function claimCoachNotification(table: 'bookings' | 'funnel_leads', id: string, column: string): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from(table)
+      .update({ [column]: new Date().toISOString() })
+      .eq('id', id)
+      .is(column, null)
+      .select('id')
+    if (error) {
+      console.error(`[email] coach notification claim failed (${table}.${column}=${id})`, error)
+      return false
+    }
+    return Array.isArray(data) && data.length > 0
+  } catch (err) {
+    console.error(`[email] coach notification claim threw (${table}.${column}=${id})`, err)
+    return false
+  }
+}
+
+// Coach's own configured timezone (user_availability.working_hours.timezone),
+// falling back to UTC. Deliberately separate from the lead-facing booking
+// confirmation's UTC label — that email is unchanged; this is only for the
+// coach's own inbox.
+async function coachTimeLabel(coachUserId: string, startIso: string): Promise<string> {
+  const { working_hours } = await loadUserAvailability(coachUserId)
+  const timeZone = working_hours.timezone || 'UTC'
+  try {
+    return new Date(startIso).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short', timeZone }) + ` (${timeZone})`
+  } catch {
+    return new Date(startIso).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short', timeZone: 'UTC' }) + ' (UTC)'
+  }
+}
+
 // Coach notification when a lead books from their funnel. Best-effort BY
 // CONTRACT: never throws — a mail hiccup must not fail a booking that already
-// succeeded. Short, plain, MTM-styled; includes the time and the lead's answers.
+// succeeded. Short, plain; includes the time (in the coach's own timezone),
+// the funnel name, and a link to the lead in the builder.
 // funnelId (Phase 5a): the notification is tagged and recorded, but with
 // lead_id NULL by design — a coach opening their own operational notice is NOT
 // lead engagement, so it must never post an email_opened onto the lead's feed.
 // coachUserId (Phase 5b): the notice wears the coach's brand (it's their
 // business); it stays MTM-branded only if the coach can't be resolved.
 export async function sendCoachBookingNotification(opts: {
-  coachEmail: string
+  funnel: NotifyFunnel
+  bookingId: string
+  leadId: string | null
   leadName: string
   leadEmail: string
-  startLabel: string
+  startIso: string
   answers: Array<{ label: string; answer: string }>
-  funnelId?: string
-  coachUserId?: string
 }): Promise<void> {
   try {
-    if (!opts.coachEmail) return
+    const settings = await loadBusinessSettings(opts.funnel.user_id)
+    if (!settings.notification_prefs.new_booking) return
+    if (!(await claimCoachNotification('bookings', opts.bookingId, 'coach_notified_at'))) return
+
+    const brand = await loadCoachBrand(opts.funnel.user_id)
+    if (!brand.replyTo) return // no resolvable coach email — skip silently, never error the booking
+
     const kind = 'coach_booking_notification'
+    const startLabel = await coachTimeLabel(opts.funnel.user_id, opts.startIso)
+    const funnelName = funnelDisplayName(opts.funnel)
+    const leadUrl = coachLeadUrl(opts.funnel.id, opts.leadId)
     const answerRows = opts.answers
       .filter((a) => a.answer)
       .map(
@@ -637,51 +719,136 @@ export async function sendCoachBookingNotification(opts: {
       )
       .join('')
 
-    const brand = opts.coachUserId ? await loadCoachBrand(opts.coachUserId) : null
-    const from = brand ? `${brand.fromName} <noreply@mail.microtrainingmethod.com>` : 'Micro-Training Method <noreply@mail.microtrainingmethod.com>'
-
+    const from = `${sanitizeDisplayName(brand.businessName)} <noreply@mail.microtrainingmethod.com>`
     const bodyHtml = `
-          <p style="margin:0 0 6px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#0B1120;font-weight:bold;">${escapeHtml(opts.startLabel)}</p>
-          <p style="margin:0 0 18px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:22px;color:#4B5563;">${escapeHtml(opts.leadName)} &lt;${escapeHtml(opts.leadEmail)}&gt;</p>
+          <p style="margin:0 0 6px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#0B1120;font-weight:bold;">${escapeHtml(startLabel)}</p>
+          <p style="margin:0 0 4px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:22px;color:#4B5563;">${escapeHtml(opts.leadName)} &lt;${escapeHtml(opts.leadEmail)}&gt;</p>
+          <p style="margin:0 0 18px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;">From ${escapeHtml(funnelName)}</p>
           ${answerRows ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-top:1px solid #E5E9F0;padding-top:12px;margin-top:4px;">${answerRows}</table>` : ''}
           <p style="margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;">It's on your calendar. The lead has the meeting link.</p>`
-
-    const html = brand
-      ? brandedEmailHtml(brand, { heading: 'You have a new call booked', bodyHtml })
-      : `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"></head>
-<body style="margin:0;padding:0;background-color:#F4F6F9;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F4F6F9;">
-    <tr><td align="center" style="padding:36px 16px;">
-      <table role="presentation" width="520" cellpadding="0" cellspacing="0" border="0" style="width:520px;max-width:520px;">
-        <tr><td bgcolor="#FFFFFF" style="background-color:#FFFFFF;border:1px solid #E5E9F0;border-radius:14px;padding:32px;">
-          <h1 style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:20px;line-height:28px;font-weight:bold;color:#0B1120;">You have a new call booked</h1>
-          ${bodyHtml}
-        </td></tr>
-      </table>
-    </td></tr>
-  </table>
-</body></html>`
+    const html = brandedEmailHtml(brand, {
+      heading: 'You have a new call booked',
+      bodyHtml,
+      ...(leadUrl ? { cta: { label: 'View lead in builder', url: leadUrl } } : {}),
+    })
 
     const { data, error } = await resend.emails.send({
       from,
-      to: opts.coachEmail,
-      subject: `New booking: ${opts.leadName || opts.leadEmail}`,
-      ...(opts.funnelId ? { tags: funnelTags(opts.funnelId, null, kind) } : {}),
+      to: brand.replyTo,
+      subject: `New call booked — ${opts.leadName || opts.leadEmail}`,
+      tags: funnelTags(opts.funnel.id, null, kind),
       html,
     })
-    if (opts.funnelId) {
-      await recordFunnelEmailSend({
-        funnelId: opts.funnelId,
-        leadId: null,
-        kind,
-        messageId: data?.id ?? null,
-        status: error ? 'failed' : 'sent',
-      })
-    }
+    await recordFunnelEmailSend({
+      funnelId: opts.funnel.id,
+      leadId: null,
+      kind,
+      messageId: data?.id ?? null,
+      status: error ? 'failed' : 'sent',
+    })
     if (error) throw new Error(error.message)
   } catch (err) {
-    console.error(`[email] coach booking notification failed (to=${opts.coachEmail})`, err)
+    console.error(`[email] coach booking notification failed (funnel=${opts.funnel.id})`, err)
+  }
+}
+
+// Coach notification when a lead submits the application gate on their funnel.
+// Same best-effort contract as the booking notice above.
+export async function sendCoachApplicationNotification(opts: {
+  funnel: NotifyFunnel
+  leadId: string
+  leadName: string
+  leadEmail: string
+  qualified: boolean
+}): Promise<void> {
+  try {
+    const settings = await loadBusinessSettings(opts.funnel.user_id)
+    if (!settings.notification_prefs.new_application) return
+    if (!(await claimCoachNotification('funnel_leads', opts.leadId, 'application_notified_at'))) return
+
+    const brand = await loadCoachBrand(opts.funnel.user_id)
+    if (!brand.replyTo) return
+
+    const kind = 'coach_application_notification'
+    const funnelName = funnelDisplayName(opts.funnel)
+    const leadUrl = coachLeadUrl(opts.funnel.id, opts.leadId)
+    const displayName = opts.leadName || opts.leadEmail
+    const fit = opts.qualified ? 'a fit' : 'not a fit'
+
+    const from = `${sanitizeDisplayName(brand.businessName)} <noreply@mail.microtrainingmethod.com>`
+    const bodyHtml = `
+          <p style="margin:0 0 6px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#0B1120;font-weight:bold;">${escapeHtml(displayName)} &lt;${escapeHtml(opts.leadEmail)}&gt;</p>
+          <p style="margin:0 0 18px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:22px;color:#4B5563;">Applied on <strong>${escapeHtml(funnelName)}</strong> and looks like <strong>${fit}</strong>.</p>`
+    const html = brandedEmailHtml(brand, {
+      heading: 'New application submitted',
+      bodyHtml,
+      ...(leadUrl ? { cta: { label: 'View their answers', url: leadUrl } } : {}),
+    })
+
+    const { data, error } = await resend.emails.send({
+      from,
+      to: brand.replyTo,
+      subject: `New application — ${displayName} (${fit})`,
+      tags: funnelTags(opts.funnel.id, opts.leadId, kind),
+      html,
+    })
+    await recordFunnelEmailSend({
+      funnelId: opts.funnel.id,
+      leadId: opts.leadId,
+      kind,
+      messageId: data?.id ?? null,
+      status: error ? 'failed' : 'sent',
+    })
+    if (error) throw new Error(error.message)
+  } catch (err) {
+    console.error(`[email] coach application notification failed (lead=${opts.leadId})`, err)
+  }
+}
+
+// Coach notification when a lead opts in on their funnel's landing page.
+// Default OFF (opt-ins can be high-volume) — see DEFAULT_NOTIFICATION_PREFS.
+// Same best-effort contract as the two notices above.
+export async function sendCoachOptinNotification(opts: {
+  funnel: NotifyFunnel
+  leadId: string
+  leadName: string
+  leadEmail: string
+}): Promise<void> {
+  try {
+    const settings = await loadBusinessSettings(opts.funnel.user_id)
+    if (!settings.notification_prefs.new_optin) return
+    if (!(await claimCoachNotification('funnel_leads', opts.leadId, 'optin_notified_at'))) return
+
+    const brand = await loadCoachBrand(opts.funnel.user_id)
+    if (!brand.replyTo) return
+
+    const kind = 'coach_optin_notification'
+    const funnelName = funnelDisplayName(opts.funnel)
+    const displayName = opts.leadName || opts.leadEmail
+
+    const from = `${sanitizeDisplayName(brand.businessName)} <noreply@mail.microtrainingmethod.com>`
+    const bodyHtml = `
+          <p style="margin:0 0 6px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#0B1120;font-weight:bold;">${escapeHtml(displayName)} &lt;${escapeHtml(opts.leadEmail)}&gt;</p>
+          <p style="margin:0 0 18px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:22px;color:#4B5563;">Just opted in on <strong>${escapeHtml(funnelName)}</strong>.</p>`
+    const html = brandedEmailHtml(brand, { heading: 'New opt-in', bodyHtml })
+
+    const { data, error } = await resend.emails.send({
+      from,
+      to: brand.replyTo,
+      subject: `New opt-in — ${displayName}`,
+      tags: funnelTags(opts.funnel.id, opts.leadId, kind),
+      html,
+    })
+    await recordFunnelEmailSend({
+      funnelId: opts.funnel.id,
+      leadId: opts.leadId,
+      kind,
+      messageId: data?.id ?? null,
+      status: error ? 'failed' : 'sent',
+    })
+    if (error) throw new Error(error.message)
+  } catch (err) {
+    console.error(`[email] coach optin notification failed (lead=${opts.leadId})`, err)
   }
 }
 

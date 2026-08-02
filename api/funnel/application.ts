@@ -6,6 +6,7 @@ import { rateLimit, clientIp } from '../../lib/rateLimit'
 import { verifyWatchToken } from '../../lib/funnelLeadToken'
 import { funnelBookingQuestions, validateBookingAnswers, bookingQuestionErrorMessage } from '../../lib/bookingQuestions'
 import { checkGate, gateApplies } from '../../lib/applicationGate'
+import { sendCoachApplicationNotification } from '../../lib/email'
 
 // POST /api/funnel/application — PUBLIC step 1 of the two-step booking page.
 //
@@ -93,6 +94,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         })
         .eq('id', lead.id)
       if (error) console.error('[funnel/application] lead answers', error)
+
+      // Coach notice (Phase 6). Best-effort — never fail or slow the response
+      // the lead is waiting on. Fires even if the answers write above failed:
+      // the application event itself already happened and was logged.
+      await sendCoachApplicationNotification({
+        funnel,
+        leadId: lead.id,
+        leadName: lead.name,
+        leadEmail: lead.email,
+        qualified: outcome.qualified,
+      })
     }
 
     if (!outcome.qualified) {

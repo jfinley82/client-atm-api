@@ -13,6 +13,23 @@ export type Legal = {
   disclaimer?: string
 }
 
+// Coach notification preferences (Phase 6): whether an event on THEIR funnel
+// emails them. Bookings/applications are high-signal so they default on;
+// opt-ins can be high-volume so they default off (see migration 072).
+export type NotificationPrefs = {
+  new_booking: boolean
+  new_application: boolean
+  new_optin: boolean
+}
+
+export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
+  new_booking: true,
+  new_application: true,
+  new_optin: false,
+}
+
+const NOTIFICATION_PREF_KEYS = ['new_booking', 'new_application', 'new_optin'] as const
+
 export type BusinessSettings = {
   business_name: string | null
   logo_url: string | null
@@ -24,6 +41,7 @@ export type BusinessSettings = {
   tracking: Tracking
   zoom_link: string | null
   legal: Legal
+  notification_prefs: NotificationPrefs
 }
 
 const BUSINESS_NAME_MAX = 200
@@ -74,6 +92,35 @@ export function validateLegalInput(v: unknown): { ok: true; legal: Legal } | { o
   return { ok: true, legal: out }
 }
 
+// Validate a partial notification_prefs patch: only the three known keys,
+// booleans only. Returns just the provided keys — the caller merges this onto
+// the coach's CURRENT stored prefs (unlike tracking/legal, a missing key here
+// must not silently reset that pref back to its default on every save).
+export function validateNotificationPrefsInput(
+  v: unknown
+): { ok: true; prefs: Partial<NotificationPrefs> } | { ok: false; field: string } {
+  if (v === null) return { ok: true, prefs: {} }
+  if (typeof v !== 'object' || Array.isArray(v)) return { ok: false, field: 'notification_prefs' }
+  const o = v as Record<string, unknown>
+  const out: Partial<NotificationPrefs> = {}
+  for (const key of Object.keys(o)) {
+    if (!(NOTIFICATION_PREF_KEYS as readonly string[]).includes(key)) return { ok: false, field: `notification_prefs.${key}` }
+    const raw = o[key]
+    if (typeof raw !== 'boolean') return { ok: false, field: `notification_prefs.${key}` }
+    out[key as keyof NotificationPrefs] = raw
+  }
+  return { ok: true, prefs: out }
+}
+
+function normalizeNotificationPrefs(v: unknown): NotificationPrefs {
+  const o = asObj(v)
+  return {
+    new_booking: typeof o.new_booking === 'boolean' ? o.new_booking : DEFAULT_NOTIFICATION_PREFS.new_booking,
+    new_application: typeof o.new_application === 'boolean' ? o.new_application : DEFAULT_NOTIFICATION_PREFS.new_application,
+    new_optin: typeof o.new_optin === 'boolean' ? o.new_optin : DEFAULT_NOTIFICATION_PREFS.new_optin,
+  }
+}
+
 const ALLOWED_KEYS = new Set([
   'business_name',
   'logo_url',
@@ -85,6 +132,7 @@ const ALLOWED_KEYS = new Set([
   'tracking',
   'zoom_link',
   'legal',
+  'notification_prefs',
 ])
 const URL_FIELDS = ['logo_url', 'headshot_url', 'zoom_link'] as const
 
@@ -154,6 +202,14 @@ export function validateBusinessSettingsInput(
     update.legal = l.legal
   }
 
+  if ('notification_prefs' in o) {
+    const p = validateNotificationPrefsInput(o.notification_prefs)
+    if (!p.ok) return { ok: false, field: p.field }
+    // Partial patch only — the endpoint merges this onto the stored value
+    // before writing, since this jsonb column has no DB-level merge.
+    update.notification_prefs = p.prefs
+  }
+
   if (Object.keys(update).length === 0) return { ok: false, field: 'body' }
   return { ok: true, update }
 }
@@ -177,6 +233,7 @@ export function normalizeBusinessSettings(row: Record<string, any> | null | unde
     tracking: asObj(r.tracking) as Tracking,
     zoom_link: typeof r.zoom_link === 'string' && r.zoom_link ? r.zoom_link : null,
     legal: asObj(r.legal) as Legal,
+    notification_prefs: normalizeNotificationPrefs(r.notification_prefs),
   }
 }
 

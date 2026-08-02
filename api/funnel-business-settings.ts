@@ -31,9 +31,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'invalid_field', field: parsed.field })
     }
     try {
+      const update = { ...parsed.update }
+      // notification_prefs is a partial patch (validateBusinessSettingsInput
+      // only validates the keys given), but the column itself is a single jsonb
+      // value with no DB-level merge — writing the partial straight through
+      // would silently reset any pref not included back to nothing. Merge onto
+      // the coach's current stored prefs first, unlike tracking/legal below
+      // which are intentionally full-replace.
+      if ('notification_prefs' in update) {
+        const current = await loadBusinessSettings(userId)
+        update.notification_prefs = { ...current.notification_prefs, ...(update.notification_prefs as object) }
+      }
       const { error } = await supabase
         .from('funnel_business_settings')
-        .upsert({ user_id: userId, ...parsed.update, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
+        .upsert({ user_id: userId, ...update, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
       if (error) throw error
       const settings = await loadBusinessSettings(userId)
       return res.status(200).json({ settings })
