@@ -15,6 +15,7 @@ import {
   generateFunnelAsset,
   listFunnelAssets,
   upsertFunnelAsset,
+  LaunchAssetNotReadyError,
 } from '../../../lib/funnelLaunchAssets'
 
 // Growth Kit assets for one funnel. Response shapes are pinned by the Growth Kit
@@ -45,8 +46,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!id) return res.status(400).json({ error: 'id required' })
 
   // subdomain + generation_id are what the generators and the invite derivation
-  // ground on.
-  const funnel = await getOwnedFunnel(userId, id, 'id, user_id, subdomain, generation_id, status')
+  // ground on; offer_price_display is what one_pager/price_value read as this
+  // funnel's own configured price (see lib/funnelLaunchAssets.ts's OfferGrounding).
+  const funnel = await getOwnedFunnel(userId, id, 'id, user_id, subdomain, generation_id, status, offer_price_display')
   if (!funnel) return res.status(404).json({ error: 'Funnel not found' })
 
   if (req.method === 'GET') {
@@ -133,6 +135,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         content: saved.content,
       })
     } catch (err) {
+      // one_pager/price_value need an offer + synopsis to ground on — the same
+      // actionable "not ready" shape POST /api/funnels/[id]/publish returns when
+      // ITS inputs are missing, not a 500 and not a generation against an
+      // invented offer.
+      if (err instanceof LaunchAssetNotReadyError) {
+        return res.status(400).json({ error: 'not_ready', missing: err.missing })
+      }
       // A truncated/unparseable model response is a retryable generation failure,
       // not a server fault — same mapping the micro-training generator uses.
       if (err instanceof GenerationParseError) {
