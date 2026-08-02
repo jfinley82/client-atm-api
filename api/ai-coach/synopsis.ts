@@ -1,7 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { setCors, noStore } from '../../lib/cors'
-import { getSavedOutput } from '../../lib/savedOutputs'
 import { resolveLeadSession, resolveCardId } from '../../lib/aiCoachSession'
 
 // GET /api/ai-coach/synopsis — lead-authed. The "sheet" the lead-facing AI coach
@@ -18,7 +17,8 @@ import { resolveLeadSession, resolveCardId } from '../../lib/aiCoachSession'
 // payload ships at once so the reveal costs no extra round trips.
 export const config = { maxDuration: 30 }
 
-// From problem_solution_cards.synopsis — the six the sheet renders.
+// The WHOLE sheet is sourced from the resolved card's synopsis — one object, so
+// every panel is about the same problem and cannot drift between sources.
 const SYNOPSIS_FIELDS = [
   'audience_quote',
   'cost_of_inaction',
@@ -28,15 +28,22 @@ const SYNOPSIS_FIELDS = [
   'training_title',
 ] as const
 
-// From saved_outputs.transformation (account-level, not per-card).
-const TRANSFORMATION_FIELDS = [
-  'before_state',
-  'after_state',
-  'before_results',
-  'after_results',
-  'the_bridge',
-  'proof_point',
-] as const
+// synopsis.transformation is the PER-CARD before/after, i.e. the transformation
+// for THIS problem specifically.
+//
+// Deliberately not saved_outputs.transformation, which is the account-level one
+// (before_state/after_state/before_results/after_results/the_bridge/proof_point,
+// all populated on live data). That row describes the coach's business as a
+// whole; this describes the problem the lead is actually here about, which is
+// what the sheet is for.
+const TRANSFORMATION_FIELDS = ['before', 'after'] as const
+
+// Never leaves the card's synopsis: high_ticket_pitch and offer_includes are
+// sales framing the coach writes for themselves, and framework_fit is internal
+// positioning. Field-pinning above is what keeps them out — this list is the
+// record of WHY, so a future "just return the whole synopsis" is recognised as
+// the leak it would be.
+// const EXCLUDED = ['high_ticket_pitch', 'offer_includes', 'framework_fit']
 
 function pick<T extends readonly string[]>(src: unknown, keys: T): Record<string, unknown> {
   const o = (src && typeof src === 'object' && !Array.isArray(src) ? src : {}) as Record<string, unknown>
@@ -69,7 +76,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .maybeSingle()
     if (!card) return res.status(404).json({ error: 'not_active' })
 
-    const transformationRow = await getSavedOutput(session.coachUserId, 'transformation')
+    const synopsis = (card as any).synopsis
 
     return res.status(200).json({
       problem: {
@@ -77,8 +84,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         card_name: (card as any).card_name ?? null,
         problem_text: (card as any).problem_text ?? null,
       },
-      synopsis: pick((card as any).synopsis, SYNOPSIS_FIELDS),
-      transformation: pick(transformationRow?.content, TRANSFORMATION_FIELDS),
+      synopsis: pick(synopsis, SYNOPSIS_FIELDS),
+      transformation: pick(
+        synopsis && typeof synopsis === 'object' ? (synopsis as Record<string, unknown>).transformation : null,
+        TRANSFORMATION_FIELDS
+      ),
     })
   } catch (err) {
     console.error('[ai-coach/synopsis] GET', err)

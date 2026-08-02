@@ -66,7 +66,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // business_name is the brand the lead already saw on the funnel; the
         // coach's own name is the fallback, matching render.ts's chain.
         name: settings.business_name || trimmed(user.name) || 'Your coach',
-        tagline: trimmed(user.profession),
+        // Blank, not null, when the coach has no profession set — the header
+        // renders this directly, so an empty line beats a null the frontend has
+        // to guard. Never a stand-in phrase: an invented tagline would be words
+        // the coach did not write appearing under their own name.
+        tagline: trimmed(user.profession) ?? '',
         bio: trimmed(user.bio),
         photo: firstUrl(settings.headshot_url, user.avatar_url),
       },
