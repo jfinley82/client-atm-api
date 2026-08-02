@@ -271,13 +271,13 @@ async function bookGooglePath(
 
   await sendBookingConfirmationEmail({ email, name, startLabel, joinUrl: meetingUrl, icsContent: ics, funnelId: funnelRow.id as string, leadId, coachUserId: owner, manageUrl })
   await sendCoachBookingNotification({
-    coachEmail: conn.calendar_email || '',
+    funnel: funnelRow,
+    bookingId: reserved.id as string,
+    leadId,
     leadName: name,
     leadEmail: email,
-    startLabel,
+    startIso,
     answers: av.answers,
-    funnelId: funnelRow.id as string,
-    coachUserId: owner,
   })
 
   // Nurture suppression (Phase 5b): a booked lead exits the sequence — cancel any
@@ -403,6 +403,22 @@ async function bookLegacyPath(
     icsContent: ics,
     ...(funnelRow ? { funnelId: funnelRow.id as string, leadId, coachUserId: funnelRow.user_id as string } : {}),
   })
+
+  // Coach notification (gap fix): the shared-Zoom path never notified the coach
+  // at all before this — only the Google-calendar path did. A funnel booking is
+  // a funnel booking regardless of which calendar backs it, so this path needs
+  // the same notice, gated on the same per-coach pref.
+  if (funnelRow) {
+    await sendCoachBookingNotification({
+      funnel: funnelRow,
+      bookingId: reserved.id as string,
+      leadId,
+      leadName: name,
+      leadEmail: email,
+      startIso,
+      answers: av.answers,
+    })
+  }
 
   // Nurture suppression + reminders when this legacy booking came from a funnel.
   if (funnelRow && leadId) {

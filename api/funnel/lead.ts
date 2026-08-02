@@ -5,6 +5,7 @@ import { resolveLiveFunnel } from '../../lib/funnels'
 import { rateLimit, clientIp } from '../../lib/rateLimit'
 import { signWatchToken } from '../../lib/funnelLeadToken'
 import { scheduleNurtureSequence } from '../../lib/funnelNurture'
+import { sendCoachOptinNotification } from '../../lib/email'
 
 // POST /api/funnel/lead — PUBLIC opt-in capture for a live funnel's landing page.
 // Mirrors the public pattern of /api/calendar/book (no auth, strict body
@@ -71,6 +72,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Kick off the nurture sequence (Phase 5b). Best-effort — the engine never
     // throws, and the lead is already captured either way.
     await scheduleNurtureSequence(funnel, lead.id as string, email)
+
+    // Coach notice (Phase 6). Default OFF per-coach (opt-ins can be high-volume);
+    // best-effort — never fail or slow the response the lead is waiting on.
+    await sendCoachOptinNotification({
+      funnel,
+      leadId: lead.id as string,
+      leadName: firstName,
+      leadEmail: email,
+    })
 
     return res.status(200).json({ ok: true, next: 'training', watch_token: watchToken })
   } catch (err) {
