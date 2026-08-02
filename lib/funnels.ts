@@ -17,22 +17,32 @@ import { requireActiveUser } from './auth'
  * (401 Unauthorized / 403 account_suspended / 403 funnel_builder_required);
  * returns the userId on success. The failure shape is unchanged.
  */
-export async function requireFunnelBuilder(req: any, res: any): Promise<string | null> {
-  const userId = await requireActiveUser(req, res)
-  if (!userId) return null
-
+/**
+ * The funnel-builder entitlement for an ARBITRARY user id, with no request in
+ * hand. requireFunnelBuilder below is this check applied to the caller; the
+ * lead-facing AI coach applies the same check to the COACH it resolved from a
+ * lead session, where there is no coach request to authenticate. One function so
+ * the two can never drift into different definitions of "entitled".
+ */
+export async function hasFunnelBuilderAccess(userId: string): Promise<boolean> {
   const { data: gateUser } = await supabase
     .from('users')
     .select('membership_tier, role, add_ons')
     .eq('id', userId)
-    .single()
+    .maybeSingle()
 
-  const hasAccess =
+  return (
     gateUser?.role === 'admin' ||
     gateUser?.membership_tier === 'full' ||
     gateUser?.add_ons?.funnel_builder === true
+  )
+}
 
-  if (!hasAccess) {
+export async function requireFunnelBuilder(req: any, res: any): Promise<string | null> {
+  const userId = await requireActiveUser(req, res)
+  if (!userId) return null
+
+  if (!(await hasFunnelBuilderAccess(userId))) {
     res.status(403).json({ error: 'funnel_builder_required' })
     return null
   }
