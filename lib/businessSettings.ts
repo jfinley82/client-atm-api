@@ -42,11 +42,26 @@ export type BusinessSettings = {
   zoom_link: string | null
   legal: Legal
   notification_prefs: NotificationPrefs
+  // Business Profile tab (migration 073). Free text, never rendered into the
+  // public page — the renderer picks its fields by name and takes none of these.
+  business_address: string | null
+  phone: string | null
+  email: string | null
+  website: string | null
+  industry: string | null
+  years_in_business: string | null
 }
 
 const BUSINESS_NAME_MAX = 200
 const DISCLAIMER_MAX = 2000
 const LEGAL_URL_KEYS = ['privacy_url', 'terms_url', 'contact_url'] as const
+
+// Business Profile free-text fields. Deliberately NOT format-validated: an
+// email/phone/URL the coach typed a little wrong must not take down the whole
+// Save, which is exactly the failure this group of fields was added to end.
+// The only guard is a length sanity cap, mirroring business_name's.
+const PROFILE_TEXT_FIELDS = ['business_address', 'phone', 'email', 'website', 'industry', 'years_in_business'] as const
+const PROFILE_TEXT_MAX = 500
 
 // http(s) URLs only — logo/headshot/legal links and zoom_link all go into
 // href/src attributes on the public page.
@@ -133,6 +148,7 @@ const ALLOWED_KEYS = new Set([
   'zoom_link',
   'legal',
   'notification_prefs',
+  ...PROFILE_TEXT_FIELDS,
 ])
 const URL_FIELDS = ['logo_url', 'headshot_url', 'zoom_link'] as const
 
@@ -158,6 +174,23 @@ export function validateBusinessSettingsInput(
     if (v !== null && typeof v !== 'string') return { ok: false, field: 'business_name' }
     if (typeof v === 'string' && v.length > BUSINESS_NAME_MAX) return { ok: false, field: 'business_name' }
     update.business_name = v === null ? null : (v as string).trim() || null
+  }
+
+  // Lenient by design (see PROFILE_TEXT_FIELDS): trim, empty -> null, and
+  // accept a number as well as a string so a form that sends years_in_business
+  // as 10 rather than "10" still saves instead of failing the whole request.
+  for (const field of PROFILE_TEXT_FIELDS) {
+    if (field in o) {
+      const v = o[field]
+      if (v === null || v === undefined) {
+        update[field] = null
+        continue
+      }
+      if (typeof v !== 'string' && typeof v !== 'number') return { ok: false, field }
+      const s = String(v).trim()
+      if (s.length > PROFILE_TEXT_MAX) return { ok: false, field }
+      update[field] = s || null
+    }
   }
 
   for (const field of URL_FIELDS) {
@@ -222,7 +255,13 @@ function asObj(v: unknown): Record<string, unknown> {
 // defaults. Used by both the GET endpoint and the public renderer.
 export function normalizeBusinessSettings(row: Record<string, any> | null | undefined): BusinessSettings {
   const r = row || {}
+  // Same shape as business_name below: trimmed string, or null when unset/blank.
+  const profile = {} as Record<(typeof PROFILE_TEXT_FIELDS)[number], string | null>
+  for (const field of PROFILE_TEXT_FIELDS) {
+    profile[field] = typeof r[field] === 'string' && r[field].trim() ? r[field].trim() : null
+  }
   return {
+    ...profile,
     business_name: typeof r.business_name === 'string' && r.business_name.trim() ? r.business_name.trim() : null,
     logo_url: typeof r.logo_url === 'string' && r.logo_url ? r.logo_url : null,
     headshot_url: typeof r.headshot_url === 'string' && r.headshot_url ? r.headshot_url : null,
