@@ -186,14 +186,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // ---- needs_outcome ----------------------------------------------------
-    // Past call, attendance never marked. Excludes leads whose deal is already
-    // decided: recording a win via POST /api/leads/{id}/outcome sets the LEAD's
-    // status but deliberately leaves bookings.attended alone, so without this
-    // the call would sit in the close-out loop forever after being closed.
+    // A past call still owed a DEAL outcome. What clears it is the deal being
+    // decided, never the mere presence of an attendance mark:
+    //
+    //   won / lost        -> cleared. The lead's status is the record of the
+    //                        decision. (Recording one leaves bookings.attended
+    //                        alone by design, so keying off attendance here
+    //                        would leave closed calls in the loop forever.)
+    //   no_show           -> cleared. The call never happened, so there is no
+    //                        deal outcome to record; the lead goes back to
+    //                        nurture instead.
+    //   showed, undecided -> STILL LISTED. Marking attendance is not recording
+    //                        an outcome, and a call the lead showed up to with
+    //                        no win or loss against it is the single most
+    //                        important row in this list.
+    //   unmarked, undecided -> still listed.
+    //
+    // Deliberately NOT `attended is not null`: that conflates attendance with
+    // outcome and would hide exactly the calls most in need of closing out.
     const needs_outcome = bookings
       .filter((b) => {
-        if (b.attended || !b.start_time) return false
+        if (!b.start_time) return false
         if (new Date(b.start_time).getTime() >= Date.now()) return false
+        if (b.attended === 'no_show') return false
         const lead = leadByKey.get(bookingKey(b.funnel_id, b.email))
         return !TERMINAL.has(String(lead?.status ?? ''))
       })
