@@ -62,8 +62,11 @@ type Funnel = Record<string, any>
 function publicBase(subdomain: string): string {
   return `https://${subdomain}.${FUNNEL_DOMAIN}`
 }
-function trainingUrl(subdomain: string, wt: string): string {
-  return `${publicBase(subdomain)}/?page=training&wt=${encodeURIComponent(wt)}`
+// wt is the lead-scoped watch token. The invite broadcast has no lead, so it
+// links to the plain training page — no attribution, rather than a fake lead.
+function trainingUrl(subdomain: string, wt?: string): string {
+  const base = `${publicBase(subdomain)}/?page=training`
+  return wt ? `${base}&wt=${encodeURIComponent(wt)}` : base
 }
 function bookUrl(subdomain: string): string {
   return `${publicBase(subdomain)}/?page=book`
@@ -443,4 +446,100 @@ export async function cancelBookingReminders(bookingId: string): Promise<void> {
   } catch (err) {
     console.error('[nurture] cancelBookingReminders', err)
   }
+}
+
+// ── Warm-invite broadcast ────────────────────────────────────────────────────
+// The coach mails their OWN list once per funnel, from coach_contacts. Same
+// send stack as every other sequence (funnel_email_sends + Resend + the webhook)
+// so the Emails tab's kind aggregation lights up with no special-casing.
+//
+// Two things separate it from the lead sequences:
+//   - There is no lead. Recipients are contacts, so the send rows carry
+//     contact_id and leave lead_id null. Nothing here writes funnel_leads: an
+//     imported address never visited the funnel, and counting it as a lead
+//     would inflate visits and opt-in rate.
+//   - There is therefore no watch token. [TRAINING_LINK] resolves to the plain
+//     training URL — attribution needs a lead, and inventing one to get a token
+//     is exactly what corrupts the analytics.
+const INVITE_OFFSETS = [0, 2 * DAY, 4 * DAY]
+const INVITE_SUBJECTS = [
+  'I made something for you',
+  'Did you get a chance to look?',
+  'Last note about this',
+]
+
+/** Unsubscribe for a contact. `c:` marks the id as a contact, not a lead. */
+function contactUnsubscribeUrl(funnelId: string, contactId: string): string {
+  return `${API_URL}/api/funnel/unsubscribe?token=${encodeURIComponent(
+    signUnsubscribeToken(funnelId, `c:${contactId}`)
+  )}`
+}
+
+export type BroadcastContact = { id: string; email: string; first_name: string | null }
+
+/**
+ * Enrols every sendable contact in the funnel's warm-invite sequence
+ * (now, +2d, +4d). Returns how many contacts were enrolled.
+ *
+ * Idempotency is NOT enforced here — the caller claims funnel_invite_broadcasts
+ * first, whose unique index on funnel_id is what makes a second click a
+ * conflict rather than a second mailing.
+ */
+export async function scheduleInviteBroadcast(
+  funnel: Funnel,
+  contacts: BroadcastContact[],
+  nowMs: number = Date.now()
+): Promise<number> {
+  const subdomain = typeof funnel.subdomain === 'string' ? funnel.subdomain : ''
+  if (!subdomain || contacts.length === 0) return 0
+
+  const emails = coerceEmails(funnel.warm_invite_emails)
+  if (!emails.length) return 0
+
+  const [brand, guideUrl] = await Promise.all([
+    loadCoachBrand(funnel.user_id as string),
+    loadGuideUrl(funnel),
+  ])
+  const book = bookUrl(subdomain)
+  const training = trainingUrl(subdomain)
+  const n = Math.min(emails.length, INVITE_OFFSETS.length)
+
+  // Sequential per contact rather than one big Promise.all: a large list would
+  // otherwise open thousands of concurrent Resend calls and trip its rate limit,
+  // failing sends that would each have succeeded on their own.
+  for (const contact of contacts) {
+    const unsub = contactUnsubscribeUrl(funnel.id as string, contact.id)
+    for (let i = 0; i < n; i++) {
+      const em = emails[i]
+      const sendTimeMs = nowMs + INVITE_OFFSETS[i]
+      const subject =
+        (em.subject && em.subject.trim()) || INVITE_SUBJECTS[i] || INVITE_SUBJECTS[INVITE_SUBJECTS.length - 1]
+
+      const { bodyHtml, cta } = composeEmailBody(em.body, {
+        book,
+        training,
+        guide: guideUrl,
+      })
+      const html = brandedEmailHtml(brand, {
+        heading: subject,
+        bodyHtml,
+        ...(cta ? { cta } : {}),
+        unsubscribeUrl: unsub,
+      })
+
+      await scheduleFunnelEmail({
+        brand,
+        funnelId: funnel.id as string,
+        leadId: null,
+        contactId: contact.id,
+        kind: `invite_${i + 1}`,
+        to: contact.email,
+        subject,
+        html,
+        ...(INVITE_OFFSETS[i] > 0 ? { scheduledAt: new Date(sendTimeMs).toISOString() } : {}),
+      })
+    }
+  }
+
+  return contacts.length
 }
