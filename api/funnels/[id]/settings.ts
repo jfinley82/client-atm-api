@@ -16,8 +16,8 @@ import { normalizeDisqualifyRules, DISQUALIFY_ACTIONS } from '../../../lib/appli
 // makes. Owner-scoped; every field is optional, and only keys actually present in
 // the body are written, so a tab that edits one section never clears another.
 //
-// Grouped as the tab presents them: subdomain, video, calendar, collect_phone,
-// cookie notice, application gate, CTA mode + offer.
+// Grouped as the tab presents them: subdomain, video, calendar, collect_name +
+// collect_phone, cookie notice, application gate, CTA mode + offer.
 //
 // Brand and legal are business-global now (funnel_business_settings, via
 // PATCH /api/funnel-business-settings) — NOT written here. brand_primary_color,
@@ -126,6 +126,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const r = optionalUrl(body.zoom_link)
     if (!r.ok) return bad('zoom_link', 'Must be an http(s) URL, or null to clear.')
     updates.zoom_link = r.value
+  }
+  // collect_name sits alongside collect_phone on both the opt-in and booking
+  // forms, but only collect_phone had a branch here — so a form editor sending
+  // both got 200 updated:["collect_phone"] with collect_name silently dropped,
+  // and sending it alone got 400 no_fields. It was only writable through
+  // PATCH /api/funnels/[id]. Same contract as collect_phone.
+  if ('collect_name' in body) {
+    if (typeof body.collect_name !== 'boolean') return bad('collect_name', 'Must be true or false.')
+    updates.collect_name = body.collect_name
   }
   if ('collect_phone' in body) {
     if (typeof body.collect_phone !== 'boolean') return bad('collect_phone', 'Must be true or false.')
