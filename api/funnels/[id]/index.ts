@@ -34,6 +34,7 @@ const EDITABLE_KEYS = new Set([
   'watch_threshold_pct',
   'nurture_emails',
   'book_a_call_emails',
+  'warm_invite_emails',
 ])
 
 // The funnel's own copy of its email sequences (jsonb, seeded once at funnel
@@ -43,7 +44,7 @@ const EDITABLE_KEYS = new Set([
 // edit takes effect on the next scheduled send with no other change needed.
 // booking_confirmation/reminder_24h/reminder_1h/post_call_* are system
 // templates, not stored per funnel — out of scope, no column for them.
-const EMAIL_SEQUENCE_FIELDS = ['nurture_emails', 'book_a_call_emails']
+const EMAIL_SEQUENCE_FIELDS = ['nurture_emails', 'book_a_call_emails', 'warm_invite_emails']
 
 // jsonb page/config fields — accept a plain object, or null to clear. tracking
 // is NOT here: its IDs are injected into the public page's <script>, so it is

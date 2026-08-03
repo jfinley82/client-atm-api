@@ -77,16 +77,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // Seed this funnel's OWN copy of the nurture (pre-watch) and book-a-call
-    // (post-watch) sequences from the generation, so builder edits never touch
-    // the master generation (Phase 5b). Owner-scoped read.
+    // Seed this funnel's OWN copy of the nurture (pre-watch), book-a-call
+    // (post-watch) and warm-invite sequences from the generation, so builder
+    // edits never touch the master generation (Phase 5b). Owner-scoped read.
     const { data: gen } = await supabase
       .from('mtm_generations')
-      .select('emails, book_a_call_emails')
+      .select('emails, book_a_call_emails, warm_invite_emails')
       .eq('id', generation_id)
       .eq('user_id', userId)
       .maybeSingle()
     const nurture_emails = coerceEmails(gen?.emails)
+    // Seeded from the coach's build, then edited through PATCH like the others.
+    const warm_invite_emails = coerceEmails(gen?.warm_invite_emails)
     const book_a_call_emails = coerceEmails(gen?.book_a_call_emails)
 
     // Freeze the blueprint's problem/solution and generate the landing copy.
@@ -122,6 +124,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           problem_solution_snapshot: snapshot,
           landing_page,
           nurture_emails,
+          warm_invite_emails,
           book_a_call_emails,
         })
         .select('*')

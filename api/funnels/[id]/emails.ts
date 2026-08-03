@@ -31,6 +31,9 @@ export const config = { maxDuration: 30 }
 // per-send DB value. If that schedule ever changes, this table must change with
 // it.
 const KNOWN_KINDS: { kind: string; label: string; group: string; sequence_number: number; interval_label: string }[] = [
+  { kind: 'invite_1', label: 'Invite 1', group: 'invite', sequence_number: 1, interval_label: 'Immediately' },
+  { kind: 'invite_2', label: 'Invite 2', group: 'invite', sequence_number: 2, interval_label: '2 days later' },
+  { kind: 'invite_3', label: 'Invite 3', group: 'invite', sequence_number: 3, interval_label: '4 days later' },
   { kind: 'nurture_1', label: 'Nurture 1', group: 'nurture', sequence_number: 1, interval_label: 'Immediately' },
   { kind: 'nurture_2', label: 'Nurture 2', group: 'nurture', sequence_number: 2, interval_label: '1 day later' },
   { kind: 'nurture_3', label: 'Nurture 3', group: 'nurture', sequence_number: 3, interval_label: '3 days later' },

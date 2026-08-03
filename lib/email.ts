@@ -123,6 +123,9 @@ function funnelTags(funnelId?: string, leadId?: string | null, kind?: string): {
 async function recordFunnelEmailSend(row: {
   funnelId: string
   leadId: string | null
+  // Set only on invite_* sends, which go to a coach_contacts row instead of a
+  // lead. Exactly the rows where leadId is null.
+  contactId?: string | null
   kind: string
   messageId: string | null
   status: 'queued' | 'sent' | 'failed'
@@ -133,6 +136,7 @@ async function recordFunnelEmailSend(row: {
     const { error } = await supabase.from('funnel_email_sends').insert({
       funnel_id: row.funnelId,
       lead_id: row.leadId,
+      contact_id: row.contactId ?? null,
       kind: row.kind,
       resend_message_id: row.messageId,
       status: row.status,
@@ -460,6 +464,7 @@ export async function scheduleFunnelEmail(opts: {
   brand: CoachBrand
   funnelId: string
   leadId: string | null
+  contactId?: string | null
   kind: string
   to: string
   subject: string
@@ -481,6 +486,7 @@ export async function scheduleFunnelEmail(opts: {
     await recordFunnelEmailSend({
       funnelId: opts.funnelId,
       leadId: opts.leadId,
+      contactId: opts.contactId ?? null,
       kind: opts.kind,
       messageId: data?.id ?? null,
       status,

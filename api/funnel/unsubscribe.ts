@@ -33,14 +33,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    // Scope the update to (lead, funnel) so a token can only unsubscribe its own
-    // lead. Missing lead → still show success (never reveal existence).
-    await supabase
-      .from('funnel_leads')
-      .update({ email_unsubscribed: true })
-      .eq('id', decoded.leadId)
-      .eq('funnel_id', decoded.funnelId)
-    await cancelLeadQueue(decoded.leadId)
+    // Invite-broadcast recipients are coach_contacts, not leads, and their token
+    // carries a `c:` prefix. Same link, same page — only the row differs.
+    if (decoded.leadId.startsWith('c:')) {
+      const contactId = decoded.leadId.slice(2)
+      // Account-level: one opt-out covers every funnel this coach sends, which
+      // is what a recipient means by "stop emailing me". Re-importing the same
+      // CSV does not undo it — importContacts never writes `unsubscribed`.
+      await supabase.from('coach_contacts').update({ unsubscribed: true }).eq('id', contactId)
+    } else {
+      // Scope the update to (lead, funnel) so a token can only unsubscribe its own
+      // lead. Missing lead → still show success (never reveal existence).
+      await supabase
+        .from('funnel_leads')
+        .update({ email_unsubscribed: true })
+        .eq('id', decoded.leadId)
+        .eq('funnel_id', decoded.funnelId)
+      await cancelLeadQueue(decoded.leadId)
+    }
   } catch (err) {
     console.error('[funnel/unsubscribe]', err)
     // Fall through to the success page — the important part (the flag) is
