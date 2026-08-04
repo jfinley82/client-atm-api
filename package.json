@@ -18,7 +18,6 @@
     "@supabase/supabase-js": "^2.49.0",
     "@types/node": "^22.0.0",
     "bcryptjs": "^3.0.3",
-    "email-reply-parser": "^2.3.9",
     "jose": "^4.15.9",
     "opentype.js": "2.0.0",
     "puppeteer-core": "24.3.0",
