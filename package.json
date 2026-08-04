@@ -8,7 +8,9 @@
   "scripts": {
     "migrate": "node scripts/migrate.mjs",
     "migrate:backfill": "node scripts/migrate.mjs --backfill",
-    "migrate:dry-run": "node scripts/migrate.mjs --dry-run"
+    "migrate:dry-run": "node scripts/migrate.mjs --dry-run",
+    "test": "node scripts/run-tests.mjs",
+    "gate": "tsc --noEmit && node scripts/run-tests.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
@@ -16,6 +18,7 @@
     "@supabase/supabase-js": "^2.49.0",
     "@types/node": "^22.0.0",
     "bcryptjs": "^3.0.3",
+    "email-reply-parser": "^2.3.9",
     "jose": "^4.15.9",
     "opentype.js": "2.0.0",
     "puppeteer-core": "24.3.0",

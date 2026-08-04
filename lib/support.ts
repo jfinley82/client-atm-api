@@ -5,6 +5,8 @@
 // can never disagree about whether a given ticket is late — a red card above a
 // green tile is worse than either number alone.
 
+import { supabase } from './supabase'
+
 export const TICKET_CATEGORIES = ['account_billing', 'technical', 'funnel_builder', 'crm_leads', 'other'] as const
 export const TICKET_STAGES = ['new', 'in_progress', 'waiting_on_member', 'escalated', 'resolved', 'closed'] as const
 export const TICKET_PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const
@@ -156,4 +158,80 @@ export function stageTimestampUpdates(
     updates.resolved_at = null
   }
   return updates
+}
+
+/**
+ * Where a MEMBER's reply (typed in-app or emailed in) moves the stage, or null
+ * for no change.
+ *
+ * waiting_on_member means the ball was explicitly in the member's court — a
+ * reply hands it back. resolved/closed mean the ticket was considered done —
+ * a reply reopens it, same as any other move out of resolved
+ * (stageTimestampUpdates already clears resolved_at on that transition, so a
+ * reopened ticket can't keep a stale resolution time). new/in_progress/
+ * escalated are all "support already has this" states — the reply threads
+ * into the conversation, but nobody's waiting on a stage move to notice it.
+ */
+export function nextStageForMemberReply(stage: TicketStage): TicketStage | null {
+  if (stage === 'waiting_on_member' || stage === 'resolved' || stage === 'closed') return 'in_progress'
+  return null
+}
+
+export type TicketMessageAuthorRole = 'member' | 'admin'
+
+export type TicketMessageRow = {
+  id: string
+  ticket_id: string
+  author_user_id: string
+  author_role: string
+  body: string
+  created_at: string
+}
+
+/**
+ * The one write-path into support_ticket_messages, used by the member's
+ * initial submission, an admin's typed reply, and an inbound emailed reply
+ * alike — so a future Phase 2 bot reply is one more caller of the same
+ * function, not a fourth place that has to remember the same insert shape.
+ *
+ * resendEmailId is set ONLY for a message created from an inbound email
+ * (lib/support.ts's partial unique index on it is what makes a webhook
+ * redelivery idempotent instead of a duplicated reply in the thread).
+ * A 23505 on that column means this exact inbound email was already
+ * processed — not a failure — so the caller gets back the existing row and
+ * an alreadyProcessed flag instead of a null/error.
+ */
+export async function appendTicketMessage(opts: {
+  ticketId: string
+  authorUserId: string
+  authorRole: TicketMessageAuthorRole
+  body: string
+  resendEmailId?: string | null
+}): Promise<{ message: TicketMessageRow; alreadyProcessed: boolean } | null> {
+  const insert: Record<string, unknown> = {
+    ticket_id: opts.ticketId,
+    author_user_id: opts.authorUserId,
+    author_role: opts.authorRole,
+    body: opts.body,
+  }
+  if (opts.resendEmailId) insert.resend_email_id = opts.resendEmailId
+
+  const { data, error } = await supabase
+    .from('support_ticket_messages')
+    .insert(insert)
+    .select('id, ticket_id, author_user_id, author_role, body, created_at')
+    .single()
+  if (!error) return { message: data as TicketMessageRow, alreadyProcessed: false }
+
+  if (opts.resendEmailId && (error as { code?: string }).code === '23505') {
+    const { data: existing } = await supabase
+      .from('support_ticket_messages')
+      .select('id, ticket_id, author_user_id, author_role, body, created_at')
+      .eq('resend_email_id', opts.resendEmailId)
+      .maybeSingle()
+    if (existing) return { message: existing as TicketMessageRow, alreadyProcessed: true }
+  }
+
+  console.error('[support] appendTicketMessage', error)
+  return null
 }

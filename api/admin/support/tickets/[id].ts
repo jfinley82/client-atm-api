@@ -164,6 +164,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         subject: (prior as any).subject,
         // The member-facing label, never the raw enum.
         stageLabel: STAGE_LABELS[nextStage!],
+        ticketId: (prior as any).id,
       })
     }
 
