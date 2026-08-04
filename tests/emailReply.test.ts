@@ -94,6 +94,23 @@ eq(
   'I sent from my other account by mistake, can you check?'
 )
 
+console.log('\n-- REGRESSION: the real reply lost to the ERR_MODULE_NOT_FOUND incident --')
+// Verbatim plain-text body of Resend received-email
+// 743e819a-9175-412b-b4ce-51d4fb512229. Kept as a fixture because it is the
+// message this whole failure cost us, and because Gmail wraps the sender
+// address onto its own line mid-header — the case a naive /On .* wrote:/
+// (no newline in the gap) silently fails to match, leaving the entire quoted
+// confirmation email stored as the member's reply.
+eq(
+  'real lost reply, Gmail line-wrapped quote header',
+  stripQuotedReply(
+    'thank you let me know when its done\n\n\nOn Mon, Aug 3, 2026 at 10:36 PM Micro-Training Method <\nnoreply@mail.microtrainingmethod.com> wrote:\n\n' +
+      '> Your message made it to our support team. Someone will look at it soon.\n> MTM\n>\n> MICRO-TRAINING METHOD\n> We\'ve got your message, Jamaul\n>\n> Hi Jamaul,\n>\n' +
+      '> Your message about "Architect live-verification test ticket" made it to\n> our support team. Someone will look at it soon.\n>\n> Talk soon,\n>\n> MTM Support\n>\n'
+  ),
+  'thank you let me know when its done'
+)
+
 console.log('\n-- CRLF line endings (what most mail clients actually send) --')
 eq(
   'CRLF normalized and stripped the same way',
