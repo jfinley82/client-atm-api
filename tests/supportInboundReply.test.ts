@@ -138,7 +138,7 @@ function receivedEvent(emailId: string, toTicketId: string, from: string) {
 }
 
 ;(async () => {
-  const webhook: Handler = (await import('/home/user/client-atm-api/api/webhooks/resend')).default
+  const webhook: Handler = (await import('../api/webhooks/resend')).default
 
   const T_WAITING = 'a1111111-1111-4111-8111-111111111111'
   const T_RESOLVED = 'a2222222-2222-4222-8222-222222222222'

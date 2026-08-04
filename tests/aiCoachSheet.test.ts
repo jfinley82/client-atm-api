@@ -5,7 +5,7 @@ process.env.ANTHROPIC_API_KEY = 'sk-ant-stub'
 
 // Dynamic imports: both endpoints reach lib/aiCoach.ts, which constructs
 // `new Anthropic({apiKey: process.env.ANTHROPIC_API_KEY!})` at module scope.
-import { signCoachToken, signWatchToken, signOfferToken } from '/home/user/client-atm-api/lib/funnelLeadToken'
+import { signCoachToken, signWatchToken, signOfferToken } from '../lib/funnelLeadToken'
 
 type Handler = (req: any, res: any) => Promise<void>
 
@@ -128,8 +128,8 @@ function reset() {
 const aiCoachOf = () => savedOutputs.find((s) => s.tool_type === 'ai_coach')
 
 ;(async () => {
-  const synopsis: Handler = (await import('/home/user/client-atm-api/api/ai-coach/synopsis')).default
-  const profile: Handler = (await import('/home/user/client-atm-api/api/ai-coach/profile')).default
+  const synopsis: Handler = (await import('../api/ai-coach/synopsis')).default
+  const profile: Handler = (await import('../api/ai-coach/profile')).default
   const token = signCoachToken(FUNNEL, LEAD)
 
   console.log('\n-- synopsis: pre-built content only --')

@@ -10,7 +10,7 @@ process.env.RESEND_WEBHOOK_SECRET = 'whsec_' + Buffer.from('unit-test-secret').t
 // assignments above.
 import crypto from 'crypto'
 import { Readable } from 'stream'
-import { createSessionToken } from '/home/user/client-atm-api/lib/auth'
+import { createSessionToken } from '../lib/auth'
 
 type Handler = (req: any, res: any) => Promise<void>
 
@@ -113,8 +113,8 @@ async function getEmails(handler: Handler): Promise<any> {
 const STAMP = '2026-08-01T00:00:00Z'
 
 ;(async () => {
-  const webhook: Handler = (await import('/home/user/client-atm-api/api/webhooks/resend')).default
-  const emails: Handler = (await import('/home/user/client-atm-api/api/funnels/[id]/emails')).default
+  const webhook: Handler = (await import('../api/webhooks/resend')).default
+  const emails: Handler = (await import('../api/funnels/[id]/emails')).default
 
   console.log('\n-- webhook: first open stamps opened_at and bumps open_count --')
   sends = [mkRow('nurture_1', 'm-1', { delivered_at: STAMP })]

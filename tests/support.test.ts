@@ -6,7 +6,7 @@ process.env.RESEND_API_KEY = 'stub-resend-key'
 // Dynamic imports: every handler here reaches lib/email.ts, which constructs
 // `new Resend(process.env.RESEND_API_KEY!)` at module scope. A static import
 // would let esbuild run that before the env assignment above.
-import { createSessionToken } from '/home/user/client-atm-api/lib/auth'
+import { createSessionToken } from '../lib/auth'
 
 type Handler = (req: any, res: any) => Promise<void>
 
@@ -172,12 +172,12 @@ function mkTicket(id: string, o: any = {}) {
 }
 
 ;(async () => {
-  const support = await import('/home/user/client-atm-api/lib/support')
-  const memberTickets: Handler = (await import('/home/user/client-atm-api/api/support/tickets')).default
-  const adminList: Handler = (await import('/home/user/client-atm-api/api/admin/support/tickets')).default
-  const adminDetail: Handler = (await import('/home/user/client-atm-api/api/admin/support/tickets/[id]')).default
-  const adminReply: Handler = (await import('/home/user/client-atm-api/api/admin/support/tickets/[id]/messages')).default
-  const adminStats: Handler = (await import('/home/user/client-atm-api/api/admin/support/stats')).default
+  const support = await import('../lib/support')
+  const memberTickets: Handler = (await import('../api/support/tickets')).default
+  const adminList: Handler = (await import('../api/admin/support/tickets')).default
+  const adminDetail: Handler = (await import('../api/admin/support/tickets/[id]')).default
+  const adminReply: Handler = (await import('../api/admin/support/tickets/[id]/messages')).default
+  const adminStats: Handler = (await import('../api/admin/support/stats')).default
 
   console.log('\n-- SLA math (lib/support.ts) --')
   ok('not late: responded within 24h', !support.firstResponseLate({ created_at: iso(NOW - 10 * HOUR), first_response_at: iso(NOW - 5 * HOUR), resolved_at: null }, NOW))

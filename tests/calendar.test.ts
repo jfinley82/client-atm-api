@@ -2,7 +2,7 @@ process.env.SUPABASE_URL = 'https://stub.supabase.co'
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'stub-key'
 process.env.JWT_SECRET = 'stub-secret'
 
-import { createSessionToken } from '/home/user/client-atm-api/lib/auth'
+import { createSessionToken } from '../lib/auth'
 
 type Handler = (req: any, res: any) => Promise<void>
 
@@ -88,7 +88,7 @@ const mkBooking = (id: string, email: string, o: any = {}) => ({
 })
 
 ;(async () => {
-  const cal: Handler = (await import('/home/user/client-atm-api/api/calendar/index')).default
+  const cal: Handler = (await import('../api/calendar/index')).default
 
   console.log('\n-- needs_outcome: past call, nothing recorded --')
   reset()

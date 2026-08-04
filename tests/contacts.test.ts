@@ -5,7 +5,7 @@ process.env.RESEND_API_KEY = 'stub-resend-key'
 
 // Dynamic imports: outcome.ts -> lib/funnelNurture -> lib/email, which builds
 // `new Resend(process.env.RESEND_API_KEY!)` at module scope.
-import { createSessionToken } from '/home/user/client-atm-api/lib/auth'
+import { createSessionToken } from '../lib/auth'
 
 type Handler = (req: any, res: any) => Promise<void>
 
@@ -145,9 +145,9 @@ function mkBooking(id: string, email: string, o: any = {}) {
 }
 
 ;(async () => {
-  const list: Handler = (await import('/home/user/client-atm-api/api/contacts/index')).default
-  const detail: Handler = (await import('/home/user/client-atm-api/api/contacts/[leadId]')).default
-  const outcome: Handler = (await import('/home/user/client-atm-api/api/leads/[leadId]/outcome')).default
+  const list: Handler = (await import('../api/contacts/index')).default
+  const detail: Handler = (await import('../api/contacts/[leadId]')).default
+  const outcome: Handler = (await import('../api/leads/[leadId]/outcome')).default
 
   console.log('\n-- stage derivation, first match wins --')
   reset()
