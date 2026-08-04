@@ -1,7 +1,10 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import crypto from 'crypto'
+import EmailReplyParser from 'email-reply-parser'
 import { supabase } from '../../lib/supabase'
 import { cancelLeadQueue } from '../../lib/funnelNurture'
+import { resend } from '../../lib/email'
+import { appendTicketMessage, nextStageForMemberReply, stageTimestampUpdates, TicketStage } from '../../lib/support'
 
 // POST /api/webhooks/resend — Resend (Svix) delivery webhooks for funnel emails.
 //
@@ -22,6 +25,12 @@ import { cancelLeadQueue } from '../../lib/funnelNurture'
 //   email.complained -> complained_at ONLY (delivered_at/status untouched — a
 //     complaint means it WAS delivered, unlike a bounce); same unsubscribe +
 //     cancel as a bounce, since either way this lead should get no more mail.
+//   email.received -> Support Desk inbound replies (Phase 1b). The ticket's
+//     notification emails set replyTo to support+<ticket id>@..., so a
+//     member's reply carries its own ticket id in the `to` address. This
+//     event is metadata only (sender/recipient/subject/ids, no body) — one
+//     follow-up call to Resend's receiving-emails API gets the actual text.
+//     See handleInboundTicketReply below.
 // Attribution is always via funnel_email_sends.resend_message_id — the send row
 // we wrote at send time — never via client-supplied data.
 export const config = {
@@ -101,6 +110,134 @@ async function recordEngagement(messageId: string, event: 'opened' | 'clicked'):
   }
   const row = (Array.isArray(data) ? data[0] : null) as ResendSend | null
   return row ?? null
+}
+
+const TICKET_ID_RE = /^support\+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})@/i
+
+// The plus-tag rides in `to`, but `received_for` is Resend's own record of
+// which of your domain's addresses actually captured the mail — checked
+// first since it's the more precise of the two when there's more than one
+// recipient (e.g. the member CC'd someone).
+function ticketIdFromRecipients(data: { to?: unknown; received_for?: unknown }): string | null {
+  const candidates = [
+    ...(Array.isArray(data.received_for) ? data.received_for : []),
+    ...(Array.isArray(data.to) ? data.to : []),
+  ]
+  for (const addr of candidates) {
+    if (typeof addr !== 'string') continue
+    const m = TICKET_ID_RE.exec(addr.trim())
+    if (m) return m[1].toLowerCase()
+  }
+  return null
+}
+
+// "Jamie Coach <jamie@example.com>" -> "jamie@example.com". Resend's `from`
+// on the webhook event is a raw header value, not pre-parsed.
+function bareEmail(raw: string): string {
+  const m = /<([^>]+)>/.exec(raw)
+  return (m ? m[1] : raw).trim().toLowerCase()
+}
+
+// Best-effort plaintext fallback for the rare inbound message with no
+// text/plain part (an HTML-only mail client). Dropping the reply entirely
+// because of that would be a worse outcome than a slightly rough rendering.
+function htmlToText(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .trim()
+}
+
+// email.received -> thread the member's reply into support_ticket_messages,
+// and hand the ball back if the ticket was waiting on them.
+//
+// Ordered to fail cheap: parse + look up the ticket, verify the sender BEFORE
+// spending the one paid follow-up call (receiving.get) on a request that's
+// going to be dropped anyway.
+async function handleInboundTicketReply(data: any): Promise<void> {
+  const ticketId = ticketIdFromRecipients(data)
+  if (!ticketId) {
+    console.warn('[webhooks/resend] inbound email: no ticket id in recipients', data?.to, data?.received_for)
+    return
+  }
+
+  const { data: ticket } = await supabase
+    .from('support_tickets')
+    .select('id, user_id, stage, first_response_at, resolved_at')
+    .eq('id', ticketId)
+    .maybeSingle()
+  if (!ticket) {
+    console.warn('[webhooks/resend] inbound email: unknown ticket', ticketId)
+    return
+  }
+
+  const { data: owner } = await supabase.from('users').select('email').eq('id', (ticket as any).user_id).maybeSingle()
+  const ownerEmail = typeof (owner as any)?.email === 'string' ? (owner as any).email.toLowerCase() : ''
+  const fromEmail = bareEmail(String(data?.from || ''))
+
+  // Anyone who learned or guessed a support+<id>@ address could otherwise
+  // inject a message into someone else's ticket. Flagged and dropped, not
+  // appended — the mismatch is logged for follow-up, never silently ignored.
+  if (!ownerEmail || !fromEmail || fromEmail !== ownerEmail) {
+    console.warn('[webhooks/resend] inbound email: sender mismatch, dropped', { ticketId, from: fromEmail, expected: ownerEmail })
+    return
+  }
+
+  const emailId = typeof data?.email_id === 'string' ? data.email_id : ''
+  if (!emailId) {
+    console.warn('[webhooks/resend] inbound email: missing email_id', ticketId)
+    return
+  }
+
+  const { data: received, error: fetchErr } = await resend.emails.receiving.get(emailId)
+  if (fetchErr || !received) {
+    console.error('[webhooks/resend] inbound email: fetch failed', ticketId, fetchErr)
+    return
+  }
+
+  const raw = (received.text || (received.html ? htmlToText(received.html) : '') || '').trim()
+  if (!raw) {
+    console.warn('[webhooks/resend] inbound email: empty body, dropped', ticketId)
+    return
+  }
+  // Quoted-reply formats vary too much across Gmail/Outlook/Apple Mail for a
+  // hand-rolled regex to be worth it — a solved problem, reused not reinvented.
+  const stripped = new EmailReplyParser().parseReply(raw).trim()
+  const bodyText = stripped || raw
+
+  const appended = await appendTicketMessage({
+    ticketId: (ticket as any).id,
+    authorUserId: (ticket as any).user_id,
+    authorRole: 'member',
+    body: bodyText,
+    resendEmailId: emailId,
+  })
+  if (!appended) return
+
+  // A webhook redelivery of an already-processed email must not re-flip the
+  // stage using this now-stale ticket snapshot — an admin may have moved it
+  // again since the first delivery.
+  if (appended.alreadyProcessed) {
+    console.log('[webhooks/resend] inbound email: duplicate delivery, already processed', emailId)
+    return
+  }
+
+  const nextStage = nextStageForMemberReply((ticket as any).stage as TicketStage)
+  if (nextStage) {
+    const nowIso = new Date().toISOString()
+    const updates = { ...stageTimestampUpdates(nextStage, ticket as any, nowIso), stage: nextStage, updated_at: nowIso }
+    const { error: updErr } = await supabase.from('support_tickets').update(updates).eq('id', (ticket as any).id)
+    if (updErr) console.error('[webhooks/resend] inbound email: stage flip failed', ticketId, updErr)
+  }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -213,6 +350,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           await cancelLeadQueue(send.lead_id)
         }
       }
+      return res.status(200).json({ received: true })
+    }
+
+    if (type === 'email.received') {
+      await handleInboundTicketReply(body.data || {})
       return res.status(200).json({ received: true })
     }
 

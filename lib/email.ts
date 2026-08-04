@@ -5,7 +5,10 @@ import { loadBusinessSettings, isValidHttpUrl } from './businessSettings'
 import { sanitizeBrandColor, DEFAULT_BRAND_PRIMARY } from './funnels'
 import { loadUserAvailability } from './availabilitySettings'
 
-const resend = new Resend(process.env.RESEND_API_KEY!)
+// Exported so api/webhooks/resend.ts can make the one follow-up call inbound
+// mail needs (fetching a received email's actual body) without constructing
+// a second client keyed by the same API key.
+export const resend = new Resend(process.env.RESEND_API_KEY!)
 // The API's own public base URL — NOT the frontend (that's APP_URL). The
 // magic-link email must point at the BACKEND token processor
 // (GET /api/auth/callback), which validates the magic token and then
@@ -919,13 +922,27 @@ export async function sendCoachBookingChange(opts: {
 // A member whose ticket was filed but whose confirmation bounced is recoverable;
 // a 500 that loses the ticket they just typed is not.
 
+// Plus-addressing: the ticket id rides in the reply-to address itself, so a
+// member hitting reply needs no subject-line or header matching to know which
+// ticket they're adding to — api/webhooks/resend.ts's email.received handler
+// parses it straight back out of the `to` address of the reply.
+function ticketReplyToAddress(ticketId: string): string {
+  return `support+${ticketId}@mail.microtrainingmethod.com`
+}
+
 // One-time confirmation that the ticket landed. Variables: NAME, SUBJECT.
-export async function sendTicketReceivedEmail(opts: { email: string; name: string | null; subject: string }): Promise<void> {
+export async function sendTicketReceivedEmail(opts: {
+  email: string
+  name: string | null
+  subject: string
+  ticketId: string
+}): Promise<void> {
   try {
     if (!opts.email) return
     const { error } = await resend.emails.send({
       from: 'Micro-Training Method <noreply@mail.microtrainingmethod.com>',
       to: opts.email,
+      replyTo: ticketReplyToAddress(opts.ticketId),
       template: {
         id: 'mtm-ticket-received',
         variables: { NAME: opts.name?.trim() || 'there', SUBJECT: opts.subject },
@@ -946,12 +963,14 @@ export async function sendTicketUpdateEmail(opts: {
   name: string | null
   subject: string
   stageLabel: string
+  ticketId: string
 }): Promise<void> {
   try {
     if (!opts.email) return
     const { error } = await resend.emails.send({
       from: 'Micro-Training Method <noreply@mail.microtrainingmethod.com>',
       to: opts.email,
+      replyTo: ticketReplyToAddress(opts.ticketId),
       template: {
         id: 'mtm-ticket-update',
         variables: { NAME: opts.name?.trim() || 'there', SUBJECT: opts.subject, STAGE_LABEL: opts.stageLabel },

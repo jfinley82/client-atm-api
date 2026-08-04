@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../../../lib/supabase'
 import { setCors, noStore } from '../../../../../lib/cors'
 import { requireAdmin } from '../../../../../lib/auth'
+import { appendTicketMessage } from '../../../../../lib/support'
 
 // POST /api/admin/support/tickets/:id/messages — admin reply, appended to the
 // thread.
@@ -47,12 +48,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const nowIso = new Date().toISOString()
 
-    const { data: message, error } = await supabase
-      .from('support_ticket_messages')
-      .insert({ ticket_id: id, author_user_id: adminId, author_role: 'admin', body })
-      .select('id, ticket_id, author_user_id, author_role, body, created_at')
-      .single()
-    if (error) throw error
+    const appended = await appendTicketMessage({ ticketId: id, authorUserId: adminId, authorRole: 'admin', body })
+    if (!appended) return res.status(500).json({ error: 'Failed to post reply' })
 
     // Stamp only when nothing has been recorded yet — a second reply must not
     // move a first response that already happened.
@@ -66,7 +63,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { data: author } = await supabase.from('users').select('name, email').eq('id', adminId).maybeSingle()
 
     return res.status(201).json({
-      message: { ...(message as any), author: { name: (author as any)?.name ?? null, email: (author as any)?.email ?? null } },
+      message: { ...appended.message, author: { name: (author as any)?.name ?? null, email: (author as any)?.email ?? null } },
       first_response_stamped: stampsFirstResponse,
     })
   } catch (err) {

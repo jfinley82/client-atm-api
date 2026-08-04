@@ -3,7 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { setCors, noStore } from '../../lib/cors'
 import { requireActiveUser } from '../../lib/auth'
 import { sendTicketReceivedEmail } from '../../lib/email'
-import { isTicketCategory, slaFor, STAGE_LABELS, TICKET_CATEGORIES, TicketStage } from '../../lib/support'
+import { appendTicketMessage, isTicketCategory, slaFor, STAGE_LABELS, TICKET_CATEGORIES, TicketStage } from '../../lib/support'
 
 // Member-facing support tickets.
 //
@@ -96,18 +96,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (error) throw error
 
     // The description IS the first message in the thread, not a separate field.
-    const { error: msgErr } = await supabase.from('support_ticket_messages').insert({
-      ticket_id: (ticket as any).id,
-      author_user_id: userId,
-      author_role: 'member',
+    const appended = await appendTicketMessage({
+      ticketId: (ticket as any).id,
+      authorUserId: userId,
+      authorRole: 'member',
       body: message,
     })
     // A ticket with no body is not usable by whoever picks it up, so this is
     // not best-effort — roll the ticket back rather than leave a subject-only
     // row that looks answerable but isn't.
-    if (msgErr) {
+    if (!appended) {
       await supabase.from('support_tickets').delete().eq('id', (ticket as any).id)
-      throw msgErr
+      throw new Error('failed to store initial ticket message')
     }
 
     const { data: user } = await supabase.from('users').select('email, name').eq('id', userId).maybeSingle()
@@ -115,6 +115,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       email: (user as any)?.email ?? '',
       name: (user as any)?.name ?? null,
       subject,
+      ticketId: (ticket as any).id,
     })
 
     return res.status(201).json({
