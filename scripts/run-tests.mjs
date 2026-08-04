@@ -40,13 +40,17 @@ for (const file of files) {
 
   const build = spawnSync(
     'npx',
-    // --packages=external: bundle only this repo's own source, not
-    // node_modules — the same shape Vercel's Node.js runtime actually runs in
-    // (real node_modules, real require()), not a single-file inline. Needed
-    // for packages like email-reply-parser that read import.meta.url at
-    // module scope: esbuild's --format=cjs empties import.meta when a
-    // dependency is bundled in, but leaves it correct when Node loads the
-    // real, unmodified package file itself.
+    // --packages=external: bundle only this repo's own source and let Node
+    // require() real packages from node_modules, rather than inlining the
+    // whole dependency graph into one file. Closer to how the code actually
+    // runs, and it keeps module-scope behavior (import.meta, conditional
+    // exports) intact instead of silently rewriting it.
+    //
+    // NOTE: passing here does NOT prove a package will resolve on Vercel.
+    // This runs against local node_modules, where everything is present; the
+    // deployed artifact only contains what Vercel's bundler statically
+    // detected. A dependency that this gate loads happily can still be
+    // missing in production — check a preview deployment for that.
     ['esbuild', src, '--bundle', '--platform=node', '--format=cjs', '--packages=external', `--outfile=${out}`],
     { stdio: 'inherit' }
   )
