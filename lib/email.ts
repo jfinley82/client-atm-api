@@ -910,6 +910,59 @@ export async function sendCoachBookingChange(opts: {
   }
 }
 
+// ---- Support Desk notifications ---------------------------------------------
+// Published Resend templates by alias, the same pattern as mtm-login-link —
+// never inline HTML, so the copy stays editable in Resend without a deploy.
+//
+// Best-effort BY CONTRACT, like every other notification here: a mail failure
+// must never fail the ticket write or the stage change that already succeeded.
+// A member whose ticket was filed but whose confirmation bounced is recoverable;
+// a 500 that loses the ticket they just typed is not.
+
+// One-time confirmation that the ticket landed. Variables: NAME, SUBJECT.
+export async function sendTicketReceivedEmail(opts: { email: string; name: string | null; subject: string }): Promise<void> {
+  try {
+    if (!opts.email) return
+    const { error } = await resend.emails.send({
+      from: 'Micro-Training Method <noreply@mail.microtrainingmethod.com>',
+      to: opts.email,
+      template: {
+        id: 'mtm-ticket-received',
+        variables: { NAME: opts.name?.trim() || 'there', SUBJECT: opts.subject },
+      },
+    })
+    if (error) throw new Error(error.message)
+  } catch (err) {
+    console.error(`[email] ticket received send failed (to=${opts.email})`, err)
+  }
+}
+
+// Stage-change notice. STAGE_LABEL is the MEMBER-FACING label from
+// lib/support.ts STAGE_LABELS — the caller resolves it, so a raw enum value
+// like 'waiting_on_member' can never reach a member's inbox.
+// Variables: NAME, SUBJECT, STAGE_LABEL.
+export async function sendTicketUpdateEmail(opts: {
+  email: string
+  name: string | null
+  subject: string
+  stageLabel: string
+}): Promise<void> {
+  try {
+    if (!opts.email) return
+    const { error } = await resend.emails.send({
+      from: 'Micro-Training Method <noreply@mail.microtrainingmethod.com>',
+      to: opts.email,
+      template: {
+        id: 'mtm-ticket-update',
+        variables: { NAME: opts.name?.trim() || 'there', SUBJECT: opts.subject, STAGE_LABEL: opts.stageLabel },
+      },
+    })
+    if (error) throw new Error(error.message)
+  } catch (err) {
+    console.error(`[email] ticket update send failed (to=${opts.email})`, err)
+  }
+}
+
 // Beta invite welcome. Sends the published MTM beta template. The link is the
 // caller's own token URL (invite-beta mints a 7-day token — intentionally
 // long-lived for a cold invite), NOT sendTierWelcomeEmail's 15-minute token.
