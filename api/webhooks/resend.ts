@@ -1,10 +1,29 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import crypto from 'crypto'
-import EmailReplyParser from 'email-reply-parser'
 import { supabase } from '../../lib/supabase'
 import { cancelLeadQueue } from '../../lib/funnelNurture'
 import { resend } from '../../lib/email'
 import { appendTicketMessage, nextStageForMemberReply, stageTimestampUpdates, TicketStage } from '../../lib/support'
+
+// email-reply-parser ships ESM-only ("type": "module", no CJS build). A plain
+// `import EmailReplyParser from 'email-reply-parser'` compiles fine under this
+// repo's CommonJS target, but crashes the WHOLE MODULE at runtime with
+// ERR_REQUIRE_ESM the moment Vercel's Node.js runtime evaluates the resulting
+// require() call — taking down every webhook event this file handles, not
+// just the inbound-reply branch. Writing `await import(...)` in the source
+// doesn't help either: targeting CommonJS, TypeScript downlevels even a
+// dynamic import() to the same require() underneath. Hiding the import()
+// inside a Function constructor is the standard workaround — TypeScript can't
+// see into the string to rewrite it, so Node's real ESM-capable dynamic
+// import runs instead. Verified against the compiled output, not assumed.
+const importEmailReplyParser = new Function('return import("email-reply-parser")') as () => Promise<{
+  default: new () => { parseReply(text: string): string }
+}>
+let emailReplyParserPromise: ReturnType<typeof importEmailReplyParser> | null = null
+function loadEmailReplyParser() {
+  if (!emailReplyParserPromise) emailReplyParserPromise = importEmailReplyParser()
+  return emailReplyParserPromise
+}
 
 // POST /api/webhooks/resend — Resend (Svix) delivery webhooks for funnel emails.
 //
@@ -211,6 +230,7 @@ async function handleInboundTicketReply(data: any): Promise<void> {
   }
   // Quoted-reply formats vary too much across Gmail/Outlook/Apple Mail for a
   // hand-rolled regex to be worth it — a solved problem, reused not reinvented.
+  const { default: EmailReplyParser } = await loadEmailReplyParser()
   const stripped = new EmailReplyParser().parseReply(raw).trim()
   const bodyText = stripped || raw
 
