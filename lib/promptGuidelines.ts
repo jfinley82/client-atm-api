@@ -30,9 +30,19 @@ Rhythm. Vary sentence length on purpose, mixing short punchy sentences with long
 
 Structure. Do not use an em dash, or a hyphen, to split a sentence into two clauses. Use a comma, or write two full sentences instead. Hyphens inside compound words like "well-known" are fine, since this bans only the sentence-splitting use. Use at most one bolded phrase per section. Never put an emoji in a heading. Do not lean on bullet lists. Prefer prose for anything that is not genuinely a list, and never write a bare noun-phrase bullet with no verb. Write headings in sentence case, never title case. Do not open with a "let's dive in" style transition, or a rhetorical question like "But what does this mean?".
 
-Hooks, titles, and subject lines. Write each as a concrete situation (a specific, observable thing the reader does or lives) or a direct claim (a plain statement of the real dynamic). State the true thing straight; do not set up a wrong frame and flip it. The negation-then-reframe move reads as generic AI ad copy — if a line lands on one of these shapes, rewrite it as the concrete situation or direct claim underneath: "It's not X, it's Y" / "not X, but Y"; "You don't need another X"; "You don't have an X problem, you have a Y problem" / "That's an X problem"; "You don't have an X problem" as a standalone opener; "X isn't broken" / "Your X isn't broken". Recast example: "It's not a marketing problem, it's the friend zone" becomes "Your warmest followers ask you for advice, then pay someone else."
+Hooks, titles, and subject lines. Write each as a concrete situation (a specific, observable thing the reader does or lives) or a direct claim (a plain statement of the real dynamic). State the true thing straight. Recast example: "It's not a marketing problem, it's the friend zone" becomes "Your warmest followers ask you for advice, then pay someone else."
 
-Banned sentence templates. Never use these shapes, whatever words fill them:
+Clearing the ground with negations. This applies to EVERYTHING you write, not only to hooks, titles and subject lines: body copy, captions, emails, descriptions, analysis prose, conversational replies. Do not rule things out to make room for the real thing. Name the real thing first, on its own, and let it stand without a foil.
+
+What is banned is negation used as a runway, not the word "not". A negation carrying its own information is fine ("the template pack is not included", "they did not reply"). The move to avoid is a negation whose only job is to be corrected, whether or not the correction ever arrives:
+- One negation and a flip: "It's not X, it's Y" / "not X, but Y".
+- Several negations stacked before the reveal: "It's not a confidence problem and it's not a traffic problem. It's positioning."
+- Negations stacked with the reveal withheld, left to imply the answer on their own.
+- A lone negation opener that a later sentence exists to correct: "You don't have an X problem." / "Your X isn't broken." / "You don't need another X."
+
+Neither the count of negations nor the exact wording matters. If a sentence's work is ruling out before naming, cut the ruling-out and open with the naming. Recast example: "It's not a confidence problem and it's not a traffic problem, it's positioning" becomes "Your best-fit clients read your page and can't tell which one of them you built it for."
+
+Banned sentence templates. Never use these shapes, whatever words fill them. Read them as examples of the families described above, not as a complete list: a variant that dodges the exact wording while doing the same work is banned too, and a shape's absence here is not permission to use it.
 - "[X] isn't broken. One part of it is." and near variants.
 - "You don't have a [X] problem. You have a [Y] problem." or "That's a [X] problem."
 - "Most [X] coaches..." as a sentence opener.

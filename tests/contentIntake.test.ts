@@ -64,6 +64,29 @@ ok('prompt names the 1-3 sentence size', /1-3 sentences/.test(prompt))
 ok('prompt says never one solid block', /never one solid block/i.test(prompt))
 ok('prompt shows the literal blank-line escape', /\\\\n\\\\n/.test(prompt), prompt.match(/.*blank line.*/)?.[0])
 ok('the caption field spec also carries the paragraph rule', /Short paragraphs separated by a blank line/.test(prompt))
+
+console.log('\n-- the 5 email bodies get the same paragraph rule --')
+// Captions shipped with this rule first; the emails in the SAME prompt did not,
+// so a coach got readable posts and a wall-of-text welcome email. Both halves of
+// the output are pinned here so they cannot drift apart again.
+ok('a rule names the email BODY specifically', /email BODY/.test(prompt))
+ok(
+  'the email rule carries the same 1-3 sentence size',
+  (prompt.match(/1-3 sentences/g) ?? []).length >= 2,
+  `found ${(prompt.match(/1-3 sentences/g) ?? []).length} occurrences, expected one for captions and one for emails`
+)
+ok(
+  'the email rule shows the literal blank-line escape too',
+  (prompt.match(/\\\\n\\\\n/g) ?? []).length >= 2,
+  `found ${(prompt.match(/\\\\n\\\\n/g) ?? []).length} occurrences`
+)
+ok(
+  'the email rule says never one solid block',
+  (prompt.match(/never one solid block/gi) ?? []).length >= 2,
+  `found ${(prompt.match(/never one solid block/gi) ?? []).length} occurrences`
+)
+ok('greeting and sign-off are called out as their own paragraphs', /greeting line and the sign-off/i.test(prompt))
+ok('the body field spec carries the paragraph rule', /ready-to-send email body\. Short paragraphs/.test(prompt))
 ok(
   'prompt no longer instructs writing in the requested PLATFORM',
   !/in the requested platform/i.test(prompt),
