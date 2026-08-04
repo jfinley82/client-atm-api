@@ -40,7 +40,7 @@ import {
   coerceAnglePreviews,
 } from '../../lib/microTrainingGenerator'
 import { BEAT_TEACHING } from '../../lib/slideDeckCanonical'
-import { emailBodyHasRawHtml } from '../../lib/email'
+import { composeEmailBody, resolvePreviewEmailLinks, emailBodyHasRawHtml, type EmailLinks } from '../../lib/email'
 import { sanitizePhrasingDeep } from '../../lib/phrasing'
 import { avatarUrlForSeed, personaSeedFromAudience, personaGenderFromAudience, AvatarGender } from '../../lib/avatars'
 
@@ -285,6 +285,39 @@ function withAngleFields<T extends Record<string, unknown>>(row: T): T & ReturnT
 function sanitizeGenRead<T extends Record<string, unknown>>(row: T): T {
   const clean = sanitizePhrasingDeep(row)
   return { ...clean, delivery: row.delivery, pre_rebuild_snapshot: row.pre_rebuild_snapshot }
+}
+
+/**
+ * Attach the composed render to every email in the three sequences, so the Build
+ * wizard's preview pane shows byte-identical output to what a lead receives.
+ *
+ * The wizard was rendering the stored `body` string directly, which is why a
+ * standalone [BOOK_A_CALL_LINK] appeared mid-copy as literal text and the body
+ * read as one block: the paragraph/list/bold handling and the five token
+ * substitutions all live in composeEmailBody, and nothing was calling it on read.
+ *
+ * `body` is returned UNCHANGED alongside the derived fields, and that ordering
+ * matters. composeEmailBody strips the primary CTA token from the body when it
+ * stands alone on its line; hand the editor that stripped text and the coach's
+ * next save writes back copy with their CTA silently deleted. The editor binds
+ * to `body`, the preview to `body_html` + `cta`.
+ */
+function withEmailPreview<T extends Record<string, unknown>>(row: T, links: EmailLinks): T {
+  const enrich = (list: unknown): unknown => {
+    if (!Array.isArray(list)) return list
+    return list.map((e) => {
+      if (!e || typeof e !== 'object') return e
+      const email = e as Record<string, unknown>
+      if (typeof email.body !== 'string') return email
+      const { bodyHtml, cta } = composeEmailBody(email.body, links)
+      return { ...email, body_html: bodyHtml, cta }
+    })
+  }
+  const next: Record<string, unknown> = { ...row }
+  for (const listName of EMAIL_LISTS) {
+    if (listName in next) next[listName] = enrich(next[listName])
+  }
+  return next as T
 }
 
 // Persona for the Launch persona tile ("Who it's for"): the coach's user-level
@@ -934,6 +967,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       /* keep userId seed + empty name + neutral gender fallback */
     }
 
+    // Resolved ONCE for the whole read rather than per email: every email in all
+    // three sequences composes against the same coach links.
+    const { links: previewLinks, resolved: previewResolved } = await resolvePreviewEmailLinks(userId)
+
     // GET with id — return a single generation (must belong to the user)
     if (id && typeof id === 'string') {
       try {
@@ -948,7 +985,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (!data) return res.status(404).json({ error: 'Generation not found' })
         // beat_teaching is the static, universal per-beat coaching copy; the
         // frontend renders each slide's note from beat_teaching[slide.sectionName].
-        return res.status(200).json({ ...withAvatar(withAngleFields(sanitizeGenRead(data)), personaSeed, personaName, personaGender), beat_teaching: BEAT_TEACHING })
+        return res.status(200).json({ ...withEmailPreview(withAvatar(withAngleFields(sanitizeGenRead(data)), personaSeed, personaName, personaGender), previewLinks), beat_teaching: BEAT_TEACHING, email_links: previewResolved })
       } catch (err) {
         console.error('[generate] GET one', err)
         return res.status(500).json({ error: 'Failed to load generation' })
@@ -970,7 +1007,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (error) throw error
         // beat_teaching is the static, universal per-beat coaching copy; the
         // frontend renders each slide's note from beat_teaching[slide.sectionName].
-        return res.status(200).json(data ? { ...withAvatar(withAngleFields(sanitizeGenRead(data)), personaSeed, personaName, personaGender), beat_teaching: BEAT_TEACHING } : null)
+        return res.status(200).json(data ? { ...withEmailPreview(withAvatar(withAngleFields(sanitizeGenRead(data)), personaSeed, personaName, personaGender), previewLinks), beat_teaching: BEAT_TEACHING, email_links: previewResolved } : null)
       } catch (err) {
         console.error('[generate] GET by card_id', err)
         return res.status(500).json({ error: 'Failed to load generation' })

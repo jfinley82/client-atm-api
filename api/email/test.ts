@@ -1,9 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { rateLimit } from '../../lib/rateLimit'
-import { loadCoachBrand, composeEmailBody, brandedEmailHtml, sendOneOffEmail } from '../../lib/email'
+import { loadCoachBrand, composeEmailBody, brandedEmailHtml, sendOneOffEmail, resolvePreviewEmailLinks } from '../../lib/email'
 import { logEvent } from '../../lib/apiCostLog'
 
 // POST /api/email/test — send ONE coach-branded email to a coach-chosen inbox so
@@ -19,7 +18,6 @@ import { logEvent } from '../../lib/apiCostLog'
 export const config = { maxDuration: 15 }
 
 const FROM_ADDRESS = 'noreply@mail.microtrainingmethod.com'
-const FUNNEL_DOMAIN = process.env.FUNNEL_PUBLIC_DOMAIN || 'freeminiworkshop.com'
 const BODY_MAX = 20_000
 const SUBJECT_MAX = 500
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
@@ -62,36 +60,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Real book-a-call/training/register URLs from the coach's funnel subdomain
     // when they have one; else a harmless preview base. No lead => no minted
-    // watch/lead tokens, just the tokenless public pages.
-    let base = `https://${FUNNEL_DOMAIN}`
-    const funnelRes = await supabase
-      .from('funnels')
-      .select('subdomain')
-      .eq('user_id', userId)
-      .not('subdomain', 'is', null)
-      .limit(1)
-    const subdomain = funnelRes.data?.[0]?.subdomain
-    if (typeof subdomain === 'string' && subdomain.trim()) base = `https://${subdomain.trim()}.${FUNNEL_DOMAIN}`
-    const bookUrl = `${base}/?page=book`
-    const trainingUrl = `${base}/?page=training`
-    const registerUrl = `${base}/`
-
-    // Resolve the real [GUIDE_LINK] destination so a confirmation-email preview
-    // links the guide exactly as a real send would. We look up the coach's most
-    // recent generation that actually HAS a published guide, rather than the
-    // picked funnel's generation_id (older funnels can carry a null/mismatched
-    // generation_id, which is why a real guide was rendering as plain text).
-    // No published guide ⇒ undefined and [GUIDE_LINK] degrades to a plain word.
-    let guideUrl: string | undefined
-    const guideRes = await supabase
-      .from('mtm_generations')
-      .select('guide_url')
-      .eq('user_id', userId)
-      .not('guide_url', 'is', null)
-      .order('created_at', { ascending: false })
-      .limit(1)
-    const g = (guideRes.data?.[0] as { guide_url?: unknown } | undefined)?.guide_url
-    if (typeof g === 'string' && g.trim()) guideUrl = g.trim()
+    // watch/lead tokens, just the tokenless public pages. Shared with the Build
+    // wizard's email preview so a test send and an in-app preview resolve the
+    // same links — see resolvePreviewEmailLinks for why the fallback base and
+    // the guide_url lookup are the way they are.
+    const { links } = await resolvePreviewEmailLinks(userId)
 
     const firstName = name ? name.split(/\s+/)[0] : 'there'
     const mergedSubject = mergeName(subject, firstName)
@@ -100,12 +73,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Same shared compose path as a real send: the primary CTA (first
     // button-eligible token in reading order) becomes the single button; every
     // other token — incl. [GUIDE_LINK] — renders as an inline link, none dropped.
-    const { bodyHtml, cta } = composeEmailBody(mergedBody, {
-      book: bookUrl,
-      training: trainingUrl,
-      register: registerUrl,
-      guide: guideUrl,
-    })
+    const { bodyHtml, cta } = composeEmailBody(mergedBody, links)
     const html = brandedEmailHtml(brand, { heading: mergedSubject, bodyHtml, ...(cta ? { cta } : {}) })
 
     const messageId = await sendOneOffEmail({

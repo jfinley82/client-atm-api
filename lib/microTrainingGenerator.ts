@@ -74,7 +74,41 @@ export type MtSlide = {
 // recommended marks the default subset the frontend pre-selects from the pool of
 // candidate exercises; the coach can add or remove the rest. collects/why_fits are
 // per-question guidance (what the question surfaces, how it fits the phase).
-export type MtExercise = { prompt: string; lines: number; recommended: boolean; collects: string; why_fits: string }
+//
+// `selected` is the COACH's choice and is deliberately a separate field rather
+// than an overwrite of `recommended`. recommended is the generator's own output;
+// once it is overwritten there is no way to tell an AI default from a coach edit,
+// which is the same problem gen_snapshot solves for script beats and slides.
+// Absent on every exercise in a section => the coach has not touched that section
+// and `recommended` is the effective selection (see selectedExercises).
+export type MtExercise = {
+  prompt: string
+  lines: number
+  recommended: boolean
+  collects: string
+  why_fits: string
+  selected?: boolean
+}
+
+// A section shows a POOL of candidates; the generator pre-picks one and the coach
+// may add a second. Confirmed 2026-08-04. Enforced server-side on save so a client
+// that forgets the cap cannot write a third.
+export const MAX_SELECTED_EXERCISES_PER_SECTION = 2
+
+/**
+ * The exercises that actually belong in the guide for one section, in order.
+ *
+ * Falls back to `recommended` when the coach has never made a choice in this
+ * section, so every generation that predates the selected flag renders exactly
+ * as it does today. Capped regardless of what is stored — a row hand-edited to
+ * three selections still renders two rather than silently widening the guide.
+ */
+export function selectedExercises<T extends { recommended?: boolean; selected?: boolean }>(exercises: T[]): T[] {
+  const list = Array.isArray(exercises) ? exercises : []
+  const coachChose = list.some((e) => typeof e?.selected === 'boolean')
+  const chosen = coachChose ? list.filter((e) => e?.selected === true) : list.filter((e) => e?.recommended !== false)
+  return chosen.slice(0, MAX_SELECTED_EXERCISES_PER_SECTION)
+}
 export type MtWorkbookSection = { sectionTitle: string; keyInsight: string; exercises: MtExercise[]; reflection: string }
 // Both CTA variants are generated so the frontend can show whichever the coach's
 // cta_type selects; book_call ends with [BOOK_A_CALL_LINK], sell_program with [OFFER_LINK].
