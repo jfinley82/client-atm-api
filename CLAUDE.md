@@ -99,3 +99,48 @@ removing it.
 - Resend mail uses published templates by alias (`mtm-*`), never inline HTML.
 - Webhooks always return 2xx after signature verification, so a transient error
   doesn't trigger a retry storm.
+- External webhooks redeliver. Any handler that writes must be idempotent on a
+  key from the payload — see `support_ticket_messages.resend_email_id` and its
+  partial unique index, and the `alreadyProcessed` path in `appendTicketMessage`.
+
+---
+
+## Gotchas
+
+Things that cost real debugging time here. **Add to this list when you burn time
+on something non-obvious** — symptom first, since that's what the next person
+will be searching for. Keep entries short; this file loads into every session.
+
+**`ERR_INVALID_ARG_VALUE: The argument 'filename' must be a file URL object … Received undefined`**
+A bundled dependency read `import.meta.url` at module scope. esbuild's
+`--format=cjs` empties `import.meta` when it inlines a package into the bundle.
+Fix: `--packages=external`, so Node loads the real package file and
+`import.meta` stays intact. `scripts/run-tests.mjs` does this.
+
+**A test sees a real client / a stub env var it just set is ignored.**
+`lib/email.ts` runs `new Resend(process.env.RESEND_API_KEY!)` at module scope,
+and ES imports are hoisted above the test file's own `process.env` assignments.
+Set env vars first, then reach the module under test through
+`await import('../api/...')`. Every test touching the mail path does this.
+
+**A PostgREST `.or()` filter silently matches the wrong rows.**
+`or=` is comma-separated, so a comma, paren, or backslash in user input is read
+as filter syntax. Strip them before interpolating — `escapeForOr` in
+`api/admin/support/tickets.ts`.
+
+**A test mock mis-parses an `.or()` containing `in.(a,b)`.**
+Non-greedy `[^)]*` stops at the *inner* paren and truncates the clause. Use a
+greedy match anchored to the end of the param: `=\\((.*)\\)(?=&|$)`.
+
+**Git reports unpushed commits right after a successful squash-merge.**
+Squash creates a *new* commit on `main`; the feature branch pointer still refers
+to the pre-squash commit, so the branch reads as diverged. Nothing is at risk.
+Resync with `git checkout -B <branch> origin/main` then push
+`--force-with-lease`.
+
+**A member's emailed reply arrives with our whole quoted email appended.**
+Gmail wraps the sender address onto its own line mid-header:
+`On Mon, … Micro-Training Method <\nnoreply@…> wrote:`. A `/On .* wrote:/`
+pattern can't match across that newline. `lib/emailReply.ts` uses `[\s\S]`
+throughout for this; `tests/emailReply.test.ts` pins the real email that
+exposed it.
