@@ -20,8 +20,12 @@ import { checkSyncGate } from '../../../lib/syncGate'
 //
 // GET: return the stored content batch (404 if none generated yet).
 // POST: generate a fresh batch. Body accepts an optional, skippable
-// { platform, tone } intake — sensible defaults apply if omitted or invalid
-// (see lib/contentAnalysis.ts resolveIntakeDefaults).
+// { tone } intake — a sensible default applies if omitted or invalid (see
+// lib/contentAnalysis.ts resolveIntakeDefaults). `platform` is still accepted
+// and deliberately IGNORED: one caption is now rendered inside every platform
+// shell the coach selects, so writing it for a single platform would be wrong
+// in the others. Ignored rather than rejected so a stale client (or the new
+// multi-select posting an array) keeps working.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
 
@@ -66,7 +70,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
     const intake: ContentIntake = {
-      platform: typeof body.platform === 'string' ? body.platform : undefined,
+      // Passed through so the deprecated field is visibly accepted; whatever
+      // shape it arrives in (string, array from the multi-select, absent) it
+      // no longer reaches the prompt.
+      platform: body.platform,
       tone: typeof body.tone === 'string' ? body.tone : undefined,
     }
 
