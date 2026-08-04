@@ -1,4 +1,5 @@
 import { esc, str, strArray } from './html'
+import { selectedExercises } from '../microTrainingGenerator'
 
 // The lead-magnet Guide — a coach-branded workbook PDF, ported from
 // claude/guide-pdf-mockup.html. HARD RULE: zero MTM branding. Everything on the
@@ -306,10 +307,13 @@ export function buildGuideDocument(opts: {
   // questions, max 2 per phase/section, flattened and numbered sequentially.
   const exercises: { prompt: string; reveal: string; lines: number }[] = []
   for (const s of sections) {
-    const list = (Array.isArray(s.exercises) ? s.exercises.map(obj) : [])
-      .filter((e) => str(e.prompt))
-      .filter((e) => e.recommended !== false)
-      .slice(0, 3) // up to 3 selected questions per phase
+    // selectedExercises honours the coach's `selected` flags when they have made
+    // a choice in this section and falls back to the generator's `recommended`
+    // when they have not — so a generation from before the flag existed renders
+    // byte-identically. The cap lives in that helper (2 per section, confirmed
+    // 2026-08-04); this used to slice to 3, which contradicted the comment above
+    // it and the wizard's own "X/2 selected" counter.
+    const list = selectedExercises((Array.isArray(s.exercises) ? s.exercises.map(obj) : []).filter((e) => str(e.prompt)))
     for (const e of list) {
       // +2 ruled lines beyond whatever the exercise specifies, so leads have room
       // to write a complete response.

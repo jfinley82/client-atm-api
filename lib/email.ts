@@ -437,6 +437,74 @@ export function composeEmailBody(raw: string, links: EmailLinks): { bodyHtml: st
   return { bodyHtml, cta }
 }
 
+const PREVIEW_FUNNEL_DOMAIN = process.env.FUNNEL_PUBLIC_DOMAIN || 'freeminiworkshop.com'
+
+/**
+ * The EmailLinks a PREVIEW should compose against — the Build wizard's email
+ * pane and the "send a test" action both need the same ones, and they have to
+ * match what a real send resolves or the preview lies.
+ *
+ * Extracted from api/email/test.ts, which worked this out first. Two details
+ * that are easy to get wrong and are the reason this is shared rather than
+ * re-derived:
+ *
+ *  - The base falls back to the bare public domain when the coach has no
+ *    funnel subdomain yet. That fallback is load-bearing: book/training/
+ *    register still resolve to VALID urls, so composeEmailBody still finds a
+ *    primary token and still returns a cta. Drop the fallback and every
+ *    button-eligible token fails isValidHttpUrl, the preview shows no button,
+ *    and it under-reports what the lead will actually get.
+ *  - guide_url comes from the coach's most recent generation that actually HAS
+ *    one, NOT from the picked funnel's generation_id — older funnels carry a
+ *    null or mismatched generation_id, which is what made a real published
+ *    guide render as plain text. No published guide leaves it undefined and
+ *    [GUIDE_LINK] degrades to a plain word, exactly as a real send would.
+ *
+ * `resolved` reports what actually backed the links so a caller can say so
+ * plainly instead of letting a preview-base url pass for a real one.
+ */
+export async function resolvePreviewEmailLinks(
+  userId: string
+): Promise<{ links: EmailLinks; resolved: { base: string; has_funnel: boolean; guide_published: boolean } }> {
+  let base = `https://${PREVIEW_FUNNEL_DOMAIN}`
+  let hasFunnel = false
+  try {
+    const { data } = await supabase
+      .from('funnels')
+      .select('subdomain')
+      .eq('user_id', userId)
+      .not('subdomain', 'is', null)
+      .limit(1)
+    const subdomain = (data?.[0] as { subdomain?: unknown } | undefined)?.subdomain
+    if (typeof subdomain === 'string' && subdomain.trim()) {
+      base = `https://${subdomain.trim()}.${PREVIEW_FUNNEL_DOMAIN}`
+      hasFunnel = true
+    }
+  } catch (err) {
+    console.error('[email] resolvePreviewEmailLinks funnel lookup', err)
+  }
+
+  let guide: string | undefined
+  try {
+    const { data } = await supabase
+      .from('mtm_generations')
+      .select('guide_url')
+      .eq('user_id', userId)
+      .not('guide_url', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+    const g = (data?.[0] as { guide_url?: unknown } | undefined)?.guide_url
+    if (typeof g === 'string' && g.trim()) guide = g.trim()
+  } catch (err) {
+    console.error('[email] resolvePreviewEmailLinks guide lookup', err)
+  }
+
+  return {
+    links: { book: `${base}/?page=book`, training: `${base}/?page=training`, register: `${base}/`, guide },
+    resolved: { base, has_funnel: hasFunnel, guide_published: !!guide },
+  }
+}
+
 // Fire a single one-off email through the verified MTM sending domain (the
 // coach's "send a test" action). Thin wrapper over resend.emails.send: no tags,
 // no funnel recording — it is not a lead send. Returns the Resend message id (or
