@@ -59,7 +59,7 @@ Output ONLY valid JSON, no preamble, no markdown, no code fences. Double quotes 
 
 {
   "posts": [
-    { "id": "p1", "category": "Authority", "caption": "a ready-to-post caption in the given tone, readable as-is on LinkedIn, Instagram AND Facebook" }
+    { "id": "p1", "category": "Authority", "caption": "a ready-to-post caption in the given tone, readable as-is on LinkedIn, Instagram AND Facebook. Short paragraphs separated by a blank line, never one solid block." }
   ],
   "emails": [
     { "id": "e1", "type": "Welcome", "subject": "a specific, non-generic subject line", "body": "a full, ready-to-send email body" }
@@ -82,6 +82,7 @@ Rules:
   - Retention: nurtures a subscriber who hasn't converted yet, keeps the relationship warm.
   - Each email's subject and body must be genuinely distinct in angle and content from the others — no reused openings or templated structure across the 5 emails.
 - Write every caption/subject/body in the requested TONE.
+- Write each caption as SHORT PARAGRAPHS of 1-3 sentences, each separated by a blank line (\\n\\n). Never one solid block. This is not optional formatting: the caption is rendered inside a real platform card, and a wall of text is what a reader scrolls past on every one of them.
 - Every caption is PLATFORM-NEUTRAL and must read correctly, unedited, on LinkedIn, Instagram and Facebook — the coach picks which platforms to display, and the SAME caption is shown inside each one's native card side by side. So:
   - No platform-specific mechanics: no "link in bio", no "click the link below", no @ mentions or hashtag conventions that assume one app, no references to a feature only one platform has (Stories, Reels, connection requests).
   - Front-load the hook. Put the sharpest line first and make it stand alone, because the shorter platform shells visibly truncate — the first line has to earn the expand on its own.

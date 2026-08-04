@@ -59,6 +59,11 @@ ok('prompt says PLATFORM-NEUTRAL', /PLATFORM-NEUTRAL/.test(prompt))
 ok('prompt names all three shells', /LinkedIn/.test(prompt) && /Instagram/.test(prompt) && /Facebook/.test(prompt))
 ok('prompt bans "link in bio"', /link in bio/i.test(prompt))
 ok('prompt requires a front-loaded hook for truncation', /front-load/i.test(prompt))
+ok('prompt requires SHORT PARAGRAPHS in captions', /SHORT PARAGRAPHS/.test(prompt))
+ok('prompt names the 1-3 sentence size', /1-3 sentences/.test(prompt))
+ok('prompt says never one solid block', /never one solid block/i.test(prompt))
+ok('prompt shows the literal blank-line escape', /\\\\n\\\\n/.test(prompt), prompt.match(/.*blank line.*/)?.[0])
+ok('the caption field spec also carries the paragraph rule', /Short paragraphs separated by a blank line/.test(prompt))
 ok(
   'prompt no longer instructs writing in the requested PLATFORM',
   !/in the requested platform/i.test(prompt),
