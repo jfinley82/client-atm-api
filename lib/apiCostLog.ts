@@ -49,6 +49,12 @@ export function computeCostUsd(model: string, inputTokens: number, outputTokens:
     return 0
   }
   const cost = (inputTokens / 1_000_000) * pricing.inputPerMTok + (outputTokens / 1_000_000) * pricing.outputPerMTok
+  return round6(cost)
+}
+
+// Shared so the cache-token surcharge below rounds identically to the base cost
+// rather than at a different precision.
+function round6(cost: number): number {
   return Math.round(cost * 1_000_000) / 1_000_000
 }
 
@@ -58,21 +64,59 @@ export function computeCostUsd(model: string, inputTokens: number, outputTokens:
 // (before parsing/extractJson) at every call site, so a call that fails to
 // parse as valid JSON downstream is still logged accurately — Anthropic
 // billed for it either way.
+/**
+ * Prompt-cache token counts for a call that used cache_control.
+ *
+ * These are billed at MULTIPLES of the base input rate, and Anthropic reports
+ * them SEPARATELY from `usage.input_tokens` — a cached call's input_tokens
+ * counts only the uncached remainder. Passing them through is what keeps
+ * cost_usd true and what makes a hit distinguishable from a miss afterwards:
+ * cache_read > 0 is a hit, cache_creation > 0 is a miss that just populated it.
+ */
+export type CacheUsage = {
+  creationInputTokens?: number
+  readInputTokens?: number
+  /** Write multiplier differs by TTL: 5m is 1.25x base input, 1h is 2x. */
+  ttl?: '5m' | '1h'
+}
+
+// Anthropic's published cache multipliers, relative to the model's base input
+// rate. Reads are the whole point: a tenth of base.
+const CACHE_WRITE_MULTIPLIER: Record<'5m' | '1h', number> = { '5m': 1.25, '1h': 2 }
+const CACHE_READ_MULTIPLIER = 0.1
+
 export async function logApiCost(
   userId: string,
   toolType: string,
   model: string,
   inputTokens: number,
-  outputTokens: number
+  outputTokens: number,
+  cache?: CacheUsage
 ): Promise<void> {
   try {
-    const cost_usd = computeCostUsd(model, inputTokens, outputTokens)
+    const cacheCreation = Math.max(0, Math.round(cache?.creationInputTokens ?? 0))
+    const cacheRead = Math.max(0, Math.round(cache?.readInputTokens ?? 0))
+
+    let cost_usd = computeCostUsd(model, inputTokens, outputTokens)
+    if (cacheCreation > 0 || cacheRead > 0) {
+      const pricing = resolvePricing(model, new Date())
+      if (pricing) {
+        const perToken = pricing.inputPerMTok / 1_000_000
+        const writeMultiplier = CACHE_WRITE_MULTIPLIER[cache?.ttl ?? '5m']
+        cost_usd = round6(
+          cost_usd + cacheCreation * perToken * writeMultiplier + cacheRead * perToken * CACHE_READ_MULTIPLIER
+        )
+      }
+    }
+
     const { error } = await supabase.from('api_cost_log').insert({
       user_id: userId,
       tool_type: toolType,
       model,
       input_tokens: inputTokens,
       output_tokens: outputTokens,
+      cache_creation_input_tokens: cacheCreation,
+      cache_read_input_tokens: cacheRead,
       cost_usd,
     })
     if (error) console.error('[apiCostLog] insert failed', error)

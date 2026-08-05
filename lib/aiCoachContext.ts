@@ -14,22 +14,33 @@ import { AICoachContent } from './aiCoach'
 // entry card from card_ids is correct and separate. Entry is one card.
 // Coverage is all of them. They are different questions.
 
-export type AICoachContextCard = {
+/**
+ * One card as the DIAGNOSTIC INDEX sees it: enough to route a lead to the right
+ * problem, and nothing more.
+ *
+ * This is the lazy-load half of the cost work. Every turn used to re-send every
+ * card's full synopsis; ~93% of a ~27k-token turn was that fixed prefix. The
+ * routing job only needs id, name, problem, and the match factors that tell one
+ * problem from another — the DEPTH (synopsis) is only needed for the card the
+ * conversation is actually about, and that one goes in the volatile block.
+ *
+ * It composes with the caching rather than fighting it: the index is stable so
+ * it caches, the resolved synopsis is volatile so it sits after the breakpoint,
+ * and a pivot costs one uncached block instead of a full prefix rebuild.
+ */
+export type AICoachIndexCard = {
   id: string
   card_name: string
   problem_text: string
-  reasoning: string
-  suggested_offer: unknown
-  synopsis: unknown
+  // From matcher_analysis, joined on problem_solution_cards.source_problem_id
+  // -> matcher_analysis.top_10[].id. NOT the card uuid: the matcher's own ids
+  // are 'p2'/'p3'/'p5', and joining on the uuid silently yields no factors at
+  // all while the code looks correct.
+  match_factors: unknown
 }
 
 export type AICoachContext = {
-  cards: AICoachContextCard[]
-  // The diagnostic backbone: matcher_analysis already ranks the coach's
-  // problems with the match factors that tell one from another — exactly what
-  // the bot needs to decide whether a lead who came in on problem A is really
-  // describing problem B. There is deliberately no second ranking here.
-  matcher: unknown
+  card_index: AICoachIndexCard[]
   framework: unknown
   core_offers: unknown
   audience: unknown
@@ -39,6 +50,9 @@ export type AICoachBrain = {
   system_prompt: string
   context: AICoachContext
   cardIds: Set<string>
+  /** Full synopsis per card id, for the ONE resolved card the turn is about. */
+  synopsisById: Map<string, unknown>
+  cardNameById: Map<string, string>
 }
 
 // Keys that never reach the assembled context, wherever they appear. These are
@@ -69,11 +83,21 @@ export function scrubLeadUnsafe<T>(v: T): T {
   return v
 }
 
-export async function loadAICoachContext(userId: string): Promise<AICoachContext> {
+type CardRow = {
+  id: string
+  card_name: string
+  problem_text: string
+  source_problem_id: string | null
+  synopsis: unknown
+}
+
+export async function loadAICoachContext(
+  userId: string
+): Promise<{ context: AICoachContext; synopsisById: Map<string, unknown>; cardNameById: Map<string, string> }> {
   const [{ data: cards }, matcherRow, frameworkRes, offersRes, audienceRow] = await Promise.all([
     supabase
       .from('problem_solution_cards')
-      .select('id, card_name, problem_text, reasoning, suggested_offer, synopsis')
+      .select('id, card_name, problem_text, source_problem_id, synopsis')
       .eq('user_id', userId)
       .eq('validated', true),
     getSavedOutput(userId, 'matcher_analysis'),
@@ -82,24 +106,43 @@ export async function loadAICoachContext(userId: string): Promise<AICoachContext
     getSavedOutput(userId, 'audience'),
   ])
 
-  return {
-    cards: scrubLeadUnsafe(
-      ((cards || []) as AICoachContextCard[]).map((c) => ({
-        id: c.id,
-        card_name: c.card_name,
-        problem_text: c.problem_text,
-        reasoning: c.reasoning,
-        suggested_offer: c.suggested_offer,
-        synopsis: c.synopsis,
-      }))
-    ),
-    matcher: scrubLeadUnsafe(stripSessionHistory(matcherRow?.content ?? null)),
+  const rows = (cards || []) as CardRow[]
+
+  // matcher_analysis.top_10[] keyed by ITS OWN id ('p2'), which the card
+  // carries as source_problem_id. See AICoachIndexCard.match_factors.
+  const matcherContent = (matcherRow?.content ?? null) as { top_10?: unknown } | null
+  const factorsBySourceId = new Map<string, unknown>()
+  const topTen = Array.isArray(matcherContent?.top_10) ? (matcherContent!.top_10 as any[]) : []
+  for (const entry of topTen) {
+    if (entry && typeof entry === 'object' && typeof entry.id === 'string') {
+      factorsBySourceId.set(entry.id, scrubLeadUnsafe(entry.match_factors ?? null))
+    }
+  }
+
+  const context: AICoachContext = {
+    card_index: rows.map((c) => ({
+      id: c.id,
+      card_name: c.card_name,
+      problem_text: c.problem_text,
+      match_factors: (c.source_problem_id && factorsBySourceId.get(c.source_problem_id)) ?? null,
+    })),
     framework: frameworkRes.ok ? scrubLeadUnsafe(frameworkRes.framework) : null,
     // Scrubbed for the shared keys like everything else, but its names and
     // prices pass through intact — see the note on SCRUB_EXACT.
     core_offers: offersRes.ok ? scrubLeadUnsafe(offersRes.coreOffers) : null,
     audience: scrubLeadUnsafe(stripSessionHistory(audienceRow?.content ?? null)),
   }
+
+  // Held beside the context, NOT inside it — only the resolved card's synopsis
+  // is ever serialized into a prompt.
+  const synopsisById = new Map<string, unknown>()
+  const cardNameById = new Map<string, string>()
+  for (const c of rows) {
+    synopsisById.set(c.id, scrubLeadUnsafe(c.synopsis ?? null))
+    cardNameById.set(c.id, c.card_name)
+  }
+
+  return { context, synopsisById, cardNameById }
 }
 
 // Warm-instance optimisation ONLY. Serverless invocations may always be cold,
@@ -114,7 +157,7 @@ export async function buildAICoachBrain(userId: string): Promise<AICoachBrain> {
   const hit = brainCache.get(userId)
   if (hit && Date.now() - hit.at < BRAIN_TTL_MS) return hit.brain
 
-  const [saved, context] = await Promise.all([getSavedOutput(userId, 'ai_coach'), loadAICoachContext(userId)])
+  const [saved, loaded] = await Promise.all([getSavedOutput(userId, 'ai_coach'), loadAICoachContext(userId)])
   const aiCoach = saved?.content as AICoachContent | undefined
 
   const brain: AICoachBrain = {
@@ -122,10 +165,12 @@ export async function buildAICoachBrain(userId: string): Promise<AICoachBrain> {
     // instructions to their bot. The hosted layer is added by the chat
     // endpoint, after this, and never overrides it on wording.
     system_prompt: aiCoach?.system_prompt ?? '',
-    context,
+    context: loaded.context,
     // The clamp set for routing: the chat handler validates the model's
     // resolved_card_id against this without a second query.
-    cardIds: new Set(context.cards.map((c) => c.id)),
+    cardIds: new Set(loaded.context.card_index.map((c) => c.id)),
+    synopsisById: loaded.synopsisById,
+    cardNameById: loaded.cardNameById,
   }
 
   brainCache.set(userId, { at: Date.now(), brain })

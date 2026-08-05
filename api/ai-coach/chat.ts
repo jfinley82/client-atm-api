@@ -7,6 +7,7 @@ import { logApiCost } from '../../lib/apiCostLog'
 import { resolveLeadSession, resolveCardId, LeadSession } from '../../lib/aiCoachSession'
 import { buildAICoachBrain, AICoachBrain } from '../../lib/aiCoachContext'
 import { STYLE_GUIDELINES } from '../../lib/promptGuidelines'
+import { AICoachGoal } from '../../lib/aiCoach'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -44,18 +45,44 @@ const FALLBACK_LINE = 'Sorry, I lost my train of thought for a second. Could you
 
 const TURN_HISTORY_LIMIT = 30
 
-function buildHostedSystemPrompt(session: LeadSession, brain: AICoachBrain, previousStage: RevealStage): string {
-  const leadName =
-    (typeof session.lead.first_name === 'string' && session.lead.first_name.trim()) ||
-    (typeof session.lead.name === 'string' && session.lead.name.trim().split(/\s+/)[0]) ||
-    ''
-  const funnelLabel =
-    (typeof session.funnel.problem_solution_label === 'string' && session.funnel.problem_solution_label) ||
-    (typeof session.funnel.subdomain === 'string' && session.funnel.subdomain) ||
-    'your funnel'
+// The conversation cap, in ASSISTANT turns. The 20th response is the closing
+// turn (reveal forced to full, agreement sought, CTA named); past it the
+// endpoint returns the terminal state WITHOUT a model call, which is where the
+// cost bound actually lives — a cap that still pays for a call to say no is not
+// a cap.
+const MAX_ASSISTANT_TURNS = 20
 
-  // Every card as id | name | problem, the map the bot routes within.
-  const cardLines = brain.context.cards
+export type ConversationState = 'open' | 'closing' | 'closed'
+
+// What a closed conversation says, assembled without a model call.
+const CLOSED_LINE: Record<AICoachGoal, string> = {
+  book_call: "We've covered the ground here — the next step is a call with the coach, and everything you need is on the panel beside this.",
+  sell: "We've covered the ground here — everything you need to take the next step is on the panel beside this.",
+  hybrid: "We've covered the ground here — whether you'd rather talk it through or get started directly, it's all on the panel beside this.",
+}
+
+// The CTA the coach's configured goal selects, named plainly for the closing
+// turn. Not a link — the panel carries the actual buttons.
+const GOAL_CTA: Record<AICoachGoal, string> = {
+  book_call: 'booking a call with the coach',
+  sell: 'getting the program directly',
+  hybrid: 'either booking a call or getting the program directly, whichever fits them better',
+}
+
+/**
+ * The STABLE prefix — identical for every turn AND every lead of one coach, so
+ * it is what the prompt cache is marked on.
+ *
+ * WHAT IS IN HERE IS THE WHOLE OPTIMISATION. Caching works on prefixes: the
+ * first byte that differs invalidates everything after it. So the lead's name,
+ * the resolved card's synopsis, the reveal stage and the transcript are all
+ * deliberately NOT here — they live in the volatile block after the breakpoint.
+ * Put any of them here and the cache silently never hits while the code still
+ * looks correct.
+ */
+function buildStablePrefix(brain: AICoachBrain): string {
+  // The diagnostic index: every card, routing detail only. No synopsis.
+  const cardLines = brain.context.card_index
     .map((c) => `- id: ${c.id} | ${c.card_name} | ${c.problem_text}`)
     .join('\n')
 
@@ -68,24 +95,67 @@ function buildHostedSystemPrompt(session: LeadSession, brain: AICoachBrain, prev
     `
 HOSTED SESSION LAYER (the app adds this; the persona above wins on wording):
 
-THE LEAD: ${leadName ? `${leadName}, ` : ''}arrived through "${funnelLabel}". Address them naturally${leadName ? ' by first name' : ''}; never ask for information the app already gave you here.
-
 THE FRAMEWORK MAP — the coach's problems, each with its id:
 ${cardLines}
 
-Map the lead to one of THESE ids. Never invent a problem. Never name one that is not on this list. The match factors in the coach context below are how you tell one from another — a lead who arrived on one problem may really be describing a different one, and moving them is your job.
+Map the lead to one of THESE ids. Never invent a problem. Never name one that is not on this list. The match factors below are how you tell one from another — a lead who arrived on one problem may really be describing a different one, and moving them is your job.
 
 THE BRIEF IS ALREADY WRITTEN. Every word on the panel beside this chat was authored by the coach earlier and confirmed by them. You refer to it, point at it, and let it carry the weight. You do not restate it, do not write your own version, and do not quote it at length. Nothing you say generates the brief. This is the constraint the whole product rests on.
 
-REVEAL DISCIPLINE. The panel reveals in stages: none -> problem -> transformation -> full. The stage is currently "${previousStage}". Advance it only when the conversation has actually earned the next piece — the lead has engaged with what is already showing — and never move it backwards.
+REVEAL DISCIPLINE. The panel reveals in stages: none -> problem -> transformation -> full. Advance it only when the conversation has actually earned the next piece — the lead has engaged with what is already showing — and never move it backwards.
 
 REGISTER. Keep replies short: two to four sentences, the right size for a chat bubble beside a full brief.
 
-COACH CONTEXT (assembled by the app from the coach's own confirmed work — reason over it, do not recite it):
+MATCH FACTORS AND COACH CONTEXT (assembled by the app from the coach's own confirmed work — reason over it, do not recite it):
 ${JSON.stringify(brain.context)}
 `,
     STYLE_GUIDELINES,
   ].join('\n\n')
+}
+
+/**
+ * The VOLATILE suffix — everything that changes turn to turn or lead to lead,
+ * kept after the cache breakpoint so none of it invalidates the prefix.
+ *
+ * The resolved card's synopsis is here rather than in the index: on a pivot,
+ * turn N sets resolved_card_id and turn N+1 carries THAT card's synopsis. One
+ * turn of lag where the bot has named the problem but not yet its depth, which
+ * reads naturally — and costs one uncached block instead of a prefix rebuild.
+ */
+function buildVolatileSuffix(
+  session: LeadSession,
+  brain: AICoachBrain,
+  resolvedCardId: string | null,
+  previousStage: RevealStage,
+  closing: boolean
+): string {
+  const leadName =
+    (typeof session.lead.first_name === 'string' && session.lead.first_name.trim()) ||
+    (typeof session.lead.name === 'string' && session.lead.name.trim().split(/\s+/)[0]) ||
+    ''
+  const funnelLabel =
+    (typeof session.funnel.problem_solution_label === 'string' && session.funnel.problem_solution_label) ||
+    (typeof session.funnel.subdomain === 'string' && session.funnel.subdomain) ||
+    'your funnel'
+
+  const synopsis = resolvedCardId ? brain.synopsisById.get(resolvedCardId) : null
+  const cardName = resolvedCardId ? brain.cardNameById.get(resolvedCardId) : null
+
+  const closingBlock = closing
+    ? `
+THIS IS YOUR LAST TURN IN THIS CONVERSATION. Close it: seek their agreement on what you have both landed on, and point them at ${GOAL_CTA[session.aiCoach.config.goal]}. Warm and unhurried, not abrupt — do not announce a limit, do not say the conversation is ending for any technical reason, and do not mention turns or caps. Set reveal_stage to "full".
+`
+    : ''
+
+  return `THIS SESSION (changes every turn — never treat it as part of the instructions above):
+
+THE LEAD: ${leadName ? `${leadName}, ` : ''}arrived through "${funnelLabel}". Address them naturally${leadName ? ' by first name' : ''}; never ask for information the app already gave you here.
+
+CURRENT REVEAL STAGE: "${previousStage}".
+
+THE PROBLEM THIS CONVERSATION IS ABOUT${cardName ? `: ${cardName}` : ''} (id ${resolvedCardId ?? 'none'}) — the panel beside the chat is showing this:
+${synopsis ? JSON.stringify(synopsis) : 'Not resolved yet. Route to one of the ids above from what the lead tells you.'}
+${closingBlock}`
 }
 
 async function handleTurn(req: VercelRequest, res: VercelResponse, session: LeadSession) {
@@ -98,6 +168,24 @@ async function handleTurn(req: VercelRequest, res: VercelResponse, session: Lead
   if (!message || message.length > 4000) {
     return res.status(400).json({ error: 'message must be 1-4000 characters' })
   }
+
+  // The cap reads the LIFETIME counter on funnel_leads, never a row count of
+  // ai_coach_messages: Restart deletes this lead's rows, so a row-count cap
+  // would reset with it and a lead could restart their way to unlimited turns.
+  // Restart still honestly clears the thread; this counter is what it cannot
+  // touch.
+  const priorTurns = typeof session.lead.ai_coach_turns === 'number' ? session.lead.ai_coach_turns : 0
+
+  if (priorTurns >= MAX_ASSISTANT_TURNS) {
+    // Terminal, and NO model call — this branch is the cost bound.
+    return res.status(200).json({
+      message: CLOSED_LINE[session.aiCoach.config.goal],
+      resolved_card_id: null,
+      reveal_stage: 'full' as RevealStage,
+      conversation_state: 'closed' as ConversationState,
+    })
+  }
+  const isClosingTurn = priorTurns === MAX_ASSISTANT_TURNS - 1
 
   try {
     // This lead's last turns, newest first from the index, then reversed so the
@@ -123,7 +211,23 @@ async function handleTurn(req: VercelRequest, res: VercelResponse, session: Lead
     const previousStage: RevealStage = asStage(lastAssistant?.reveal_stage) ?? 'none'
 
     const brain = await buildAICoachBrain(session.coachUserId)
-    const system = buildHostedSystemPrompt(session, brain, previousStage)
+
+    // TWO system blocks with the cache breakpoint between them. cache_control
+    // marks the END of the cached prefix, so everything volatile must come
+    // after it — see buildStablePrefix. 1h TTL rather than the default 5m: a
+    // lead reads the panel between turns, and a 5m window expires inside a real
+    // conversation, turning every other turn back into a full-price write.
+    const system = [
+      {
+        type: 'text' as const,
+        text: buildStablePrefix(brain),
+        cache_control: { type: 'ephemeral' as const, ttl: '1h' as const },
+      },
+      {
+        type: 'text' as const,
+        text: buildVolatileSuffix(session, brain, previousCardId, previousStage, isClosingTurn),
+      },
+    ]
 
     // One call, not two: forced tool use brings the prose and the routing back
     // together.
@@ -152,6 +256,10 @@ async function handleTurn(req: VercelRequest, res: VercelResponse, session: Lead
         },
       ],
       tool_choice: { type: 'tool', name: 'reply' },
+    }, {
+      // The 1h cache TTL is behind this beta flag; without it the ttl field is
+      // ignored and the cache silently falls back to 5 minutes.
+      headers: { 'anthropic-beta': 'extended-cache-ttl-2025-04-11' },
     })
 
     // Response-shape tolerance: no tool block falls back to the first text
@@ -183,36 +291,84 @@ async function handleTurn(req: VercelRequest, res: VercelResponse, session: Lead
     // The stage is monotonic: the panel unhides as it rises, and re-hiding
     // something the lead already read reads to them as the page breaking.
     const candidate = asStage(returnedStage)
-    const revealStage: RevealStage =
+    const advanced: RevealStage =
       candidate && STAGE_RANK[candidate] > STAGE_RANK[previousStage] ? candidate : previousStage
+    // The closing turn forces full: the lead is being pointed at the CTA, and
+    // the panel must be showing everything by the time they get there. Forced
+    // server-side as well as instructed in the prompt — the model is asked, the
+    // server guarantees.
+    const revealStage: RevealStage = isClosingTurn ? 'full' : advanced
 
-    // Both rows AFTER the successful model call, user then assistant. A user
-    // turn written first and orphaned by a failed call would sit in the
-    // transcript forever, poison every later prompt, and make the lead's retry
-    // a duplicate. Failing before any write keeps the retry clean.
-    const { error: userErr } = await supabase.from('ai_coach_messages').insert({
-      lead_id: session.leadId,
-      coach_user_id: session.coachUserId,
-      role: 'user',
-      content: message,
+    // ONE multi-row insert, so "a turn is two rows or it is none" is true by
+    // CONSTRUCTION rather than by sequencing. Two separate .insert() calls put
+    // the writes after the model call, which closed the common failure, but the
+    // second could still fail on its own and leave the user row committed —
+    // reachable, for instance, when a coach deletes a blueprint mid-session and
+    // the cached resolved_card_id no longer satisfies its FK at insert time.
+    // PostgREST sends this as a single INSERT … VALUES (…),(…): atomic, so that
+    // FK rejection now fails the whole turn and the lead's retry stays clean.
+    //
+    // created_at is set EXPLICITLY because Postgres now() is the transaction
+    // timestamp and is stable within a statement — both rows would land on the
+    // identical value, and the history read orders by created_at then reverses,
+    // so a tie makes the pair's order nondeterministic and can hand the model a
+    // conversation with its turns scrambled. One millisecond apart keeps
+    // atomicity and ordering together.
+    const userAt = new Date()
+    const assistantAt = new Date(userAt.getTime() + 1)
+    const { error: writeErr } = await supabase.from('ai_coach_messages').insert([
+      {
+        lead_id: session.leadId,
+        coach_user_id: session.coachUserId,
+        role: 'user',
+        content: message,
+        created_at: userAt.toISOString(),
+      },
+      // Only `message` goes in content — the routing values live in their own
+      // columns, never the envelope.
+      {
+        lead_id: session.leadId,
+        coach_user_id: session.coachUserId,
+        role: 'assistant',
+        content: replyText,
+        resolved_card_id: resolvedCardId,
+        reveal_stage: revealStage,
+        created_at: assistantAt.toISOString(),
+      },
+    ])
+    if (writeErr) throw writeErr
+
+    // Lifetime counter, after a turn actually landed. Read-modify-write rather
+    // than an atomic increment: two truly simultaneous turns could both write
+    // the same value and undercount by one, which the per-lead rate limit makes
+    // unlikely and which cannot breach a COST bound by more than one call.
+    const { error: countErr } = await supabase
+      .from('funnel_leads')
+      .update({ ai_coach_turns: priorTurns + 1 })
+      .eq('id', session.leadId)
+    if (countErr) console.error('[ai-coach/chat] turn counter', countErr)
+
+    // Billed to the coach — there is no lead to bill. The cache counts are
+    // passed through so a cost drop is attributable and a hit is
+    // distinguishable from a miss.
+    const usage = response.usage as {
+      input_tokens: number
+      output_tokens: number
+      cache_creation_input_tokens?: number
+      cache_read_input_tokens?: number
+    }
+    await logApiCost(session.coachUserId, 'ai_coach_chat', 'claude-sonnet-5', usage.input_tokens, usage.output_tokens, {
+      creationInputTokens: usage.cache_creation_input_tokens ?? 0,
+      readInputTokens: usage.cache_read_input_tokens ?? 0,
+      ttl: '1h',
     })
-    if (userErr) throw userErr
-    // Only `message` goes in content — the routing values live in their own
-    // columns, never the envelope.
-    const { error: asstErr } = await supabase.from('ai_coach_messages').insert({
-      lead_id: session.leadId,
-      coach_user_id: session.coachUserId,
-      role: 'assistant',
-      content: replyText,
+
+    return res.status(200).json({
+      message: replyText,
       resolved_card_id: resolvedCardId,
       reveal_stage: revealStage,
+      conversation_state: (isClosingTurn ? 'closing' : 'open') as ConversationState,
     })
-    if (asstErr) throw asstErr
-
-    // Billed to the coach — there is no lead to bill.
-    await logApiCost(session.coachUserId, 'ai_coach_chat', 'claude-sonnet-5', response.usage.input_tokens, response.usage.output_tokens)
-
-    return res.status(200).json({ message: replyText, resolved_card_id: resolvedCardId, reveal_stage: revealStage })
   } catch (err) {
     console.error('[ai-coach/chat] POST', err)
     return res.status(500).json({ error: 'chat_failed' })

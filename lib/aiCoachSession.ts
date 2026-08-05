@@ -31,7 +31,10 @@ export type SessionResult = { ok: true; session: LeadSession } | { ok: false; st
 
 const NOT_ACTIVE: { ok: false; status: number; error: string } = { ok: false, status: 404, error: 'not_active' }
 
-const LEAD_COLUMNS = 'id, funnel_id, email, name, first_name, status, application_status, opted_in_at, created_at'
+// ai_coach_turns is the hosted chat's LIFETIME assistant-turn counter, read
+// here so the cap is decided from the session the gate already loaded rather
+// than a second query. Restart never clears it — see migration 085.
+const LEAD_COLUMNS = 'id, funnel_id, email, name, first_name, status, application_status, opted_in_at, created_at, ai_coach_turns'
 const FUNNEL_COLUMNS = 'id, user_id, subdomain, status, generation_id, video_url, problem_solution_label, landing_page'
 
 // Reads the token from the Authorization bearer, ?t=, or an x-coach-token
