@@ -41,8 +41,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .update({ used_at: new Date().toISOString() })
       .eq('id', magicToken.id)
 
-    // Create session JWT
-    const sessionToken = await createSessionToken(magicToken.user_id)
+    // Create session JWT. Stamped as magic_link: the holder just proved control
+    // of the account's inbox, which is what lets set-password accept a new
+    // password without the current one on the forgot-password path.
+    const sessionToken = await createSessionToken(magicToken.user_id, { origin: 'magic_link' })
     setSessionCookie(res as any, sessionToken)
 
     // Redirect with token so cross-domain apps can store it client-side
