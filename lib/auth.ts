@@ -5,21 +5,81 @@ import { supabase } from './supabase'
 const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET!)
 const COOKIE_NAME = 'catm_session'
 
-export async function createSessionToken(userId: string): Promise<string> {
-  return new SignJWT({ userId })
+/**
+ * How the holder proved identity when this session was minted.
+ *
+ * Sessions are otherwise interchangeable — a year-long cookie from a password
+ * login looks exactly like one from an emailed link. `set-password` needs to
+ * tell them apart: proving control of the inbox is what stands in for knowing
+ * the current password on the forgot-password path.
+ *
+ * Absent on every token issued before this claim existed, which reads as
+ * `password` — the safe default, since it is the origin with fewer powers.
+ */
+export type SessionOrigin = 'password' | 'magic_link'
+
+export async function createSessionToken(
+  userId: string,
+  opts: { origin?: SessionOrigin } = {}
+): Promise<string> {
+  const origin: SessionOrigin = opts.origin ?? 'password'
+  return new SignJWT({ userId, origin })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime('1y')
     .sign(JWT_SECRET)
 }
 
-export async function verifySessionToken(token: string): Promise<{ userId: string } | null> {
+export type SessionClaims = {
+  userId: string
+  origin: SessionOrigin
+  /** Unix seconds the token was minted. Absent only on a malformed token. */
+  issuedAt: number | null
+}
+
+export async function verifySessionToken(token: string): Promise<SessionClaims | null> {
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET)
-    return { userId: payload.userId as string }
+    return {
+      userId: payload.userId as string,
+      // Unknown/legacy values collapse to 'password' rather than being trusted
+      // as-is, so a token cannot claim an origin the app does not recognise.
+      origin: payload.origin === 'magic_link' ? 'magic_link' : 'password',
+      issuedAt: typeof payload.iat === 'number' ? payload.iat : null,
+    }
   } catch {
     return null
   }
+}
+
+/**
+ * How long a magic-link session keeps the right to set a password without
+ * knowing the current one. The link itself lives 15 minutes; this is the window
+ * AFTER landing, generous enough for someone reading the email on a phone and
+ * finishing on a laptop, short enough that a year-old session cannot be
+ * replayed into a takeover.
+ *
+ * Expiry is not a lockout: the member requests another link and gets a fresh
+ * window, which is exactly what the 403 tells them to do.
+ */
+export const MAGIC_LINK_PASSWORD_GRACE_SECONDS = 60 * 60
+
+/**
+ * True when this session was minted by a magic link recently enough to stand in
+ * for the current password. Returns false for a token with no `iat` — an
+ * unstampable token cannot be shown to be fresh.
+ */
+export function canSetPasswordWithoutCurrent(
+  claims: Pick<SessionClaims, 'origin' | 'issuedAt'>,
+  nowSeconds: number = Math.floor(Date.now() / 1000)
+): boolean {
+  if (claims.origin !== 'magic_link') return false
+  if (typeof claims.issuedAt !== 'number') return false
+  const age = nowSeconds - claims.issuedAt
+  // A token stamped in the future is a clock skew or a forgery; neither earns
+  // the grace window.
+  if (age < 0) return false
+  return age <= MAGIC_LINK_PASSWORD_GRACE_SECONDS
 }
 
 export function getSessionFromRequest(req: any): string | null {
@@ -91,6 +151,16 @@ export function json(res: ServerResponse, status: number, data: unknown) {
  * `return` immediately. On success it returns the userId.
  */
 export async function requireActiveUser(req: any, res: any): Promise<string | null> {
+  const claims = await requireActiveSession(req, res)
+  return claims ? claims.userId : null
+}
+
+/**
+ * Same gate as requireActiveUser, but hands back the whole verified claim set
+ * instead of just the id. Only endpoints that care HOW the session was proved
+ * need this — today that is set-password alone.
+ */
+export async function requireActiveSession(req: any, res: any): Promise<SessionClaims | null> {
   const token = getSessionFromRequest(req)
   if (!token) {
     res.status(401).json({ error: 'Unauthorized' })
@@ -113,7 +183,7 @@ export async function requireActiveUser(req: any, res: any): Promise<string | nu
     return null
   }
 
-  return payload.userId
+  return payload
 }
 
 /**
