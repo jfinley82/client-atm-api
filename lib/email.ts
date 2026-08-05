@@ -206,7 +206,19 @@ export async function loadCoachBrand(userId: string): Promise<CoachBrand> {
 // URL-validated here so callers can't inject.
 export function brandedEmailHtml(
   brand: CoachBrand,
-  opts: { heading: string; bodyHtml: string; cta?: { label: string; url: string }; unsubscribeUrl?: string }
+  opts: {
+    heading: string
+    bodyHtml: string
+    /** Appends a button AND its P.S. fallback. For bodies with no CTA of their own. */
+    cta?: { label: string; url: string }
+    /**
+     * P.S. fallback ONLY, no appended button — for a bodyHtml that already
+     * carries its button inline (composeEmailBody's output). Pass the same
+     * destination the in-body button points at.
+     */
+    ctaFallbackUrl?: string
+    unsubscribeUrl?: string
+  }
 ): string {
   const color = brand.primaryColor
   const header = brand.logoUrl
@@ -219,14 +231,20 @@ export function brandedEmailHtml(
               <a href="${escapeHtml(opts.cta.url)}" target="_blank" style="display:inline-block;padding:14px 30px;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;color:#FFFFFF;text-decoration:none;border-radius:10px;">${escapeHtml(opts.cta.label)}</a>
             </td></tr></table>`
       : ''
-  // Button fallback: when there IS a CTA button, a plain P.S. below the signature
-  // hyperlinks "Click here" to the SAME coach-specific destination. The raw URL is
-  // never shown as visible text — freeminiworkshop.com is the shared base domain,
-  // so a lead copying/typing the bare domain could land on a different coach's
-  // funnel; only the full href carries the coach's own destination.
+  // Button fallback: whenever a button exists — appended here OR already inline
+  // in bodyHtml — a plain P.S. below the signature hyperlinks "Click here" to the
+  // SAME coach-specific destination.
+  //
+  // This guards a ROUTING failure, not a rendering one, which is why it is not
+  // made redundant by the in-body button degrading gracefully. The raw URL is
+  // never shown as visible text: freeminiworkshop.com is the shared base domain,
+  // so a lead who copies or types the bare domain lands on a DIFFERENT coach's
+  // funnel. Only the full href carries the coach's own destination, so a reader
+  // who cannot use the button needs a link, not something to retype.
+  const psUrl = opts.cta?.url ?? opts.ctaFallbackUrl
   const ps =
-    opts.cta && isValidHttpUrl(opts.cta.url)
-      ? `<p style="margin:12px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:20px;color:#98A2B3;">P.S. Button not working? <a href="${escapeHtml(opts.cta.url)}" target="_blank" style="color:#98A2B3;text-decoration:underline;">Click here</a>.</p>`
+    psUrl && isValidHttpUrl(psUrl)
+      ? `<p style="margin:12px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:20px;color:#98A2B3;">P.S. Button not working? <a href="${escapeHtml(psUrl)}" target="_blank" style="color:#98A2B3;text-decoration:underline;">Click here</a>.</p>`
       : ''
   const foot =
     opts.unsubscribeUrl && isValidHttpUrl(opts.unsubscribeUrl)
@@ -291,6 +309,11 @@ const EMAIL_LI_STYLE = 'margin:0 0 6px;'
  * as a standalone button and gets the vertical breathing room; a token inside a
  * sentence sits in the paragraph flow without disturbing the line.
  *
+ * line-height is set EXPLICITLY rather than inherited. The button renders
+ * inside a <p> carrying EMAIL_P_STYLE's line-height:24px, which a padded
+ * inline-block inherits and renders tall and off-centre. This matters more than
+ * it used to: standalone is now the common case, not the rare one.
+ *
  * Colour is a parameter, not a constant, because it is the coach's brand
  * colour. The button used to be emitted by brandedEmailHtml, which had `brand`
  * in hand; now that it is emitted here, the colour has to arrive with it or
@@ -299,7 +322,7 @@ const EMAIL_LI_STYLE = 'margin:0 0 6px;'
 const EMAIL_BUTTON_STYLE = (color: string, block: boolean): string =>
   `display:inline-block;${block ? 'margin:20px 0 6px;' : 'margin:0 2px;'}` +
   `padding:${block ? '14px 30px' : '8px 18px'};background-color:${color};border-radius:10px;` +
-  'font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;color:#FFFFFF;text-decoration:none;'
+  'font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:20px;font-weight:bold;color:#FFFFFF;text-decoration:none;'
 
 // Turn a canonical email body (plain text + link tokens + lightweight formatting
 // markers) into safe branded HTML. Pipeline per line: escapeHtml → lightweight
@@ -372,6 +395,7 @@ export function linkifyEmailBody(
       const at = escaped.indexOf(primary.token)
       if (at !== -1) {
         primaryPending = false
+        primary.emitted = true
         return resolveTokens(escaped.slice(0, at)) + button + resolveTokens(escaped.slice(at + primary.token.length))
       }
     }
@@ -458,7 +482,11 @@ function isStandaloneOccurrence(body: string, idx: number, len: number): boolean
 }
 
 // The primary CTA, resolved once here and rendered once by linkifyEmailBody.
-type PrimaryCta = { token: string; label: string; url: string; standalone: boolean; color: string }
+// `emitted` is set BY the render, not predicted before it: the P.S. fallback
+// depends on a button actually existing in the output, and inferring that from
+// `cta` being non-null is the same class of mistake that produced the double
+// render — a caller reasoning about markup it cannot see.
+type PrimaryCta = { token: string; label: string; url: string; standalone: boolean; color: string; emitted: boolean }
 
 export type ComposedEmail = {
   /**
@@ -476,6 +504,12 @@ export type ComposedEmail = {
    * button-eligible token resolves to a valid URL.
    */
   cta: { label: string; url: string } | null
+  /**
+   * True when a button is actually present in `bodyHtml`. Gate the P.S.
+   * fallback on THIS, not on `cta` — `cta` describes an intent, this describes
+   * the markup that exists.
+   */
+  buttonRendered: boolean
 }
 
 // The shared compose path for a token-bearing email body. Rules:
@@ -511,11 +545,12 @@ export function composeEmailBody(raw: string, links: EmailLinks, buttonColor: st
         url,
         standalone: isStandaloneOccurrence(body, idx, spec.token.length),
         color: buttonColor,
+        emitted: false,
       }
     }
   }
   const bodyHtml = linkifyEmailBody(body, links.book || '', links.training, links.register, links.guide, primary)
-  return { bodyHtml, cta }
+  return { bodyHtml, cta, buttonRendered: primary?.emitted === true }
 }
 
 const PREVIEW_FUNNEL_DOMAIN = process.env.FUNNEL_PUBLIC_DOMAIN || 'freeminiworkshop.com'

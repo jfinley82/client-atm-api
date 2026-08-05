@@ -211,6 +211,76 @@ const anchors = (html: string) => (html.match(/<a [^>]*>/g) || [])
     ok('and it defaults rather than rendering colourless', /background-color:#[0-9A-Fa-f]{3,8}/.test(dflt.bodyHtml), buttons(dflt.bodyHtml)[0])
   }
 
+  console.log('\n-- STANDALONE is now the COMMON case, so it gets its own pass --')
+  // Before the phrasing fix every body was one line, so the token was always
+  // inline and this branch almost never fired against real data. Now that
+  // paragraphs survive, the model puts the CTA on its own line — all three of
+  // the current warm invites do. This branch has had far less exposure than its
+  // age suggests.
+  {
+    const cases: Array<[string, string]> = [
+      ['token as the entire body', '[REGISTER_LINK]'],
+      ['token as the last block', 'Copy here.\n\n[REGISTER_LINK]'],
+      ['token as the first block', '[REGISTER_LINK]\n\nCopy after.'],
+      ['token alone between two blocks', 'Before.\n\n[REGISTER_LINK]\n\nAfter.'],
+      ['token with trailing spaces on its line', 'Before.\n\n[REGISTER_LINK]   '],
+      ['token with leading spaces on its line', 'Before.\n\n   [REGISTER_LINK]'],
+      ['token followed by a blank line and nothing else', 'Before.\n\n[REGISTER_LINK]\n\n'],
+      ['single newline rather than a blank line', 'Before.\n[REGISTER_LINK]'],
+    ]
+    for (const [label, body] of cases) {
+      const r = email.composeEmailBody(body, LINKS)
+      ok(`${label}: exactly one button`, buttons(r.bodyHtml).length === 1, r.bodyHtml)
+      ok(`${label}: reports buttonRendered`, r.buttonRendered === true, JSON.stringify(r.buttonRendered))
+      ok(`${label}: no leftover raw token`, !r.bodyHtml.includes('[REGISTER_LINK]'), r.bodyHtml)
+    }
+  }
+  {
+    // A bullet line is NOT standalone — the "- " is real content, so this is a
+    // list item and must not claim the block treatment.
+    const bulleted = 'Options:\n\n- [REGISTER_LINK]\n- something else'
+    const r = email.composeEmailBody(bulleted, LINKS)
+    ok('a token in a bullet renders one button', buttons(r.bodyHtml).length === 1, r.bodyHtml)
+    ok('and takes inline spacing, not block', /margin:0 2px/.test(r.bodyHtml), buttons(r.bodyHtml)[0])
+    ok('the list structure survives', /<ul/.test(r.bodyHtml) && /<li/.test(r.bodyHtml), r.bodyHtml)
+  }
+  {
+    // The <p> it lands in carries line-height:24px; the button must set its own
+    // or it renders tall and off-centre in the clients that honour it.
+    const r = email.composeEmailBody('Before.\n\n[REGISTER_LINK]', LINKS)
+    ok('the button sets its own line-height', /line-height:20px/.test(buttons(r.bodyHtml)[0]), buttons(r.bodyHtml)[0])
+  }
+
+  console.log('\n-- the P.S. fallback: gated on a button EXISTING, not on cta --')
+  {
+    const brand = { businessName: 'CoachCo', coachName: 'Coach', primaryColor: '#123456', logoUrl: '', fromName: 'Coach', replyTo: 'c@example.com' } as any
+    const composed = email.composeEmailBody(WARM_BODY, LINKS, brand.primaryColor)
+    const html = email.brandedEmailHtml(brand, {
+      heading: 'Come along',
+      bodyHtml: composed.bodyHtml,
+      ...(composed.buttonRendered && composed.cta ? { ctaFallbackUrl: composed.cta.url } : {}),
+    })
+    ok('the P.S. is present', html.includes('P.S. Button not working?'), html.slice(-700))
+    ok('it links to the same destination as the button', html.includes(`href="${LINKS.register}"`), html.slice(-700))
+    ok('the bare shared domain never appears as visible text', !/>\s*freeminiworkshop\.com\s*</.test(html), html.slice(-700))
+    ok('and NO second button was appended', buttons(html).length === 1, `${buttons(html).length} buttons`)
+
+    // No button in the body -> no P.S., because there is nothing to fall back from.
+    const noCta = email.composeEmailBody('Just words, no token.', LINKS, brand.primaryColor)
+    const plain = email.brandedEmailHtml(brand, {
+      heading: 'Hello',
+      bodyHtml: noCta.bodyHtml,
+      ...(noCta.buttonRendered && noCta.cta ? { ctaFallbackUrl: noCta.cta.url } : {}),
+    })
+    ok('a body with no button gets no P.S.', !plain.includes('P.S. Button not working?'))
+    ok('buttonRendered is false there', noCta.buttonRendered === false)
+
+    // The legacy appended-button path (booking confirmations) is unchanged.
+    const appended = email.brandedEmailHtml(brand, { heading: 'Your call is booked', bodyHtml: '<p>x</p>', cta: { label: 'Join the call', url: 'https://zoom.example/j/1' } })
+    ok('the appended-cta path still renders its button', /Join the call/.test(appended))
+    ok('and still renders its P.S.', appended.includes('P.S. Button not working?'))
+  }
+
   console.log('\n-- STORAGE IS UNTOUCHED: asserted on the column, not the return value --')
   {
     reset()

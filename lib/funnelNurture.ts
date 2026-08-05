@@ -147,12 +147,17 @@ async function scheduleSet(opts: {
     // `cta` is deliberately NOT passed to brandedEmailHtml: the button is
     // already inside bodyHtml, at the token's own position. Passing it would
     // render a second one below the signature.
-    const { bodyHtml } = composeEmailBody(
+    const { bodyHtml, cta, buttonRendered } = composeEmailBody(
       em.body,
       { book: opts.bookUrlForTokens, training, guide: opts.guideUrl },
       opts.brand.primaryColor
     )
-    const html = brandedEmailHtml(opts.brand, { heading: subject, bodyHtml, unsubscribeUrl: unsub })
+    const html = brandedEmailHtml(opts.brand, {
+      heading: subject,
+      bodyHtml,
+      ...(buttonRendered && cta ? { ctaFallbackUrl: cta.url } : {}),
+      unsubscribeUrl: unsub,
+    })
     const scheduledAt = opts.offsets[i] > 0 ? new Date(sendTimeMs).toISOString() : undefined
 
     tasks.push(
@@ -519,10 +524,11 @@ export async function scheduleInviteBroadcast(
         (em.subject && em.subject.trim()) || INVITE_SUBJECTS[i] || INVITE_SUBJECTS[INVITE_SUBJECTS.length - 1]
 
       // No `cta` here either — the button lives inside bodyHtml now.
-      const { bodyHtml } = composeEmailBody(em.body, { book, training, guide: guideUrl }, brand.primaryColor)
+      const { bodyHtml, cta, buttonRendered } = composeEmailBody(em.body, { book, training, guide: guideUrl }, brand.primaryColor)
       const html = brandedEmailHtml(brand, {
         heading: subject,
         bodyHtml,
+        ...(buttonRendered && cta ? { ctaFallbackUrl: cta.url } : {}),
         unsubscribeUrl: unsub,
       })
 

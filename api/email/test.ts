@@ -76,8 +76,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // `cta` is not passed on: bodyHtml already contains the button, at the
     // token's position. A test send must match a real send exactly, and a real
     // send no longer appends one.
-    const { bodyHtml } = composeEmailBody(mergedBody, links, brand.primaryColor)
-    const html = brandedEmailHtml(brand, { heading: mergedSubject, bodyHtml })
+    const { bodyHtml, cta, buttonRendered } = composeEmailBody(mergedBody, links, brand.primaryColor)
+    const html = brandedEmailHtml(brand, {
+      heading: mergedSubject,
+      bodyHtml,
+      ...(buttonRendered && cta ? { ctaFallbackUrl: cta.url } : {}),
+    })
 
     const messageId = await sendOneOffEmail({
       from: `${brand.fromName} <${FROM_ADDRESS}>`,
