@@ -324,10 +324,37 @@ const EMAIL_LI_STYLE = 'margin:0 0 6px;'
  * in hand; now that it is emitted here, the colour has to arrive with it or
  * every coach's button silently reverts to the default.
  */
-const EMAIL_BUTTON_STYLE = (color: string, block: boolean): string =>
-  `display:inline-block;${block ? 'margin:20px 0 6px;' : 'margin:0 2px;'}` +
-  `padding:${block ? '14px 30px' : '8px 18px'};background-color:${color};border-radius:10px;` +
-  'font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:20px;font-weight:bold;color:#FFFFFF;text-decoration:none;'
+// ONE set of metrics that BOTH the anchor and the VML branch compute from.
+//
+// These used to live only inside the anchor's style string, and the VML carried
+// its own hardcoded height — which shipped 44 against the anchor's rendered 48,
+// and then, once that was "fixed" to 48, still ignored the INLINE variant and
+// spliced a 48px block rectangle into the middle of a sentence for Outlook
+// readers. Two renderings that can disagree eventually will; the only durable
+// fix is for both to derive from the same numbers, so a padding change here
+// moves the VML with it and there is no second value to forget.
+const EMAIL_BUTTON_METRICS = {
+  block: { padY: 14, padX: 30, margin: 'margin:20px 0 6px;' },
+  inline: { padY: 8, padX: 18, margin: 'margin:0 2px;' },
+} as const
+const EMAIL_BUTTON_LINE_HEIGHT = 20
+const EMAIL_BUTTON_RADIUS = 10
+
+const emailButtonMetrics = (block: boolean) => EMAIL_BUTTON_METRICS[block ? 'block' : 'inline']
+
+// The button's rendered height for a variant — what the anchor actually draws,
+// and therefore what the VML must say.
+export const emailButtonHeight = (block: boolean): number =>
+  emailButtonMetrics(block).padY * 2 + EMAIL_BUTTON_LINE_HEIGHT
+
+const EMAIL_BUTTON_STYLE = (color: string, block: boolean): string => {
+  const m = emailButtonMetrics(block)
+  return (
+    `display:inline-block;${m.margin}` +
+    `padding:${m.padY}px ${m.padX}px;background-color:${color};border-radius:${EMAIL_BUTTON_RADIUS}px;` +
+    `font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:${EMAIL_BUTTON_LINE_HEIGHT}px;font-weight:bold;color:#FFFFFF;text-decoration:none;`
+  )
+}
 
 // Turn a canonical email body (plain text + link tokens + lightweight formatting
 // markers) into safe branded HTML. Pipeline per line: escapeHtml → lightweight
@@ -385,9 +412,22 @@ export function linkifyEmailBody(
   // Fill colour is `primary.color`, the SAME value the anchor uses. There is
   // deliberately no second default: two branches that can disagree about colour
   // eventually will, and only one of them is visible to whoever is looking.
+  //
+  // The VML takes the SAME standalone/inline variant the anchor does — height
+  // from the shared metrics, width shrunk by the padding difference (the
+  // per-label widths were measured against the block padding), arcsize
+  // recomputed so the corner radius stays 10px whatever the height. The first
+  // version of this branch had one fixed size, which put a 48px block rectangle
+  // mid-sentence for Outlook readers while every other client drew a 36px
+  // inline pill.
+  const msoHeight = primary ? emailButtonHeight(primary.standalone) : 0
+  const msoWidth = primary
+    ? primary.width - 2 * (EMAIL_BUTTON_METRICS.block.padX - emailButtonMetrics(primary.standalone).padX)
+    : 0
+  const msoArcsize = primary ? `${Math.round((EMAIL_BUTTON_RADIUS / msoHeight) * 100)}%` : ''
   const button = primary
     ? `<!--[if mso]>` +
-      `<v:roundrect href="${escapeHtml(primary.url)}" style="height:${EMAIL_BUTTON_MSO_HEIGHT}px;width:${primary.width}px;v-text-anchor:middle;" arcsize="${EMAIL_BUTTON_MSO_ARCSIZE}" stroke="f" fillcolor="${primary.color}">` +
+      `<v:roundrect href="${escapeHtml(primary.url)}" style="height:${msoHeight}px;width:${msoWidth}px;v-text-anchor:middle;" arcsize="${msoArcsize}" stroke="f" fillcolor="${primary.color}">` +
       `<w:anchorlock/>` +
       `<center style="font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;color:#FFFFFF;">${escapeHtml(primary.label)} &rarr;</center>` +
       `</v:roundrect>` +
@@ -478,11 +518,13 @@ export function linkifyEmailBody(
 // and the links-key it resolves against. Order here is only the label/key map —
 // primary selection is by READING ORDER in the body, not this list's order.
 // [GUIDE_LINK] is deliberately absent: the guide/download link is NEVER a button.
-// `width` is the VML rectangle's width in px for the Outlook branch (see
-// EMAIL_BUTTON_MARKUP). VML cannot size itself to its text, and measuring text
-// at runtime is not worth doing for a CLOSED set of three labels — so each
-// label carries its own width, checked by eye against 15px bold Arial plus the
-// button's horizontal padding. A new label needs a new width here.
+// `width` is the VML rectangle's width in px for the Outlook branch, measured
+// (canvas metrics, arrow included) against 15px bold Arial plus the BLOCK
+// variant's horizontal padding, with ~9-13% slack for Word running wider than
+// browser Arial. The INLINE variant's width is derived at emission by
+// subtracting the padding difference — do not add a second width column here.
+// VML cannot size itself to its text, and measuring at runtime is not worth
+// doing for a CLOSED set of three labels. A new label needs a new width.
 const BUTTON_ELIGIBLE: { token: string; label: string; key: 'book' | 'training' | 'register'; width: number }[] = [
   { token: '[BOOK_A_CALL_LINK]', label: 'Book your call', key: 'book', width: 200 },
   { token: '[OFFER_LINK]', label: 'Book your call', key: 'book', width: 200 },
@@ -490,21 +532,25 @@ const BUTTON_ELIGIBLE: { token: string; label: string; key: 'book' | 'training' 
   { token: '[REGISTER_LINK]', label: 'Register', key: 'register', width: 158 },
 ]
 
-// One height for every button, so the three labels stay a consistent control.
-//
-// It must equal what the ANCHOR renders at, or Outlook readers get a visibly
-// different button from everyone else — the same silent-divergence problem as
-// two branches disagreeing about colour. The anchor's block variant is
-// padding:14px top + line-height:20px + padding:14px bottom = 48px. If you
-// change either value in EMAIL_BUTTON_STYLE, change this, and
-// tests/ctaSeam.test.ts recomputes the sum from the emitted style and fails if
-// you did not.
-//
-// arcsize is the VML equivalent of the anchor's 10px border-radius: 10/48 ≈ 21%.
-const EMAIL_BUTTON_MSO_HEIGHT = 48
-const EMAIL_BUTTON_MSO_ARCSIZE = '21%'
+// There are no separate MSO height/arcsize constants any more, on purpose: the
+// VML's dimensions are derived from EMAIL_BUTTON_METRICS at emission, per
+// variant, in linkifyEmailBody. A hardcoded 48 here shipped a 48px block
+// rectangle mid-sentence while the anchor drew a 36px inline pill — a second
+// value to keep in sync is a second value to forget.
 
 export type EmailLinks = { book?: string; training?: string; register?: string; guide?: string }
+
+/**
+ * The coach's sanitized brand colour, for callers that need to compose email
+ * previews without the rest of CoachBrand. The wizard preview painting the
+ * default navy while a real send painted the coach's colour was invisible only
+ * while nobody had set one — the preview must resolve the SAME colour the send
+ * path does, from the same row.
+ */
+export async function loadBrandPrimaryColor(userId: string): Promise<string> {
+  const settings = await loadBusinessSettings(userId)
+  return sanitizeBrandColor(settings.brand_primary_color, DEFAULT_BRAND_PRIMARY)
+}
 
 // True when the token occupying [idx, idx+len) is ALONE on its own line (only
 // surrounding whitespace).
