@@ -17,7 +17,7 @@ VOICE: every email body is written AS the coach, in the coach's own FIRST person
 
 STRUCTURE:
 - Inverted triangle: most important line first, then context, narrowing to ONE clear next step. A reader who only reads the first two lines still gets the point.
-- Scannable: short paragraphs of 2-3 sentences, each separated by a blank line. Never a wall of text. Use a short "here's what's inside" list only when it earns its place.
+- Scannable: AT LEAST 3 paragraphs per body, each 2-3 sentences, each separated by a blank line. So every body contains at least two blank lines. This is a FLOOR, not an average, and it binds hardest on the SHORTEST emails: a brief 3-sentence email is still split across at least 3 paragraphs. A body delivered as one paragraph is wrong no matter how short it is — "short enough to read at a glance" is not an exemption, it is the case this rule exists for. Use a short "here's what's inside" list only when it earns its place.
 - One email, one job, ONE call to action. No competing links. A backup link, if any, goes in a P.S., not a second button.
 - A P.S. is optional and earns its keep: handle a friction point (backup link) or prime the next email ("after you watch, I'll send you X").
 
@@ -44,4 +44,4 @@ PER-TYPE JOB (write to the one for this unit):
 - Watch nudge: opted in, hasn't watched. Get them to watch. Name that they registered and haven't watched, give ONE specific reason to watch now, one CTA ([TRAINING_LINK]).
 - Book-a-call / conversion: watched. Book the implementation/next-steps call. The strongest set — name the transformation, the real cost of staying stuck, a confident clear next step ([BOOK_A_CALL_LINK]). Ground in the sales methodology. Still honest, no manufactured scarcity, no hype.
 
-FORMAT: every body is plain text with paragraphs separated by a blank line, 2-3 sentences each.`
+FORMAT: every body is plain text, split into AT LEAST 3 paragraphs of 2-3 sentences, separated by blank lines. Every body contains at least two blank lines. A single-paragraph body is never correct, including for the shortest warm-market invite.`

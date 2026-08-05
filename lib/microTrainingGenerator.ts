@@ -70,6 +70,10 @@ export type MtSlide = {
   // for reset — this field never participates in the editor's reset behavior. A
   // hand-added slide has none, so it reads as customization (lost on a rebuild).
   gen_snapshot?: SlideSnapshot
+  // The slide editor's background swatch. Editor-owned and never generated; the
+  // backend stores and returns it without interpreting it, so the shape stays
+  // whatever the editor writes (`unknown`, like `elements`).
+  bgColor?: unknown
 }
 // recommended marks the default subset the frontend pre-selects from the pool of
 // candidate exercises; the coach can add or remove the rest. collects/why_fits are
@@ -483,7 +487,7 @@ Rules:
 - Exactly 3 emails. Do NOT sign the body or append the coach's name — the signature is added by the render. End each body at its final line. These go to an EXISTING warm audience who have NOT opted in yet, so the job is to earn the registration — do not talk as if they already registered.
 - Reference the training's promise/angle and the offer's transformation, grounded in this blueprint and this audience. Second person, honest, non-guru: no manufactured scarcity, no inflated or guaranteed promises, no hype vocabulary.
 - One CTA per email, to the opt-in page, using the token [REGISTER_LINK]. Do not use the training/watch link or the call/offer link here — this is pre-opt-in.
-- Format each body per the email canonical: short paragraphs of 2-3 sentences, each separated by a blank line. Never one block.
+- Format each body per the email canonical: AT LEAST 3 paragraphs of 2-3 sentences, each separated by a blank line, so every body contains at least two blank lines. The floor applies to SHORT bodies too — a brief email is still split into at least 3 paragraphs. One paragraph is never correct.
 - Subject lines are hooks, so check each against this before returning:
 ${HOOK_STYLE_REMINDER}
 ${SHARED_RULES}`,
@@ -510,7 +514,7 @@ Rules:
 - Email 1 is the confirmation (deliver the watch link, set the expectation to watch now, prime the next email, P.S. backup link); emails 2-3 explicitly nudge someone who opted in but hasn't watched (name that they registered and haven't watched yet). Teaching-first, honest, non-guru.
 - Email 1 (and ONLY email 1) may also offer the Guide as a bonus companion resource using the [GUIDE_LINK] token — one brief, honest line on what it is. It is a bonus, positioned BELOW the primary watch CTA and must NOT compete with it: [TRAINING_LINK] stays the main action. Do not use [GUIDE_LINK] in emails 2-3.
 - These emails are about WATCHING the recorded video — no live-session language (no "attend", "seat", "join us live"). Do not pitch the offer or a call here.
-- Format each body per the email canonical: short paragraphs of 2-3 sentences, each separated by a blank line. Never one block.
+- Format each body per the email canonical: AT LEAST 3 paragraphs of 2-3 sentences, each separated by a blank line, so every body contains at least two blank lines. The floor applies to SHORT bodies too — a brief email is still split into at least 3 paragraphs. One paragraph is never correct.
 - Subject lines are hooks, so check each against this before returning:
 ${HOOK_STYLE_REMINDER}
 ${SHARED_RULES}`,
@@ -544,7 +548,7 @@ Rules for BOTH variants:
 - Exactly 3 emails, grounded in this blueprint's problem/solution, naming the specific transformation and the blueprint's suggested_offer. Do NOT sign the body or append the coach's name — the signature is added by the render. End each body at its final line.
 - Bring umph: stronger and more direct than the watch-nudges. Name the specific transformation, the real cost of staying stuck, and a confident, clear next step to book. Still honest and non-guru: no manufactured scarcity, no hype, no false urgency, no inflated or guaranteed promises.
 - One CTA per email. Use ONLY the target link the CTA block designates — do not include the other link.
-- Format each body per the email canonical: short paragraphs of 2-3 sentences, each separated by a blank line. Never one block.
+- Format each body per the email canonical: AT LEAST 3 paragraphs of 2-3 sentences, each separated by a blank line, so every body contains at least two blank lines. The floor applies to SHORT bodies too — a brief email is still split into at least 3 paragraphs. One paragraph is never correct.
 - Subject lines are hooks, so check each against this before returning:
 ${HOOK_STYLE_REMINDER}
 ${SHARED_RULES}`,
@@ -671,6 +675,31 @@ export function coerceOutline(v: unknown): MtOutlineItem[] {
     .filter((o) => o.title.trim().length > 0)
 }
 
+/**
+ * Fields the EDITOR writes that the GENERATOR never emits, per collection.
+ *
+ * Every coerce* below is an allowlist: it rebuilds each object from named keys
+ * and drops the rest. That is deliberate and worth keeping — it is what stops
+ * model output from writing arbitrary keys into a persisted blob. The cost is
+ * that anything the editor owns must be named explicitly, or it is deleted by
+ * the next save that round-trips the collection.
+ *
+ * That has now bitten three times: `elements`, `selected`, `bgColor`. Each was
+ * found the same way — by accident, in production, after the data was already
+ * gone. It cannot be found by inspecting stored rows, because a stripped field
+ * is by definition absent from them.
+ *
+ * So this list is the checklist. When the editor starts persisting a new field:
+ * add it here, add the passthrough in the matching coerce, and the round-trip
+ * test in tests/coerceEditorFields.test.ts will hold it.
+ */
+export const EDITOR_OWNED_FIELDS = {
+  slide: ['script', 'speakerNote', 'elements', 'original', 'gen_snapshot', 'bgColor'],
+  exercise: ['selected'],
+  email: ['original'],
+  scriptBeat: ['gen_snapshot'],
+} as const
+
 export function coerceSlides(v: unknown): MtSlide[] {
   if (!Array.isArray(v)) return []
   return v
@@ -704,6 +733,10 @@ export function coerceSlides(v: unknown): MtSlide[] {
       if (o.gen_snapshot && typeof o.gen_snapshot === 'object' && !Array.isArray(o.gen_snapshot)) {
         slide.gen_snapshot = o.gen_snapshot as MtSlide['gen_snapshot']
       }
+      // The editor's background swatch. Checked only for presence, not shape:
+      // the backend never reads this value, and a narrower guess about its type
+      // would be another way to drop it. See EDITOR_OWNED_FIELDS.
+      if (o.bgColor !== undefined) slide.bgColor = o.bgColor
       return slide
     })
     .filter(
@@ -726,13 +759,20 @@ export function coerceWorkbook(v: unknown): MtWorkbook {
         .map((e) => (e && typeof e === 'object' ? (e as Record<string, unknown>) : {}))
         .map((e) => {
           const lines = typeof e.lines === 'number' && Number.isFinite(e.lines) ? Math.round(e.lines) : 4
-          return {
+          const exercise: MtExercise = {
             prompt: asString(e.prompt),
             lines: Math.min(12, Math.max(1, lines)),
             recommended: e.recommended === true,
             collects: asString(e.collects),
             why_fits: asString(e.why_fits),
           }
+          // The coach's guide selection, written by PATCH /api/generate/exercises.
+          // Carried through only when it is actually a boolean, so an untouched
+          // section stays absent and selectedExercises() keeps falling back to
+          // `recommended` rather than reading a section as "coach chose none".
+          // See EDITOR_OWNED_FIELDS.
+          if (typeof e.selected === 'boolean') exercise.selected = e.selected
+          return exercise
         })
         .filter((e) => e.prompt.trim().length > 0)
       return {
