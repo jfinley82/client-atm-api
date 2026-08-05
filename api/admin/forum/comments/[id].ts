@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../../lib/supabase'
 import { requireActiveUser } from '../../../../lib/auth'
 import { setCors } from '../../../../lib/cors'
+import { deleteCommentCascadeAware } from '../../../../lib/forum'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
@@ -24,28 +25,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!id) return res.status(400).json({ error: 'id required' })
 
   try {
-    const { data, error } = await supabase
-      .from('forum_comments')
-      .delete()
-      .eq('id', id)
-      .select('id, post_id')
-      .maybeSingle()
+    // Same function the member path uses, so moderation and self-delete cannot
+    // behave differently: a comment with replies is TOMBSTONED rather than
+    // hard-deleted, because parent_id cascades recursively and a plain delete
+    // here would take other members' replies with it. The comment_count
+    // recompute happens inside, after the delete, so it counts survivors.
+    const result = await deleteCommentCascadeAware(id)
+    if (!result) return res.status(404).json({ error: 'Comment not found' })
 
-    if (error) throw error
-    if (!data) return res.status(404).json({ error: 'Comment not found' })
-
-    // Keep the post's denormalized comment_count in sync with the source of truth
-    const { count } = await supabase
-      .from('forum_comments')
-      .select('id', { count: 'exact', head: true })
-      .eq('post_id', data.post_id)
-
-    await supabase
-      .from('forum_posts')
-      .update({ comment_count: count ?? 0, updated_at: new Date().toISOString() })
-      .eq('id', data.post_id)
-
-    return res.status(200).json({ success: true })
+    return res.status(200).json({ success: true, tombstoned: result.tombstoned })
   } catch (err) {
     console.error('[admin/forum/comments/[id]] DELETE', err)
     return res.status(500).json({ error: 'Failed to delete comment' })
