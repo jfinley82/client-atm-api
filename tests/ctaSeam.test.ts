@@ -28,6 +28,7 @@ const WARM_BODY = 'You asked me about this last week.\n\nIt takes twenty minutes
 let users: Record<string, any> = {}
 let funnels: any[] = []
 let generations: any[] = []
+let bizSettings: Record<string, unknown> | null = null
 let writes: { url: string; body: any }[] = []
 
 function reset() {
@@ -39,6 +40,7 @@ function reset() {
     emails: [], book_a_call_emails: [],
     warm_invite_emails: [{ email_number: 1, send_timing: 'day 1', subject: 'Come along', body: WARM_BODY }],
   }]
+  bizSettings = null
   writes = []
 }
 
@@ -65,6 +67,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
     return json(funnels.filter((f) => !uid || f.user_id === uid))
   }
   if (url.includes('/rest/v1/saved_outputs')) return json(null)
+  if (url.includes('/rest/v1/funnel_business_settings')) return json(bizSettings)
   if (url.includes('/rest/v1/mtm_generations')) {
     if (method === 'PATCH') {
       const id = eqParam(url, 'id')
@@ -183,7 +186,10 @@ const anchors = (html: string) => (html.match(/<a [^>]*>/g) || [])
     const fs = await import('fs')
     const path = await import('path')
     const src = fs.readFileSync(path.join(process.cwd(), 'lib/email.ts'), 'utf8')
-    const decl = src.slice(Math.max(0, src.indexOf('const BUTTON_ELIGIBLE') - 500), src.indexOf('const BUTTON_ELIGIBLE'))
+    // Window sized to the comment block, not a guess: everything from the blank
+    // line that opens the comment run down to the declaration.
+    const declAt = src.indexOf('const BUTTON_ELIGIBLE')
+    const decl = src.slice(src.lastIndexOf('\n\n', declAt), declAt)
     ok('GUIDE_LINK exclusion is documented where it is decided', /GUIDE_LINK.*never a button/is.test(decl), decl.slice(-200))
   }
 
@@ -273,36 +279,62 @@ const anchors = (html: string) => (html.match(/<a [^>]*>/g) || [])
     ok('anchorlock is present so the whole shape is clickable', bodyHtml.includes('<w:anchorlock/>'), bodyHtml)
   }
 
-  console.log('\n-- the two branches must not drift: same label, same height --')
+  console.log('\n-- the two branches must not drift: same label, same size, BOTH variants --')
   // Same failure shape as two branches disagreeing about colour — it renders
   // fine wherever you happen to be looking, and wrong for the readers you
-  // cannot see. Both of these are checked against each other, not against a
-  // hardcoded expectation, so changing one side fails here rather than in an
-  // inbox.
+  // cannot see. Checked against each other, not against hardcoded expectations.
+  //
+  // BOTH VARIANTS, because the first version of this guard only ever fed itself
+  // standalone bodies — and passed while production spliced a 48px block
+  // rectangle mid-sentence for Outlook readers whose anchor-drawing neighbours
+  // saw a 36px inline pill. A drift guard that only sees the case that already
+  // agrees is the same lie as a round-trip test that only round-trips clean data.
+  const parseButton = (bodyHtml: string) => {
+    const anchorStyle = /<a href[^>]*style="([^"]*)"/.exec(bodyHtml)?.[1] ?? ''
+    const pad = /padding:(\d+)px (\d+)px/.exec(anchorStyle)
+    const vmlTag = /<v:roundrect[^>]*>/.exec(bodyHtml)?.[0] ?? ''
+    return {
+      padY: Number(pad?.[1] ?? NaN),
+      padX: Number(pad?.[2] ?? NaN),
+      lineH: Number(/line-height:(\d+)px/.exec(anchorStyle)?.[1] ?? NaN),
+      // Scoped to the v:roundrect tag, and to a `height:` that is NOT the tail
+      // of `line-height:` — the wrapping <p> carries line-height:24px and an
+      // unanchored match picks that up instead.
+      vmlH: Number(/[;"]height:(\d+)px/.exec(vmlTag)?.[1] ?? NaN),
+      vmlW: Number(/[;"]width:(\d+)px/.exec(vmlTag)?.[1] ?? NaN),
+      vmlLabel: /<center[^>]*>([\s\S]*?)<\/center>/.exec(bodyHtml)?.[1] ?? '',
+      anchorLabel: /<a href[^>]*>([\s\S]*?)<\/a>/.exec(bodyHtml)?.[1] ?? '',
+    }
+  }
+  const SHAPES: Array<['standalone' | 'inline', (t: string) => string, number]> = [
+    ['standalone', (t) => `Before.\n\n${t}`, 48],
+    ['inline', (t) => `You can ${t} any time before Friday.`, 36],
+  ]
   for (const [token, label] of [['[REGISTER_LINK]', 'Register'], ['[TRAINING_LINK]', 'Watch the training'], ['[BOOK_A_CALL_LINK]', 'Book your call']] as const) {
-    const { bodyHtml } = email.composeEmailBody(token, LINKS)
-    const vmlLabel = /<center[^>]*>([\s\S]*?)<\/center>/.exec(bodyHtml)?.[1] ?? ''
-    const anchorLabel = /<a href[^>]*>([\s\S]*?)<\/a>/.exec(bodyHtml)?.[1] ?? ''
-    ok(`${label}: both branches carry the identical label string`, vmlLabel === anchorLabel && vmlLabel.length > 0, `vml ${JSON.stringify(vmlLabel)} vs anchor ${JSON.stringify(anchorLabel)}`)
-    ok(`${label}: and the arrow is in both`, vmlLabel.includes('&rarr;') && anchorLabel.includes('&rarr;'), `vml ${JSON.stringify(vmlLabel)}`)
+    for (const [shapeName, mkBody, expectedH] of SHAPES) {
+      const { bodyHtml } = email.composeEmailBody(mkBody(token), LINKS)
+      const b = parseButton(bodyHtml)
+      ok(`${label} ${shapeName}: identical label in both branches`, b.vmlLabel === b.anchorLabel && b.vmlLabel.length > 0, `vml ${JSON.stringify(b.vmlLabel)} vs anchor ${JSON.stringify(b.anchorLabel)}`)
+      ok(`${label} ${shapeName}: arrow in both`, b.vmlLabel.includes('&rarr;') && b.anchorLabel.includes('&rarr;'), JSON.stringify(b.vmlLabel))
+      const rendered = b.padY * 2 + b.lineH
+      ok(`${label} ${shapeName}: anchor renders ${expectedH}px (${b.padY}*2 + ${b.lineH})`, rendered === expectedH, `${rendered}`)
+      ok(`${label} ${shapeName}: VML height matches the anchor exactly (${b.vmlH} === ${rendered})`, b.vmlH === rendered, `vml ${b.vmlH} vs anchor ${rendered}`)
+    }
   }
   {
-    // The VML height is asserted against the anchor's OWN rendered height,
-    // recomputed from the style it actually emitted: padding-top + line-height
-    // + padding-bottom. Change the padding and this fails until the VML follows.
-    const { bodyHtml } = email.composeEmailBody(WARM_BODY, LINKS)
-    const anchorStyle = /<a href[^>]*style="([^"]*)"/.exec(bodyHtml)?.[1] ?? ''
-    const padY = Number(/padding:(\d+)px/.exec(anchorStyle)?.[1] ?? NaN)
-    const lineH = Number(/line-height:(\d+)px/.exec(anchorStyle)?.[1] ?? NaN)
-    // Scoped to the v:roundrect tag, and to a `height:` that is NOT the tail of
-    // `line-height:` — the wrapping <p> carries line-height:24px and an
-    // unanchored match picks that up instead.
-    const vmlTag = /<v:roundrect[^>]*>/.exec(bodyHtml)?.[0] ?? ''
-    const vmlH = Number(/[;"]height:(\d+)px/.exec(vmlTag)?.[1] ?? NaN)
-    const rendered = padY * 2 + lineH
-    ok('the anchor style is parseable for a height', Number.isFinite(padY) && Number.isFinite(lineH), anchorStyle)
-    ok(`the anchor renders 48px (${padY}*2 + ${lineH})`, rendered === 48, `${rendered}`)
-    ok(`the VML height matches it exactly (${vmlH} === ${rendered})`, vmlH === rendered, `vml ${vmlH} vs anchor ${rendered}`)
+    // Width: the per-label constants were measured against the BLOCK padding,
+    // so the inline VML must be narrower by exactly the padding difference —
+    // computed here from the two anchors' own emitted styles, not restated.
+    const block = parseButton(email.composeEmailBody('Before.\n\n[REGISTER_LINK]', LINKS).bodyHtml)
+    const inline = parseButton(email.composeEmailBody('You can [REGISTER_LINK] now.', LINKS).bodyHtml)
+    const padDelta = 2 * (block.padX - inline.padX)
+    ok('the two variants really do use different padding', padDelta > 0, `block ${block.padX} inline ${inline.padX}`)
+    ok(`inline VML is narrower by exactly the padding delta (${block.vmlW} - ${padDelta} = ${inline.vmlW})`, inline.vmlW === block.vmlW - padDelta, `block ${block.vmlW} inline ${inline.vmlW} delta ${padDelta}`)
+    // Arcsize keeps the same 10px corner radius whatever the height.
+    const arc = (h: string) => /arcsize="(\d+)%"/.exec(h)?.[1]
+    const blockArc = arc(email.composeEmailBody('Before.\n\n[REGISTER_LINK]', LINKS).bodyHtml)
+    const inlineArc = arc(email.composeEmailBody('You can [REGISTER_LINK] now.', LINKS).bodyHtml)
+    ok(`arcsize is recomputed per height (block ${blockArc}%, inline ${inlineArc}%)`, blockArc === '21' && inlineArc === '28', `${blockArc} / ${inlineArc}`)
   }
   {
     // Widths are per-label, and every eligible label has one.
@@ -402,6 +434,35 @@ const anchors = (html: string) => (html.match(/<a [^>]*>/g) || [])
     ok('the response carried a rendered body_html', typeof rendered?.body_html === 'string' && rendered.body_html.length > 0, JSON.stringify(rendered)?.slice(0, 200))
     ok('with exactly one button in it', buttons(rendered?.body_html || '').length === 1, rendered?.body_html)
     ok('and body is returned unchanged alongside it', rendered?.body === WARM_BODY, JSON.stringify(rendered?.body))
+  }
+
+  console.log('\n-- the wizard PREVIEW paints the coach colour a real send uses --')
+  // withEmailPreview used to call composeEmailBody without the brand colour, so
+  // the preview painted the default navy while a real send painted the coach's.
+  // Invisible while every row used the default; diverges the moment one does not.
+  {
+    reset()
+    bizSettings = { user_id: USER, brand_primary_color: '#AB34CD' }
+    const res = await call(generateHandler, { query: { card_id: CARD } })
+    const rendered = res.body?.warm_invite_emails?.[0]?.body_html ?? ''
+    ok('the preview button carries the coach colour', rendered.includes('background-color:#AB34CD'), rendered)
+    ok('and the VML branch carries the SAME colour', rendered.includes('fillcolor="#AB34CD"'), rendered)
+    ok('the default navy is nowhere in the button', !buttons(rendered).some((b: string) => !b.includes('#AB34CD')), JSON.stringify(buttons(rendered)))
+
+    // No settings row -> the sanitized default, not a crash and not colourless.
+    reset()
+    bizSettings = null
+    const fallback = await call(generateHandler, { query: { card_id: CARD } })
+    const fb = fallback.body?.warm_invite_emails?.[0]?.body_html ?? ''
+    ok('no settings row still renders a coloured button', /background-color:#[0-9A-Fa-f]{3,8}/.test(fb), fb)
+
+    // An invalid stored colour is sanitized, never interpolated into markup.
+    reset()
+    bizSettings = { user_id: USER, brand_primary_color: '"><script>alert(1)</script>' }
+    const evil = await call(generateHandler, { query: { card_id: CARD } })
+    const ev = evil.body?.warm_invite_emails?.[0]?.body_html ?? ''
+    ok('an invalid colour falls back to the default', /background-color:#[0-9A-Fa-f]{3,8}/.test(ev), ev)
+    ok('and never reaches the markup', !ev.includes('script>'), ev)
   }
 
   globalThis.fetch = realFetch

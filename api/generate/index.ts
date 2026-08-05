@@ -40,7 +40,7 @@ import {
   coerceAnglePreviews,
 } from '../../lib/microTrainingGenerator'
 import { BEAT_TEACHING } from '../../lib/slideDeckCanonical'
-import { composeEmailBody, resolvePreviewEmailLinks, emailBodyHasRawHtml, type EmailLinks } from '../../lib/email'
+import { composeEmailBody, resolvePreviewEmailLinks, loadBrandPrimaryColor, emailBodyHasRawHtml, type EmailLinks } from '../../lib/email'
 import { sanitizePhrasingDeep } from '../../lib/phrasing'
 import { avatarUrlForSeed, personaSeedFromAudience, personaGenderFromAudience, AvatarGender } from '../../lib/avatars'
 
@@ -302,14 +302,17 @@ function sanitizeGenRead<T extends Record<string, unknown>>(row: T): T {
  * next save writes back copy with their CTA silently deleted. The editor binds
  * to `body`, the preview to `body_html` + `cta`.
  */
-function withEmailPreview<T extends Record<string, unknown>>(row: T, links: EmailLinks): T {
+function withEmailPreview<T extends Record<string, unknown>>(row: T, links: EmailLinks, brandColor: string): T {
   const enrich = (list: unknown): unknown => {
     if (!Array.isArray(list)) return list
     return list.map((e) => {
       if (!e || typeof e !== 'object') return e
       const email = e as Record<string, unknown>
       if (typeof email.body !== 'string') return email
-      const { bodyHtml, cta } = composeEmailBody(email.body, links)
+      // brandColor is required, not defaulted: the preview must paint the same
+      // button a real send does, and a silent default here only looks right for
+      // coaches who never set a colour.
+      const { bodyHtml, cta } = composeEmailBody(email.body, links, brandColor)
       return { ...email, body_html: bodyHtml, cta }
     })
   }
@@ -968,8 +971,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Resolved ONCE for the whole read rather than per email: every email in all
-    // three sequences composes against the same coach links.
-    const { links: previewLinks, resolved: previewResolved } = await resolvePreviewEmailLinks(userId)
+    // three sequences composes against the same coach links and brand colour.
+    const [{ links: previewLinks, resolved: previewResolved }, previewBrandColor] = await Promise.all([
+      resolvePreviewEmailLinks(userId),
+      loadBrandPrimaryColor(userId),
+    ])
 
     // GET with id — return a single generation (must belong to the user)
     if (id && typeof id === 'string') {
@@ -985,7 +991,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (!data) return res.status(404).json({ error: 'Generation not found' })
         // beat_teaching is the static, universal per-beat coaching copy; the
         // frontend renders each slide's note from beat_teaching[slide.sectionName].
-        return res.status(200).json({ ...withEmailPreview(withAvatar(withAngleFields(sanitizeGenRead(data)), personaSeed, personaName, personaGender), previewLinks), beat_teaching: BEAT_TEACHING, email_links: previewResolved })
+        return res.status(200).json({ ...withEmailPreview(withAvatar(withAngleFields(sanitizeGenRead(data)), personaSeed, personaName, personaGender), previewLinks, previewBrandColor), beat_teaching: BEAT_TEACHING, email_links: previewResolved })
       } catch (err) {
         console.error('[generate] GET one', err)
         return res.status(500).json({ error: 'Failed to load generation' })
@@ -1007,7 +1013,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (error) throw error
         // beat_teaching is the static, universal per-beat coaching copy; the
         // frontend renders each slide's note from beat_teaching[slide.sectionName].
-        return res.status(200).json(data ? { ...withEmailPreview(withAvatar(withAngleFields(sanitizeGenRead(data)), personaSeed, personaName, personaGender), previewLinks), beat_teaching: BEAT_TEACHING, email_links: previewResolved } : null)
+        return res.status(200).json(data ? { ...withEmailPreview(withAvatar(withAngleFields(sanitizeGenRead(data)), personaSeed, personaName, personaGender), previewLinks, previewBrandColor), beat_teaching: BEAT_TEACHING, email_links: previewResolved } : null)
       } catch (err) {
         console.error('[generate] GET by card_id', err)
         return res.status(500).json({ error: 'Failed to load generation' })
