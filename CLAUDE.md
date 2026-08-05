@@ -160,3 +160,14 @@ with character-identical copy, i.e. no regeneration involved. Two consequences:
 read-path transforms need the same care as write-path ones, and `original` is
 excluded from `sanitizePhrasingDeep`'s walk so a read→save cycle can't launder
 mangled copy into the baseline that detects coach edits.
+
+**Two renderings of the same thing drift apart, and it looks fine wherever you
+test.** The email CTA button is emitted twice — a VML branch only Outlook draws,
+an anchor branch everyone else draws — and the VML shipped 44px tall against the
+anchor's rendered 48px, invisible from any client we could check. When two
+branches must render the same control for audiences that can't see each other,
+assert them **against each other**, not against constants: `tests/ctaSeam.test.ts`
+extracts both labels from the same output and compares them, and recomputes the
+anchor's height from its emitted style (`padding*2 + line-height`) to check the
+VML matches. Same shape as the button colour being one parameter, never two
+defaults — if the branches *can* disagree, they eventually will.
