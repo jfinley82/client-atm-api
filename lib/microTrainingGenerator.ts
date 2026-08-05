@@ -348,7 +348,7 @@ const HOOK_STYLE_REMINDER = `HOOK CONSTRUCTION. Write every hook, title, angle, 
 // exactly one.
 type UnitSpec = { key: AssetUnit; maxTokens: number; prompt: string }
 
-const UNIT_SPECS: Record<AssetUnit, UnitSpec> = {
+export const UNIT_SPECS: Record<AssetUnit, UnitSpec> = {
   meta: {
     key: 'meta',
     maxTokens: 2500,
@@ -477,11 +477,16 @@ ${EMAIL_CANONICAL}
 
 {
   "warm_invite_emails": [
-    { "email_number": 1, "send_timing": "day 1, announce the training", "subject": "subject line", "body": "lead with the reader's problem in 'you' language, tease the training's payoff, invite them to register. End with the opt-in CTA using [REGISTER_LINK]." },
-    { "email_number": 2, "send_timing": "day 3, the specific result", "subject": "subject line", "body": "go deeper on the transformation the training opens the door to and who it is for, in 'you' language. End with [REGISTER_LINK]." },
-    { "email_number": 3, "send_timing": "day 5, last call to register", "subject": "subject line", "body": "one clear, honest reason to register and watch now. End with [REGISTER_LINK]." }
+    { "email_number": 1, "send_timing": "day 1, announce the training", "subject": "subject line", "body": "..." },
+    { "email_number": 2, "send_timing": "day 3, the specific result", "subject": "subject line", "body": "..." },
+    { "email_number": 3, "send_timing": "day 5, last call to register", "subject": "subject line", "body": "..." }
   ]
 }
+
+Each email's job, in order:
+- Email 1 announces the training: lead with the reader's problem in "you" language. Tease the payoff the training delivers. Invite them to register.
+- Email 2 goes deeper on the specific result: the transformation the training opens the door to, and who it is for, in "you" language.
+- Email 3 is the last call: one clear, honest reason to register and watch now.
 
 Rules:
 - Exactly 3 emails. Do NOT sign the body or append the coach's name — the signature is added by the render. End each body at its final line. These go to an EXISTING warm audience who have NOT opted in yet, so the job is to earn the registration — do not talk as if they already registered.
