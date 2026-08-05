@@ -2,8 +2,9 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { createSessionToken, setSessionCookie } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
+import { APP_URL } from '../../lib/appUrls'
 
-const APP_URL = process.env.APP_URL || 'https://app.clientatmbuilder.com'
+
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return

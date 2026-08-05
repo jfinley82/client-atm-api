@@ -4,8 +4,9 @@ import { setCors } from '../../../lib/cors'
 import { requireActiveUser } from '../../../lib/auth'
 import { isGoogleConfigured, signOAuthState, buildConsentUrl, hashNonce } from '../../../lib/googleCalendar'
 import { isTokenKeyConfigured } from '../../../lib/cryptoTokens'
+import { APP_URL } from '../../../lib/appUrls'
 
-const APP_URL = process.env.APP_URL || 'https://app.microtrainingmethod.com'
+
 const NONCE_COOKIE = 'catm_gcal_nonce'
 
 // GET /api/calendar/google/connect — authed. Sets a per-flow nonce cookie, then

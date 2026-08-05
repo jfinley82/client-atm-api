@@ -29,6 +29,13 @@ export function rateLimit(key: string, limit = 10, windowMs = 60_000): boolean {
   return true
 }
 
+// Test-only: the buckets are module scope, so a suite that drives one key past
+// its limit inside the window starts getting 429s from unrelated later cases.
+// Never called in production.
+export function _clearRateLimitForTests(): void {
+  buckets.clear()
+}
+
 // Best-effort client IP from the standard proxy headers Vercel sets.
 export function clientIp(req: any): string {
   const xff = req.headers?.['x-forwarded-for']

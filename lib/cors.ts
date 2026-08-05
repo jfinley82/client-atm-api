@@ -21,7 +21,12 @@ export function setCors(req: any, res: any): boolean {
   res.setHeader('Access-Control-Allow-Origin', allowOrigin)
   res.setHeader('Access-Control-Allow-Credentials', 'true')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS, DELETE')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept')
+  // x-coach-token is how the lead-facing AI coach shell carries its session
+  // after first load — readCoachToken() checks it FIRST. The shell is
+  // cross-origin, so without it here the browser fails the preflight and the
+  // header never arrives; Authorization: Bearer and ?t= both work, which is
+  // what makes the failure look like a shell bug rather than a CORS one.
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, x-coach-token')
   res.setHeader('Vary', 'Origin')
 
   if (req.method === 'OPTIONS') {
