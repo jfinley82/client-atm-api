@@ -5,6 +5,8 @@ import { setCors } from '../../lib/cors'
 import { getVoiceContext } from '../../lib/voiceGuide'
 import { getMemberSnapshot } from '../../lib/assistantContext'
 import { getActiveHistory, appendMessages } from '../../lib/assistantHistory'
+import { rateLimit } from '../../lib/rateLimit'
+import { logApiCost } from '../../lib/apiCostLog'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -32,9 +34,11 @@ const PERSONA = `You are the MTM Coach, the built-in assistant inside the Micro-
 
 Your manner is a coach's: warm, direct, plain-spoken, encouraging, never fluffy. Be specific. When the member is stuck, name the exact step or screen to go to next. When the member context below includes their own work, use it and refer to it by name. If the context does not include something specific, like a name, a price, or a title, treat it as not visible to you: say so plainly and point to the screen where it lives, without guessing where else it might be or suggesting something is broken. Never invent their avatar, framework, offers, or Blueprints.
 
-Answer only what the member just asked, and answer it first — the first sentence of every reply must address their current message, not an earlier one. Do not open a reply with a status update about something from a previous question (an avatar name, the gap, anything else that isn't set yet) unless the CURRENT question is specifically about that exact thing. This applies even when the earlier topic feels related to the current one — a question about the AI Coach Builder does not need a reminder about the avatar name, and a question about the gap does not need a reminder about anything else. If a next-step nudge is genuinely relevant to what they just asked, put it in one line at the END of your reply, never the beginning, and never about a topic other than the one they asked about. Do not use the member's unfinished steps as a recurring theme you weave into unrelated answers — mention an unfinished step only when they ask about that specific thing or ask what to do next.
+Answer only what the member just asked, and answer it first — the first sentence of every reply must address their current message, not an earlier one. Do not open a reply with a status update about something from a previous question (an avatar name, the gap, anything else that isn't set yet) unless the CURRENT question is specifically about that exact thing. This applies even when the earlier topic feels related to the current one — a question about the AI Coaching Client Qualifying Tool does not need a reminder about the avatar name, and a question about the gap does not need a reminder about anything else. If a next-step nudge is genuinely relevant to what they just asked, put it in one line at the END of your reply, never the beginning, and never about a topic other than the one they asked about. Do not use the member's unfinished steps as a recurring theme you weave into unrelated answers — mention an unfinished step only when they ask about that specific thing or ask what to do next.
 
-Reply length: 2-4 sentences for most answers. Only go longer when you're walking through concrete steps the member needs to follow one by one. If a reply needs more than 2-3 sentences, break it into short paragraphs with a blank line between them instead of one dense block, since members read these in a small chat widget.`
+Reply length: 2-4 sentences for most answers. Only go longer when you're walking through concrete steps the member needs to follow one by one. If a reply needs more than 2-3 sentences, break it into short paragraphs with a blank line between them instead of one dense block, since members read these in a small chat widget.
+
+Write plain sentences with no markdown syntax — no **bold**, no *italics*, no # headings, no bullet markers. The chat widget renders your reply as plain text, so members see the asterisks as literal characters.`
 
 const METHOD_KNOWLEDGE = `THE MICRO-TRAINING METHOD
 The method takes a coach from a fuzzy offer to a sellable micro-training in three steps, then into assets.
@@ -57,7 +61,7 @@ THE ASSET CREATORS, each builds from the member's validated Blueprint
 - Program Creator: turns the method into a full program outline.
 - Content Creator: drafts posts and emails from the Blueprint.
 - Micro-Training Creator: builds a full micro-training, the teaching deck and script, for one Blueprint.
-- AI Coach Builder: builds a coaching bot the member can give to leads or sell as part of a low-ticket product. It generates a copy-paste system prompt for a Custom GPT or a Claude Project. The bot surfaces the lead's real problem and guides them to one of three paths: book a call, buy the low-ticket offer, or buy the coaching offer. To deploy it, the member pastes the prompt into a Custom GPT under the Configure tab in the Instructions box, or into a Claude Project's instructions, then shares the link or hands over the prompt.
+- AI Coaching Client Qualifying Tool: builds a coaching bot the member can give to leads or sell as part of a low-ticket product. It generates a copy-paste system prompt for a Custom GPT or a Claude Project. The bot surfaces the lead's real problem and guides them to one of three paths: book a call, buy the low-ticket offer, or buy the coaching offer. To deploy it, the member pastes the prompt into a Custom GPT under the Configure tab in the Instructions box, or into a Claude Project's instructions, then shares the link or hands over the prompt.
 
 COMMUNITY AND HELP
 Members can ask questions in the community and join weekly office hours. For anything you cannot resolve, point them to the community, office hours, or Support.`
@@ -100,6 +104,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const userId = await requireActiveUser(req, res)
   if (!userId) return
 
+  // Keyed by member, not IP: the caller is authenticated, the cost is per
+  // account, and the bubble now mounts on every member page. Best-effort
+  // per-instance, same as everywhere else this limiter is used.
+  if (!rateLimit(`assistant_chat:${userId}`, 20, 60_000)) {
+    return res.status(429).json({ error: 'rate_limited' })
+  }
+
   try {
     const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
     const newMessage = extractNewTurn(body)
@@ -124,6 +135,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       system,
       messages: turns.map((m) => ({ role: m.role, content: m.content })),
     })
+
+    // Every other model call in the app logs a cost row; this one silently
+    // didn't, so thirty assistant calls carrying the member snapshot, voice
+    // guide, and up to twenty turns were invisible on Admin API Costs.
+    await logApiCost(userId, 'assistant', 'claude-sonnet-5', completion.usage.input_tokens, completion.usage.output_tokens)
 
     const reply =
       completion.content[0]?.type === 'text'
