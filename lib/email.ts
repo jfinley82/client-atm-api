@@ -250,8 +250,13 @@ export function brandedEmailHtml(
     opts.unsubscribeUrl && isValidHttpUrl(opts.unsubscribeUrl)
       ? `<p style="margin:16px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:18px;color:#98A2B3;">Sent by ${escapeHtml(brand.businessName)}. <a href="${escapeHtml(opts.unsubscribeUrl)}" target="_blank" style="color:#98A2B3;text-decoration:underline;">Unsubscribe</a>.</p>`
       : `<p style="margin:16px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:18px;color:#98A2B3;">Sent by ${escapeHtml(brand.businessName)}.</p>`
+  // >>> COUPLING: xmlns:v and xmlns:w are NOT decoration. linkifyEmailBody emits
+  // a VML <v:roundrect> inside an <!--[if mso]--> branch for the CTA button, and
+  // that markup is inert in Outlook without these declarations — the button
+  // silently disappears there while looking perfect everywhere else. Nothing in
+  // the type system connects the two, so if you move either one, move both. <<<
   return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
 <body style="margin:0;padding:0;background-color:#F4F6F9;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F4F6F9;">
     <tr><td align="center" style="padding:40px 16px;">
@@ -364,8 +369,32 @@ export function linkifyEmailBody(
 
   // The arrow is a BUTTON-ONLY affordance. The stored labels stay as they are —
   // the lowercase inline anchor text ("register") is deliberate mid-sentence.
+  //
+  // TWO MUTUALLY EXCLUSIVE BRANCHES. Outlook's Word engine ignores
+  // display:inline-block padding on an <a>, which would render the button as
+  // plain text — and standalone is now the common position, so that is the
+  // usual case rather than an edge one. So Outlook gets a VML rectangle and
+  // every other client gets the anchor unchanged, each fenced off from the
+  // other so no client draws both.
+  //
+  // >>> COUPLING: the VML below needs xmlns:v and xmlns:w declared on the
+  // <html> element, which lives in brandedEmailHtml. This markup is inert
+  // without that declaration and there is nothing in the type system linking
+  // them, so if you move either one, move both. <<<
+  //
+  // Fill colour is `primary.color`, the SAME value the anchor uses. There is
+  // deliberately no second default: two branches that can disagree about colour
+  // eventually will, and only one of them is visible to whoever is looking.
   const button = primary
-    ? `<a href="${escapeHtml(primary.url)}" target="_blank" style="${EMAIL_BUTTON_STYLE(primary.color, primary.standalone)}">${escapeHtml(primary.label)} &rarr;</a>`
+    ? `<!--[if mso]>` +
+      `<v:roundrect href="${escapeHtml(primary.url)}" style="height:${EMAIL_BUTTON_MSO_HEIGHT}px;width:${primary.width}px;v-text-anchor:middle;" arcsize="${EMAIL_BUTTON_MSO_ARCSIZE}" stroke="f" fillcolor="${primary.color}">` +
+      `<w:anchorlock/>` +
+      `<center style="font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;color:#FFFFFF;">${escapeHtml(primary.label)} &rarr;</center>` +
+      `</v:roundrect>` +
+      `<![endif]-->` +
+      `<!--[if !mso]><!-->` +
+      `<a href="${escapeHtml(primary.url)}" target="_blank" style="${EMAIL_BUTTON_STYLE(primary.color, primary.standalone)}">${escapeHtml(primary.label)} &rarr;</a>` +
+      `<!--<![endif]-->`
     : ''
   // Only the FIRST occurrence in reading order becomes the button. Blocks and
   // lines are both walked in document order, so the first one this flag sees is
@@ -449,12 +478,22 @@ export function linkifyEmailBody(
 // and the links-key it resolves against. Order here is only the label/key map —
 // primary selection is by READING ORDER in the body, not this list's order.
 // [GUIDE_LINK] is deliberately absent: the guide/download link is NEVER a button.
-const BUTTON_ELIGIBLE: { token: string; label: string; key: 'book' | 'training' | 'register' }[] = [
-  { token: '[BOOK_A_CALL_LINK]', label: 'Book your call', key: 'book' },
-  { token: '[OFFER_LINK]', label: 'Book your call', key: 'book' },
-  { token: '[TRAINING_LINK]', label: 'Watch the training', key: 'training' },
-  { token: '[REGISTER_LINK]', label: 'Register', key: 'register' },
+// `width` is the VML rectangle's width in px for the Outlook branch (see
+// EMAIL_BUTTON_MARKUP). VML cannot size itself to its text, and measuring text
+// at runtime is not worth doing for a CLOSED set of three labels — so each
+// label carries its own width, checked by eye against 15px bold Arial plus the
+// button's horizontal padding. A new label needs a new width here.
+const BUTTON_ELIGIBLE: { token: string; label: string; key: 'book' | 'training' | 'register'; width: number }[] = [
+  { token: '[BOOK_A_CALL_LINK]', label: 'Book your call', key: 'book', width: 200 },
+  { token: '[OFFER_LINK]', label: 'Book your call', key: 'book', width: 200 },
+  { token: '[TRAINING_LINK]', label: 'Watch the training', key: 'training', width: 232 },
+  { token: '[REGISTER_LINK]', label: 'Register', key: 'register', width: 158 },
 ]
+
+// One height for every button, so the three labels stay a consistent control.
+// arcsize is the VML equivalent of the anchor's 10px border-radius: 10/44 ≈ 23%.
+const EMAIL_BUTTON_MSO_HEIGHT = 44
+const EMAIL_BUTTON_MSO_ARCSIZE = '23%'
 
 export type EmailLinks = { book?: string; training?: string; register?: string; guide?: string }
 
@@ -486,7 +525,7 @@ function isStandaloneOccurrence(body: string, idx: number, len: number): boolean
 // depends on a button actually existing in the output, and inferring that from
 // `cta` being non-null is the same class of mistake that produced the double
 // render — a caller reasoning about markup it cannot see.
-type PrimaryCta = { token: string; label: string; url: string; standalone: boolean; color: string; emitted: boolean }
+type PrimaryCta = { token: string; label: string; url: string; standalone: boolean; color: string; width: number; emitted: boolean }
 
 export type ComposedEmail = {
   /**
@@ -545,6 +584,7 @@ export function composeEmailBody(raw: string, links: EmailLinks, buttonColor: st
         url,
         standalone: isStandaloneOccurrence(body, idx, spec.token.length),
         color: buttonColor,
+        width: spec.width,
         emitted: false,
       }
     }

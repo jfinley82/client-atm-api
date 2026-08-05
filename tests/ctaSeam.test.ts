@@ -251,6 +251,78 @@ const anchors = (html: string) => (html.match(/<a [^>]*>/g) || [])
     ok('the button sets its own line-height', /line-height:20px/.test(buttons(r.bodyHtml)[0]), buttons(r.bodyHtml)[0])
   }
 
+  console.log('\n-- Outlook branch: VML for mso, the anchor for everything else --')
+  // Outlook's Word engine ignores display:inline-block padding on an <a>, so the
+  // button would render as plain text there — and standalone is the common
+  // position now, so that is the usual case, not an edge one.
+  {
+    const { bodyHtml } = email.composeEmailBody(WARM_BODY, LINKS, '#123456')
+    ok('an mso branch exists', bodyHtml.includes('<!--[if mso]>') && bodyHtml.includes('<![endif]-->'), bodyHtml)
+    ok('carrying a VML rectangle', /<v:roundrect[^>]*>/.test(bodyHtml), bodyHtml)
+    ok('the non-mso branch fences the anchor', bodyHtml.includes('<!--[if !mso]><!-->') && bodyHtml.includes('<!--<![endif]-->'), bodyHtml)
+    ok('the anchor is INSIDE that branch', bodyHtml.indexOf('<!--[if !mso]><!-->') < bodyHtml.indexOf('<a href'), bodyHtml)
+    ok('and the anchor kept its line-height fix', /line-height:20px/.test(bodyHtml), bodyHtml)
+
+    // One colour, one source. Two branches that can disagree eventually will,
+    // and only one of them is visible to whoever is looking.
+    ok('VML fill uses the brand colour', bodyHtml.includes('fillcolor="#123456"'), bodyHtml)
+    ok('the anchor uses the same colour', bodyHtml.includes('background-color:#123456'), bodyHtml)
+    ok('no second default colour is introduced', (bodyHtml.match(/#123456/g) || []).length === 2, bodyHtml)
+
+    ok('VML is sized from the label constant, not measured', bodyHtml.includes('width:158px'), bodyHtml)
+    ok('and shares the common height', bodyHtml.includes('height:44px'), bodyHtml)
+    ok('the VML label matches the anchor label', (bodyHtml.match(/Register &rarr;/g) || []).length === 2, bodyHtml)
+    ok('anchorlock is present so the whole shape is clickable', bodyHtml.includes('<w:anchorlock/>'), bodyHtml)
+  }
+  {
+    // Widths are per-label, and every eligible label has one.
+    const perLabel: Array<[string, string, number]> = [
+      ['[REGISTER_LINK]', 'Register', 158],
+      ['[TRAINING_LINK]', 'Watch the training', 232],
+      ['[BOOK_A_CALL_LINK]', 'Book your call', 200],
+      ['[OFFER_LINK]', 'Book your call', 200],
+    ]
+    for (const [token, label, width] of perLabel) {
+      const { bodyHtml } = email.composeEmailBody(token, LINKS)
+      ok(`${label}: VML width is ${width}px`, bodyHtml.includes(`width:${width}px`), bodyHtml)
+    }
+  }
+
+  console.log('\n-- the BROWSER PREVIEW is a real surface: body_html renders there too --')
+  // Conditional comments are inert in a browser, but only if they are well
+  // formed. A malformed fence leaks VML into the preview as visible text.
+  {
+    const { bodyHtml } = email.composeEmailBody(WARM_BODY, LINKS)
+    // What a browser actually keeps: everything outside HTML comments.
+    const visible = bodyHtml.replace(/<!--[\s\S]*?-->/g, '')
+    ok('exactly one visible anchor', (visible.match(/<a /g) || []).length === 1, visible)
+    ok('no v:roundrect survives as markup', !/v:roundrect/.test(visible), visible)
+    ok('no w:anchorlock survives', !/anchorlock/.test(visible), visible)
+    ok('no "if mso" leaks as text', !/if mso/i.test(visible), visible)
+    ok('no "endif" leaks as text', !/endif/i.test(visible), visible)
+    ok('no stray fillcolor attribute', !/fillcolor/.test(visible), visible)
+    ok('the visible anchor is the styled button', /background-color:/.test(visible), visible)
+    // Strip tags too — nothing from the Outlook branch should read as copy.
+    const text = visible.replace(/<[^>]*>/g, '')
+    ok('the button label appears exactly once as text', (text.match(/Register/g) || []).length === 1, JSON.stringify(text))
+  }
+
+  console.log('\n-- the coupling: VML needs namespaces that live in another function --')
+  {
+    const brand = { businessName: 'CoachCo', coachName: 'Coach', primaryColor: '#123456', logoUrl: '', fromName: 'Coach', replyTo: 'c@example.com' } as any
+    const composed = email.composeEmailBody(WARM_BODY, LINKS, brand.primaryColor)
+    const html = email.brandedEmailHtml(brand, { heading: 'Come along', bodyHtml: composed.bodyHtml })
+    ok('xmlns:v is declared on <html>', /<html[^>]*xmlns:v="urn:schemas-microsoft-com:vml"/.test(html), html.slice(0, 300))
+    ok('xmlns:w is declared on <html>', /<html[^>]*xmlns:w="urn:schemas-microsoft-com:office:word"/.test(html), html.slice(0, 300))
+    ok('the VML actually rides inside that document', html.includes('<v:roundrect'), 'button markup did not survive into the wrapper')
+    // The comment at each end naming the other is the only thing linking them.
+    const fs = await import('fs')
+    const path = await import('path')
+    const src = fs.readFileSync(path.join(process.cwd(), 'lib/email.ts'), 'utf8')
+    ok('the emitter points at brandedEmailHtml', /COUPLING[\s\S]{0,400}brandedEmailHtml/.test(src))
+    ok('the wrapper points back at linkifyEmailBody', /COUPLING[\s\S]{0,400}linkifyEmailBody/.test(src))
+  }
+
   console.log('\n-- the P.S. fallback: gated on a button EXISTING, not on cta --')
   {
     const brand = { businessName: 'CoachCo', coachName: 'Coach', primaryColor: '#123456', logoUrl: '', fromName: 'Coach', replyTo: 'c@example.com' } as any
