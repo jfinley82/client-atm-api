@@ -144,3 +144,19 @@ Gmail wraps the sender address onto its own line mid-header:
 pattern can't match across that newline. `lib/emailReply.ts` uses `[\s\S]`
 throughout for this; `tests/emailReply.test.ts` pins the real email that
 exposed it.
+
+**Generated copy arrives as one solid block however many times the prompt asks
+for paragraphs.** Look at `lib/phrasing.ts` before touching the prompt. `\n\n`
+is two whitespace characters, so a `\s`-matching rule eats it: `/\s{2,}/g → ' '`
+flattened every body, and `/\s*[—–]\s*/g → ', '` turned `line\n\n— point` into
+`line, point`. Match horizontal whitespace with `[^\S\n]`, never `\s`.
+Three prompt hypotheses died against this before anyone read the sanitizer.
+
+**A sanitizer that is "display-only on read" is not.** `sanitizeGenRead` was
+described as never written back — but the editor saves what it was handed, so a
+GET that flattens plus a save that persists is a write path with extra steps.
+A field went `16/6/6` blank lines → `0/0/0` including its `original` snapshot
+with character-identical copy, i.e. no regeneration involved. Two consequences:
+read-path transforms need the same care as write-path ones, and `original` is
+excluded from `sanitizePhrasingDeep`'s walk so a read→save cycle can't launder
+mangled copy into the baseline that detects coach edits.

@@ -115,5 +115,57 @@ console.log('\n-- a realistic regenerated body keeps every paragraph --')
   ok('the CTA token is intact', out.includes('[REGISTER_LINK]'))
 }
 
+console.log('\n-- READ -> EDITOR SAVE -> READ: the cycle that actually destroyed a live row --')
+// The read sanitizer was described as display-only and never written back. It
+// is not: the editor persists what it was handed, so a GET that flattens plus a
+// save that stores is a write path with extra steps. A real row went 16/6/6
+// blank lines to 0/0/0 INCLUDING its `original` snapshot, with copy otherwise
+// character-identical — no regeneration anywhere in it.
+//
+// So the invariant is round-trip stability, not just single-pass correctness:
+// sanitize(sanitize(x)) must equal sanitize(x), and paragraphs must survive
+// however many read/save cycles a coach puts a row through.
+{
+  const stored = {
+    emails: [
+      {
+        email_number: 1,
+        subject: 'Your training is ready',
+        body: 'You asked me about this last week.\n\nHere is the short version — it takes twenty minutes.\n\nWatch it here: [TRAINING_LINK]',
+        original: {
+          subject: 'Your training is ready',
+          body: 'You asked me about this last week.\n\nHere is the short version — it takes twenty minutes.\n\nWatch it here: [TRAINING_LINK]',
+        },
+      },
+    ],
+  }
+
+  // GET (sanitize on read) -> editor saves what it received -> GET again.
+  const firstRead = sanitizePhrasingDeep(stored) as typeof stored
+  const afterSave = sanitizePhrasingDeep(firstRead) as typeof stored
+  const secondRead = sanitizePhrasingDeep(afterSave) as typeof stored
+
+  ok('paragraphs survive the first read', blanks(firstRead.emails[0].body) === 2, JSON.stringify(firstRead.emails[0].body))
+  ok('paragraphs survive the save-back', blanks(afterSave.emails[0].body) === 2, JSON.stringify(afterSave.emails[0].body))
+  ok('paragraphs survive a third pass', blanks(secondRead.emails[0].body) === 2, JSON.stringify(secondRead.emails[0].body))
+  ok(
+    'the function is idempotent — sanitize(sanitize(x)) === sanitize(x)',
+    JSON.stringify(afterSave) === JSON.stringify(firstRead),
+    'a second pass changed the value, so every read/save cycle degrades the row'
+  )
+  ok(
+    'original is byte-identical to what was stored, after every cycle',
+    secondRead.emails[0].original.body === stored.emails[0].original.body,
+    JSON.stringify(secondRead.emails[0].original.body)
+  )
+  ok(
+    'so an untouched field cannot read as edited',
+    secondRead.emails[0].original.subject === stored.emails[0].original.subject
+  )
+  // The live body still gets its dash normalized — the guard is about newlines
+  // and about `original`, not about switching the sanitizer off.
+  ok('the live body is still sanitized', firstRead.emails[0].body.includes('version, it takes'), JSON.stringify(firstRead.emails[0].body))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail) process.exit(1)
