@@ -113,11 +113,15 @@ export async function getMtmSessionProgress(userId: string): Promise<SessionProg
 }
 
 // ── Journey ─────────────────────────────────────────────────────────────────
-// The authoritative five-step UI journey (Attract, Transform, Monetize, Build,
-// Launch) so the frontend stops re-deriving step completion. Distinct from
-// `sessions` (which is the finer-grained session checklist). Each step's
-// completion is derived from the same underlying reads; a later step being
-// complete backfills earlier steps (the funnel makes skipping impossible).
+// The authoritative six-step UI journey (Attract, Transform, Monetize, Build,
+// Launch, Funnel) so the frontend stops re-deriving step completion — including
+// the COUNT: the dashboard renders "Step N of total_steps" from this response,
+// never from a constant of its own. Distinct from `sessions` (the finer-grained
+// session checklist) and from the assistant checklist in lib/assistantContext.ts,
+// whose six items are a different list with different meanings — both having six
+// entries is a coincidence, not a relationship. Each step's completion is
+// derived from the same underlying reads; a later step being complete backfills
+// earlier steps (the funnel makes skipping impossible).
 export type JourneyStep = { key: string; number: number; complete: boolean }
 export type JourneySignals = {
   audience_complete: boolean
@@ -128,6 +132,7 @@ export type JourneySignals = {
   program_confirmed: boolean
   build_ready: boolean
   launch_ready: boolean
+  funnel_live: boolean
 }
 // Step 4 (Build) gate. Build is accessible only when the monetize step is
 // complete AND a blueprint is selected; the review screen (where selection
@@ -144,7 +149,7 @@ export type MtmJourney = {
 }
 
 export async function getMtmJourney(userId: string): Promise<MtmJourney> {
-  const [{ data: outputs }, { data: cards }, { data: gens }] = await Promise.all([
+  const [{ data: outputs }, { data: cards }, { data: gens }, { data: liveFunnels }] = await Promise.all([
     supabase.from('saved_outputs').select('tool_type, content').eq('user_id', userId),
     supabase.from('problem_solution_cards').select('id').eq('user_id', userId).eq('validated', true).limit(1),
     supabase
@@ -152,6 +157,10 @@ export async function getMtmJourney(userId: string): Promise<MtmJourney> {
       .select('card_id, slides, emails, book_a_call_emails, workbook')
       .eq('user_id', userId)
       .order('updated_at', { ascending: false }),
+    // Step 6 signal: a funnel with status = 'live'. Status, NOT row presence — a
+    // draft is work in progress, not a completed step (Jamaul's own funnel is a
+    // draft with a null subdomain and must read incomplete).
+    supabase.from('funnels').select('id').eq('user_id', userId).eq('status', 'live').limit(1),
   ])
 
   const byType = new Map<string, any>()
@@ -173,6 +182,7 @@ export async function getMtmJourney(userId: string): Promise<MtmJourney> {
     launch_ready: (gens || []).some(
       (g: any) => workbookPopulated(g.workbook) && nonEmptyArray(g.emails) && nonEmptyArray(g.book_a_call_emails)
     ),
+    funnel_live: (liveFunnels || []).length > 0,
   }
 
   const steps: JourneyStep[] = [
@@ -181,6 +191,7 @@ export async function getMtmJourney(userId: string): Promise<MtmJourney> {
     { key: 'monetize', number: 3, complete: signals.matcher_validated && signals.core_offers_confirmed && signals.program_confirmed },
     { key: 'build', number: 4, complete: signals.build_ready },
     { key: 'launch', number: 5, complete: signals.launch_ready },
+    { key: 'funnel', number: 6, complete: signals.funnel_live },
   ]
 
   // Monotonic backfill — a later completed step marks earlier steps complete,
@@ -191,9 +202,11 @@ export async function getMtmJourney(userId: string): Promise<MtmJourney> {
     else if (laterComplete) steps[i] = { ...steps[i], complete: true }
   }
 
-  // First incomplete step (1..5), or 5 when everything is complete. Step N is
+  // First incomplete step (1..6), or 6 when everything is complete. Step N is
   // accessible once 1..N-1 are complete, so unlocked_through == current_step.
-  const firstIncomplete = steps.find((s) => !s.complete)?.number ?? 5
+  // The fallback MUST track total_steps: left at 5, a member who finishes
+  // everything is reported as sitting on step 5 forever.
+  const firstIncomplete = steps.find((s) => !s.complete)?.number ?? 6
 
   // Build gate: the explicit build_selection wins; otherwise an already-built
   // training (most-recent mtm_generations row with slides — gens is ordered
@@ -208,7 +221,7 @@ export async function getMtmJourney(userId: string): Promise<MtmJourney> {
         : null
 
   return {
-    total_steps: 5,
+    total_steps: 6,
     current_step: firstIncomplete,
     unlocked_through: firstIncomplete,
     steps,
