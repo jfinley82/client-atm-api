@@ -9,8 +9,9 @@ import {
   isGoogleConfigured,
 } from '../../../lib/googleCalendar'
 import { isTokenKeyConfigured } from '../../../lib/cryptoTokens'
+import { APP_URL } from '../../../lib/appUrls'
 
-const APP_URL = process.env.APP_URL || 'https://app.microtrainingmethod.com'
+
 const NONCE_COOKIE = 'catm_gcal_nonce'
 // Clears the one-time nonce cookie set at connect.
 const CLEAR_NONCE = `${NONCE_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`

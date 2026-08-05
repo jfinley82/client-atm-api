@@ -4,6 +4,7 @@ import { supabase } from './supabase'
 import { loadBusinessSettings, isValidHttpUrl } from './businessSettings'
 import { sanitizeBrandColor, DEFAULT_BRAND_PRIMARY } from './funnels'
 import { loadUserAvailability } from './availabilitySettings'
+import { APP_URL } from './appUrls'
 
 // Exported so api/webhooks/resend.ts can make the one follow-up call inbound
 // mail needs (fetching a received email's actual body) without constructing
@@ -17,7 +18,7 @@ export const resend = new Resend(process.env.RESEND_API_KEY!)
 const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
 // The FRONTEND's own base URL — used for coach-notification links that point
 // INTO the builder (e.g. a specific lead), as opposed to API_URL above.
-const APP_URL = process.env.APP_URL || 'https://app.clientatmbuilder.com'
+
 
 export async function sendMagicLinkEmail(email: string, name: string, token: string) {
   const link = `${API_URL}/api/auth/callback?token=${encodeURIComponent(token)}`

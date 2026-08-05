@@ -79,6 +79,30 @@ const GOAL_CTA: Record<AICoachGoal, string> = {
  * deliberately NOT here — they live in the volatile block after the breakpoint.
  * Put any of them here and the cache silently never hits while the code still
  * looks correct.
+ *
+ * THE RULE, in its general form: this block must be a pure function of the
+ * COACH and nothing else. No clock, no lead, nothing assembled per request.
+ *
+ * MEASURED on production, 2026-08-05, a three-card coach (these replace an
+ * earlier chars/4 estimate that was low by ~38% — JSON tokenizes far worse
+ * than prose, so do not re-derive these, read them off api_cost_log):
+ *   cold call   cache_creation_input_tokens = 17,834  (this block, exactly)
+ *   warm turns  cache_read_input_tokens     = 17,834  x4, no drift
+ *   total input 19,122 cold, vs 27,184 before the lazy index — ~30% cut
+ *   cost/turn   1.1c warm, 7.6c cold (the 1h write is priced above plain
+ *               input), against 5.7c before. Pays back inside one warm turn.
+ *
+ * WHEN CHECKING THIS LATER, compare MAGNITUDES, don't test for zero. A
+ * cache_read of zero means the breakpoint is wrong and is easy to spot; a
+ * cache_read that is non-zero but SMALLER than the cold call's
+ * cache_creation is the failure that actually happens, and it looks like
+ * caching is working — it means something volatile got inside this block, so
+ * the prefix partially invalidates and the tail is rebuilt every call.
+ *
+ * ONE EXPECTED, NON-BUG SPIKE: brain.system_prompt is the coach's stored
+ * persona. If a coach edits their bot mid-conversation the prefix legitimately
+ * changes and the next call is a full cache write. An unexplained
+ * cache_creation on a warm conversation is that, not a regression.
  */
 function buildStablePrefix(brain: AICoachBrain): string {
   // The diagnostic index: every card, routing detail only. No synopsis.

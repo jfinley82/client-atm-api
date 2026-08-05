@@ -10,14 +10,13 @@ import { sendCoachApplicationNotification } from '../../lib/email'
 import { hasFunnelBuilderAccess } from '../../lib/funnels'
 import { getSavedOutput } from '../../lib/savedOutputs'
 import { signCoachToken } from '../../lib/funnelLeadToken'
+import { COACH_SHELL_URL, appUrl } from '../../lib/appUrls'
 
-// The base the lead-facing AI coach shell is served from. DELIBERATELY NOT
-// APP_URL: that variable is set to the OLD app in production, so inheriting it
-// emitted app.microtrainingmethod.com/coach?t=… — a route that does not exist,
-// i.e. a 404 for every disqualified lead the moment the shell ships. Its own
-// variable so the two cannot drift again; override with COACH_SHELL_URL if the
-// shell lands somewhere other than the current app.
-const COACH_SHELL_URL = process.env.COACH_SHELL_URL || 'https://app.clientatmbuilder.com'
+// COACH_SHELL_URL lives in lib/appUrls with the app's own base, so the two
+// cannot drift the way four copies of APP_URL did. This link got the wrong host
+// twice — first by inheriting APP_URL when that pointed at the pre-cutover app,
+// then by being handed its own hardcoded guess — and both times it looked
+// correct until a lead would have clicked it.
 
 // POST /api/funnel/application — PUBLIC step 1 of the two-step booking page.
 //
@@ -140,7 +139,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const aiCoach = saved?.content as { confirmed?: boolean } | undefined
           if (entitled && aiCoach?.confirmed === true) {
             const token = signCoachToken(funnel.id as string, lead.id as string)
-            coachUrl = `${COACH_SHELL_URL}/coach?t=${encodeURIComponent(token)}`
+            coachUrl = `${appUrl(COACH_SHELL_URL, 'coach')}?t=${encodeURIComponent(token)}`
           }
         } catch (err) {
           // Handoff is best-effort: a failure here degrades to today's
