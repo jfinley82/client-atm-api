@@ -7,6 +7,11 @@ import { verifyWatchToken } from '../../lib/funnelLeadToken'
 import { funnelBookingQuestions, validateBookingAnswers, bookingQuestionErrorMessage } from '../../lib/bookingQuestions'
 import { checkGate, gateApplies } from '../../lib/applicationGate'
 import { sendCoachApplicationNotification } from '../../lib/email'
+import { hasFunnelBuilderAccess } from '../../lib/funnels'
+import { getSavedOutput } from '../../lib/savedOutputs'
+import { signCoachToken } from '../../lib/funnelLeadToken'
+
+const APP_URL = process.env.APP_URL || 'https://app.clientatmbuilder.com'
 
 // POST /api/funnel/application — PUBLIC step 1 of the two-step booking page.
 //
@@ -108,6 +113,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (!outcome.qualified) {
+      // The ai_assistant handoff: a disqualified lead is invited into the
+      // coach's hosted bot INSTEAD of the calendar — but only when the bot is
+      // actually live (owner entitled AND ai_coach saved with confirmed:true,
+      // the same two re-checks resolveLeadSession will make when the lead
+      // arrives). If either fails, or there is no identified lead, the payload
+      // is exactly what it is today: the coach's message and nothing more.
+      //
+      // No lead row means no coach_url, full stop — a coach token NAMES a
+      // lead, and ai_coach_messages.lead_id is not null. The public email-gate
+      // entry that creates a lead first is a later PR; there is deliberately
+      // no anonymous path papering over that here.
+      let coachUrl: string | null = null
+      if (outcome.action === 'ai_assistant' && lead?.id) {
+        try {
+          const [entitled, saved] = await Promise.all([
+            hasFunnelBuilderAccess(funnel.user_id as string),
+            getSavedOutput(funnel.user_id as string, 'ai_coach'),
+          ])
+          const aiCoach = saved?.content as { confirmed?: boolean } | undefined
+          if (entitled && aiCoach?.confirmed === true) {
+            const token = signCoachToken(funnel.id as string, lead.id as string)
+            coachUrl = `${APP_URL}/coach?t=${encodeURIComponent(token)}`
+          }
+        } catch (err) {
+          // Handoff is best-effort: a failure here degrades to today's
+          // plain-message behaviour, never to a failed submission.
+          console.error('[funnel/application] ai_assistant handoff', err)
+        }
+      }
+
       // 200, not 4xx: "not a fit" is a normal outcome of a valid submission, and
       // the page renders a real screen for it. No calendar is ever sent back.
       return res.status(200).json({
@@ -116,6 +151,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         action: outcome.action,
         message: outcome.message,
         redirect_url: outcome.redirect_url,
+        ...(coachUrl ? { coach_url: coachUrl } : {}),
       })
     }
 

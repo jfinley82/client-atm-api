@@ -816,9 +816,17 @@ function gatedBookPage(funnel: Record<string, any>, b: Branding, questions: Book
         // actually read first. 'resource' just offers the link.
         if (action === 'redirect') setTimeout(function(){ window.location.href = url; }, 2500);
       }
-      // 'ai_assistant' is accepted and stored, but its shell is not built yet, so
-      // it deliberately renders the plain message above and nothing more. Wiring
-      // the assistant in here later needs no change to the gate or the endpoint.
+      // 'ai_assistant': the server includes coach_url only when the coach's
+      // hosted bot is actually live (entitled + confirmed). An anchor, NOT an
+      // auto redirect — 'redirect' gets a timed jump because the coach wants
+      // them sent onward, but this is an invitation into a conversation and the
+      // coach's message should be read first. Absent coach_url, the plain
+      // message above stands alone, same as before the shell existed.
+      if (action === 'ai_assistant' && j && j.coach_url) {
+        var c = document.createElement('a'); c.className = 'btn'; c.href = j.coach_url; c.rel = 'noopener noreferrer';
+        c.textContent = 'Talk it through with my assistant';
+        el.appendChild(c);
+      }
       el.style.display = 'block';
       el.scrollIntoView({ behavior:'smooth' });
     }
