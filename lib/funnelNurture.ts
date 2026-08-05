@@ -144,12 +144,20 @@ async function scheduleSet(opts: {
     // The button is derived from the body's tokens (primary CTA = first
     // button-eligible token in reading order), NOT forced by the sequence:
     // every other token — including [GUIDE_LINK] — renders as an inline link.
-    const { bodyHtml, cta } = composeEmailBody(em.body, {
-      book: opts.bookUrlForTokens,
-      training,
-      guide: opts.guideUrl,
+    // `cta` is deliberately NOT passed to brandedEmailHtml: the button is
+    // already inside bodyHtml, at the token's own position. Passing it would
+    // render a second one below the signature.
+    const { bodyHtml, cta, buttonRendered } = composeEmailBody(
+      em.body,
+      { book: opts.bookUrlForTokens, training, guide: opts.guideUrl },
+      opts.brand.primaryColor
+    )
+    const html = brandedEmailHtml(opts.brand, {
+      heading: subject,
+      bodyHtml,
+      ...(buttonRendered && cta ? { ctaFallbackUrl: cta.url } : {}),
+      unsubscribeUrl: unsub,
     })
-    const html = brandedEmailHtml(opts.brand, { heading: subject, bodyHtml, ...(cta ? { cta } : {}), unsubscribeUrl: unsub })
     const scheduledAt = opts.offsets[i] > 0 ? new Date(sendTimeMs).toISOString() : undefined
 
     tasks.push(
@@ -515,15 +523,12 @@ export async function scheduleInviteBroadcast(
       const subject =
         (em.subject && em.subject.trim()) || INVITE_SUBJECTS[i] || INVITE_SUBJECTS[INVITE_SUBJECTS.length - 1]
 
-      const { bodyHtml, cta } = composeEmailBody(em.body, {
-        book,
-        training,
-        guide: guideUrl,
-      })
+      // No `cta` here either — the button lives inside bodyHtml now.
+      const { bodyHtml, cta, buttonRendered } = composeEmailBody(em.body, { book, training, guide: guideUrl }, brand.primaryColor)
       const html = brandedEmailHtml(brand, {
         heading: subject,
         bodyHtml,
-        ...(cta ? { cta } : {}),
+        ...(buttonRendered && cta ? { ctaFallbackUrl: cta.url } : {}),
         unsubscribeUrl: unsub,
       })
 

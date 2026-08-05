@@ -108,8 +108,9 @@ async function call(handler: Handler, opts: { method?: string; query?: any; body
   const LINKS = { book: 'https://coachco.freeminiworkshop.com/?page=book', training: 'https://coachco.freeminiworkshop.com/?page=training', register: 'https://coachco.freeminiworkshop.com/', guide: 'https://cdn.example/guide.pdf' }
 
   console.log('\n-- ITEM 1: read path composes identically to the send path --')
-  // A standalone primary token: composeEmailBody strips it from the body and
-  // surfaces it as the button.
+  // A standalone primary token: composeEmailBody renders it AS the button, in
+  // place, and reports the same link as `cta` metadata. (It used to strip the
+  // token and leave the caller to append a button — see tests/ctaSeam.test.ts.)
   const standalone = 'First para.\n\nSecond para.\n\n[BOOK_A_CALL_LINK]'
   const sendSide = email.composeEmailBody(standalone, LINKS)
   ok('standalone primary token becomes the cta', sendSide.cta?.label === 'Book your call' && sendSide.cta?.url === LINKS.book, JSON.stringify(sendSide.cta))

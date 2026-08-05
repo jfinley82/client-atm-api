@@ -206,7 +206,19 @@ export async function loadCoachBrand(userId: string): Promise<CoachBrand> {
 // URL-validated here so callers can't inject.
 export function brandedEmailHtml(
   brand: CoachBrand,
-  opts: { heading: string; bodyHtml: string; cta?: { label: string; url: string }; unsubscribeUrl?: string }
+  opts: {
+    heading: string
+    bodyHtml: string
+    /** Appends a button AND its P.S. fallback. For bodies with no CTA of their own. */
+    cta?: { label: string; url: string }
+    /**
+     * P.S. fallback ONLY, no appended button — for a bodyHtml that already
+     * carries its button inline (composeEmailBody's output). Pass the same
+     * destination the in-body button points at.
+     */
+    ctaFallbackUrl?: string
+    unsubscribeUrl?: string
+  }
 ): string {
   const color = brand.primaryColor
   const header = brand.logoUrl
@@ -219,14 +231,20 @@ export function brandedEmailHtml(
               <a href="${escapeHtml(opts.cta.url)}" target="_blank" style="display:inline-block;padding:14px 30px;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;color:#FFFFFF;text-decoration:none;border-radius:10px;">${escapeHtml(opts.cta.label)}</a>
             </td></tr></table>`
       : ''
-  // Button fallback: when there IS a CTA button, a plain P.S. below the signature
-  // hyperlinks "Click here" to the SAME coach-specific destination. The raw URL is
-  // never shown as visible text — freeminiworkshop.com is the shared base domain,
-  // so a lead copying/typing the bare domain could land on a different coach's
-  // funnel; only the full href carries the coach's own destination.
+  // Button fallback: whenever a button exists — appended here OR already inline
+  // in bodyHtml — a plain P.S. below the signature hyperlinks "Click here" to the
+  // SAME coach-specific destination.
+  //
+  // This guards a ROUTING failure, not a rendering one, which is why it is not
+  // made redundant by the in-body button degrading gracefully. The raw URL is
+  // never shown as visible text: freeminiworkshop.com is the shared base domain,
+  // so a lead who copies or types the bare domain lands on a DIFFERENT coach's
+  // funnel. Only the full href carries the coach's own destination, so a reader
+  // who cannot use the button needs a link, not something to retype.
+  const psUrl = opts.cta?.url ?? opts.ctaFallbackUrl
   const ps =
-    opts.cta && isValidHttpUrl(opts.cta.url)
-      ? `<p style="margin:12px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:20px;color:#98A2B3;">P.S. Button not working? <a href="${escapeHtml(opts.cta.url)}" target="_blank" style="color:#98A2B3;text-decoration:underline;">Click here</a>.</p>`
+    psUrl && isValidHttpUrl(psUrl)
+      ? `<p style="margin:12px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:20px;color:#98A2B3;">P.S. Button not working? <a href="${escapeHtml(psUrl)}" target="_blank" style="color:#98A2B3;text-decoration:underline;">Click here</a>.</p>`
       : ''
   const foot =
     opts.unsubscribeUrl && isValidHttpUrl(opts.unsubscribeUrl)
@@ -280,6 +298,32 @@ const EMAIL_P_STYLE = 'margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;fo
 const EMAIL_LIST_STYLE = 'margin:0 0 14px;padding-left:22px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;'
 const EMAIL_LI_STYLE = 'margin:0 0 6px;'
 
+/**
+ * The CTA button, rendered INSIDE the body by linkifyEmailBody at the token's
+ * own position. This markup reaches real inboxes, not only the wizard preview,
+ * so: inline styles only, no classes, no table wrapper, and a plain <a> — an
+ * anchor with padding degrades to a readable link in the clients that ignore
+ * the rest, which a table-based pill does not.
+ *
+ * `block` mirrors isStandaloneOccurrence: a token alone on its line was meant
+ * as a standalone button and gets the vertical breathing room; a token inside a
+ * sentence sits in the paragraph flow without disturbing the line.
+ *
+ * line-height is set EXPLICITLY rather than inherited. The button renders
+ * inside a <p> carrying EMAIL_P_STYLE's line-height:24px, which a padded
+ * inline-block inherits and renders tall and off-centre. This matters more than
+ * it used to: standalone is now the common case, not the rare one.
+ *
+ * Colour is a parameter, not a constant, because it is the coach's brand
+ * colour. The button used to be emitted by brandedEmailHtml, which had `brand`
+ * in hand; now that it is emitted here, the colour has to arrive with it or
+ * every coach's button silently reverts to the default.
+ */
+const EMAIL_BUTTON_STYLE = (color: string, block: boolean): string =>
+  `display:inline-block;${block ? 'margin:20px 0 6px;' : 'margin:0 2px;'}` +
+  `padding:${block ? '14px 30px' : '8px 18px'};background-color:${color};border-radius:10px;` +
+  'font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:20px;font-weight:bold;color:#FFFFFF;text-decoration:none;'
+
 // Turn a canonical email body (plain text + link tokens + lightweight formatting
 // markers) into safe branded HTML. Pipeline per line: escapeHtml → lightweight
 // formatting (bold/italic/underline) → resolve the link tokens the generator
@@ -293,17 +337,21 @@ const EMAIL_LI_STYLE = 'margin:0 0 6px;'
 // with <br> inside a <p>. Formatting and tokens compose (bold text can hold an
 // inline link in the same line).
 //
-// EVERY token renders as a standard inline hyperlink here — including a token
-// alone on its own line. This function never decides what becomes the button and
-// never drops a token; that is composeEmailBody's job (it removes the single
-// primary-CTA occurrence before calling this, so the button and the inline text
-// never duplicate the same link).
+// Tokens render as standard inline hyperlinks, EXCEPT the one occurrence named
+// by `primary` — that one becomes the CTA button, in place, where the token sits.
+// Nothing is ever dropped: no token is removed, and later occurrences of the
+// primary token stay inline anchors like everything else.
+//
+// The output of this function is the COMPLETE rendering. A caller must not add a
+// CTA of its own on top; doing that is what produced an inline "register" link
+// with a duplicate pill button underneath it.
 export function linkifyEmailBody(
   raw: string,
   bookUrl: string,
   trainingUrl?: string,
   registerUrl?: string,
-  guideUrl?: string
+  guideUrl?: string,
+  primary?: PrimaryCta | null
 ): string {
   const anchor = (url: string | undefined, label: string, fallback: string): string =>
     url && isValidHttpUrl(url)
@@ -313,10 +361,19 @@ export function linkifyEmailBody(
   const trainingAnchor = anchor(trainingUrl, 'watch the training', 'the training')
   const registerAnchor = anchor(registerUrl, 'register', 'register')
   const guideAnchor = anchor(guideUrl, 'download the guide', 'the guide')
-  // escape → format → resolve tokens. Tokens are resolved LAST so their injected
-  // anchor HTML is never re-escaped or re-formatted.
-  const inline = (line: string): string =>
-    applyInlineFormatting(escapeHtml(line))
+
+  // The arrow is a BUTTON-ONLY affordance. The stored labels stay as they are —
+  // the lowercase inline anchor text ("register") is deliberate mid-sentence.
+  const button = primary
+    ? `<a href="${escapeHtml(primary.url)}" target="_blank" style="${EMAIL_BUTTON_STYLE(primary.color, primary.standalone)}">${escapeHtml(primary.label)} &rarr;</a>`
+    : ''
+  // Only the FIRST occurrence in reading order becomes the button. Blocks and
+  // lines are both walked in document order, so the first one this flag sees is
+  // the first one a reader sees.
+  let primaryPending = Boolean(primary)
+
+  const resolveTokens = (h: string): string =>
+    h
       .split('[BOOK_A_CALL_LINK]')
       .join(bookAnchor)
       .split('[OFFER_LINK]')
@@ -327,6 +384,23 @@ export function linkifyEmailBody(
       .join(registerAnchor)
       .split('[GUIDE_LINK]')
       .join(guideAnchor)
+
+  // escape → format → resolve tokens. Tokens are resolved LAST so their injected
+  // anchor HTML is never re-escaped or re-formatted. The primary is spliced out
+  // FIRST and the two sides resolved independently, so the generic replacement
+  // can never reach inside the button's own href.
+  const inline = (line: string): string => {
+    const escaped = applyInlineFormatting(escapeHtml(line))
+    if (primary && primaryPending) {
+      const at = escaped.indexOf(primary.token)
+      if (at !== -1) {
+        primaryPending = false
+        primary.emitted = true
+        return resolveTokens(escaped.slice(0, at)) + button + resolveTokens(escaped.slice(at + primary.token.length))
+      }
+    }
+    return resolveTokens(escaped)
+  }
 
   const isBullet = (l: string): boolean => /^\s*-\s+\S/.test(l)
   const isNumbered = (l: string): boolean => /^\s*\d+\.\s+\S/.test(l)
@@ -385,8 +459,20 @@ const BUTTON_ELIGIBLE: { token: string; label: string; key: 'book' | 'training' 
 export type EmailLinks = { book?: string; training?: string; register?: string; guide?: string }
 
 // True when the token occupying [idx, idx+len) is ALONE on its own line (only
-// surrounding whitespace) — the standalone-button case. An inline token (text on
-// either side within the same line) is NOT standalone.
+// surrounding whitespace).
+//
+// ITS JOB CHANGED, ITS NAME DID NOT. This used to decide whether the primary
+// token was STRIPPED from the body — standalone tokens were deleted so the
+// caller's appended button wouldn't duplicate them, inline ones were kept. That
+// is gone: nothing is stripped any more, because the button is now rendered at
+// the token's own position.
+//
+// What it decides now is PRESENTATION. Both outcomes render a button; they just
+// render it differently, and the difference is meaningful rather than
+// defensive. A coach who put the token alone on its line meant a standalone
+// button, so it gets block-ish spacing. A token inside a sentence means the CTA
+// belongs in the sentence, so it sits in the paragraph flow without breaking
+// the line.
 function isStandaloneOccurrence(body: string, idx: number, len: number): boolean {
   let start = idx
   while (start > 0 && body[start - 1] !== '\n') start--
@@ -395,26 +481,56 @@ function isStandaloneOccurrence(body: string, idx: number, len: number): boolean
   return body.slice(start, idx).trim() === '' && body.slice(idx + len, end).trim() === ''
 }
 
-// The shared compose path for a token-bearing email body. Rules (per Jamaul):
+// The primary CTA, resolved once here and rendered once by linkifyEmailBody.
+// `emitted` is set BY the render, not predicted before it: the P.S. fallback
+// depends on a button actually existing in the output, and inferring that from
+// `cta` being non-null is the same class of mistake that produced the double
+// render — a caller reasoning about markup it cannot see.
+type PrimaryCta = { token: string; label: string; url: string; standalone: boolean; color: string; emitted: boolean }
+
+export type ComposedEmail = {
+  /**
+   * The COMPLETE rendering, button included, positioned where the token sits.
+   * Render this and nothing else.
+   */
+  bodyHtml: string
+  /**
+   * Informational ONLY — do not render this. The button is already inside
+   * `bodyHtml`; drawing `cta` as well is the double-render this shape was
+   * changed to fix (an inline "register" link with a duplicate pill under it).
+   *
+   * Kept because the label/url are genuinely useful as metadata: a test-send
+   * subject, an analytics label, a plain-text alternative. null when no
+   * button-eligible token resolves to a valid URL.
+   */
+  cta: { label: string; url: string } | null
+  /**
+   * True when a button is actually present in `bodyHtml`. Gate the P.S.
+   * fallback on THIS, not on `cta` — `cta` describes an intent, this describes
+   * the markup that exists.
+   */
+  buttonRendered: boolean
+}
+
+// The shared compose path for a token-bearing email body. Rules:
 //  1. At most ONE button, only for the primary CTA. No button-eligible token with
-//     a valid URL ⇒ no button.
+//     a valid URL ⇒ no button, and cta is null.
 //  2. The PRIMARY CTA is the FIRST button-eligible token in reading order (not by
-//     layout, not by a fixed token priority). It becomes the single button.
-//     - If that occurrence is ALONE on its own line, it is removed from the body
-//       so it isn't ALSO an inline link (the standalone-button case).
-//     - If it sits INLINE within a sentence, it is KEPT in place as an inline link
-//       so the sentence stays intact — the button is shown in addition. We never
-//       delete text mid-sentence.
+//     layout, not by a fixed token priority). That occurrence renders AS the
+//     button, in place. It is not stripped, and nothing is appended elsewhere —
+//     where the coach put the token is where the button appears.
 //  3. Every OTHER token — additional CTA tokens, later occurrences of the primary,
 //     and [GUIDE_LINK] — renders as a standard inline hyperlink. Nothing is ever
 //     silently dropped.
-// Returns the paragraph HTML and the cta (or null). brandedEmailHtml appends the
-// button + its P.S. fallback only when cta is present.
-export function composeEmailBody(raw: string, links: EmailLinks): { bodyHtml: string; cta: { label: string; url: string } | null } {
+//
+// STORAGE IS UNTOUCHED. `raw` is read, never written. The stored body keeps the
+// literal [REGISTER_LINK]; if a stored value ever contains HTML, something here
+// is wrong.
+export function composeEmailBody(raw: string, links: EmailLinks, buttonColor: string = DEFAULT_BRAND_PRIMARY): ComposedEmail {
   const body = String(raw || '')
   let cta: { label: string; url: string } | null = null
+  let primary: PrimaryCta | null = null
   let primaryIdx = -1
-  let primaryLen = 0
   for (const spec of BUTTON_ELIGIBLE) {
     const url = links[spec.key]
     if (!url || !isValidHttpUrl(url)) continue
@@ -422,19 +538,19 @@ export function composeEmailBody(raw: string, links: EmailLinks): { bodyHtml: st
     if (idx === -1) continue
     if (primaryIdx === -1 || idx < primaryIdx) {
       primaryIdx = idx
-      primaryLen = spec.token.length
       cta = { label: spec.label, url }
+      primary = {
+        token: spec.token,
+        label: spec.label,
+        url,
+        standalone: isStandaloneOccurrence(body, idx, spec.token.length),
+        color: buttonColor,
+        emitted: false,
+      }
     }
   }
-  // Only strip the primary token when it stands alone on its line (its line
-  // collapses away in linkifyEmailBody). An inline primary stays put and renders
-  // as an inline link too, so the surrounding sentence is never broken.
-  const remainder =
-    primaryIdx !== -1 && isStandaloneOccurrence(body, primaryIdx, primaryLen)
-      ? body.slice(0, primaryIdx) + body.slice(primaryIdx + primaryLen)
-      : body
-  const bodyHtml = linkifyEmailBody(remainder, links.book || '', links.training, links.register, links.guide)
-  return { bodyHtml, cta }
+  const bodyHtml = linkifyEmailBody(body, links.book || '', links.training, links.register, links.guide, primary)
+  return { bodyHtml, cta, buttonRendered: primary?.emitted === true }
 }
 
 const PREVIEW_FUNNEL_DOMAIN = process.env.FUNNEL_PUBLIC_DOMAIN || 'freeminiworkshop.com'

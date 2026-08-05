@@ -73,8 +73,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Same shared compose path as a real send: the primary CTA (first
     // button-eligible token in reading order) becomes the single button; every
     // other token — incl. [GUIDE_LINK] — renders as an inline link, none dropped.
-    const { bodyHtml, cta } = composeEmailBody(mergedBody, links)
-    const html = brandedEmailHtml(brand, { heading: mergedSubject, bodyHtml, ...(cta ? { cta } : {}) })
+    // `cta` is not passed on: bodyHtml already contains the button, at the
+    // token's position. A test send must match a real send exactly, and a real
+    // send no longer appends one.
+    const { bodyHtml, cta, buttonRendered } = composeEmailBody(mergedBody, links, brand.primaryColor)
+    const html = brandedEmailHtml(brand, {
+      heading: mergedSubject,
+      bodyHtml,
+      ...(buttonRendered && cta ? { ctaFallbackUrl: cta.url } : {}),
+    })
 
     const messageId = await sendOneOffEmail({
       from: `${brand.fromName} <${FROM_ADDRESS}>`,
