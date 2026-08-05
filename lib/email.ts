@@ -491,9 +491,18 @@ const BUTTON_ELIGIBLE: { token: string; label: string; key: 'book' | 'training' 
 ]
 
 // One height for every button, so the three labels stay a consistent control.
-// arcsize is the VML equivalent of the anchor's 10px border-radius: 10/44 ≈ 23%.
-const EMAIL_BUTTON_MSO_HEIGHT = 44
-const EMAIL_BUTTON_MSO_ARCSIZE = '23%'
+//
+// It must equal what the ANCHOR renders at, or Outlook readers get a visibly
+// different button from everyone else — the same silent-divergence problem as
+// two branches disagreeing about colour. The anchor's block variant is
+// padding:14px top + line-height:20px + padding:14px bottom = 48px. If you
+// change either value in EMAIL_BUTTON_STYLE, change this, and
+// tests/ctaSeam.test.ts recomputes the sum from the emitted style and fails if
+// you did not.
+//
+// arcsize is the VML equivalent of the anchor's 10px border-radius: 10/48 ≈ 21%.
+const EMAIL_BUTTON_MSO_HEIGHT = 48
+const EMAIL_BUTTON_MSO_ARCSIZE = '21%'
 
 export type EmailLinks = { book?: string; training?: string; register?: string; guide?: string }
 

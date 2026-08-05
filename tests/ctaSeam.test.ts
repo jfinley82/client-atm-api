@@ -270,9 +270,39 @@ const anchors = (html: string) => (html.match(/<a [^>]*>/g) || [])
     ok('no second default colour is introduced', (bodyHtml.match(/#123456/g) || []).length === 2, bodyHtml)
 
     ok('VML is sized from the label constant, not measured', bodyHtml.includes('width:158px'), bodyHtml)
-    ok('and shares the common height', bodyHtml.includes('height:44px'), bodyHtml)
-    ok('the VML label matches the anchor label', (bodyHtml.match(/Register &rarr;/g) || []).length === 2, bodyHtml)
     ok('anchorlock is present so the whole shape is clickable', bodyHtml.includes('<w:anchorlock/>'), bodyHtml)
+  }
+
+  console.log('\n-- the two branches must not drift: same label, same height --')
+  // Same failure shape as two branches disagreeing about colour — it renders
+  // fine wherever you happen to be looking, and wrong for the readers you
+  // cannot see. Both of these are checked against each other, not against a
+  // hardcoded expectation, so changing one side fails here rather than in an
+  // inbox.
+  for (const [token, label] of [['[REGISTER_LINK]', 'Register'], ['[TRAINING_LINK]', 'Watch the training'], ['[BOOK_A_CALL_LINK]', 'Book your call']] as const) {
+    const { bodyHtml } = email.composeEmailBody(token, LINKS)
+    const vmlLabel = /<center[^>]*>([\s\S]*?)<\/center>/.exec(bodyHtml)?.[1] ?? ''
+    const anchorLabel = /<a href[^>]*>([\s\S]*?)<\/a>/.exec(bodyHtml)?.[1] ?? ''
+    ok(`${label}: both branches carry the identical label string`, vmlLabel === anchorLabel && vmlLabel.length > 0, `vml ${JSON.stringify(vmlLabel)} vs anchor ${JSON.stringify(anchorLabel)}`)
+    ok(`${label}: and the arrow is in both`, vmlLabel.includes('&rarr;') && anchorLabel.includes('&rarr;'), `vml ${JSON.stringify(vmlLabel)}`)
+  }
+  {
+    // The VML height is asserted against the anchor's OWN rendered height,
+    // recomputed from the style it actually emitted: padding-top + line-height
+    // + padding-bottom. Change the padding and this fails until the VML follows.
+    const { bodyHtml } = email.composeEmailBody(WARM_BODY, LINKS)
+    const anchorStyle = /<a href[^>]*style="([^"]*)"/.exec(bodyHtml)?.[1] ?? ''
+    const padY = Number(/padding:(\d+)px/.exec(anchorStyle)?.[1] ?? NaN)
+    const lineH = Number(/line-height:(\d+)px/.exec(anchorStyle)?.[1] ?? NaN)
+    // Scoped to the v:roundrect tag, and to a `height:` that is NOT the tail of
+    // `line-height:` — the wrapping <p> carries line-height:24px and an
+    // unanchored match picks that up instead.
+    const vmlTag = /<v:roundrect[^>]*>/.exec(bodyHtml)?.[0] ?? ''
+    const vmlH = Number(/[;"]height:(\d+)px/.exec(vmlTag)?.[1] ?? NaN)
+    const rendered = padY * 2 + lineH
+    ok('the anchor style is parseable for a height', Number.isFinite(padY) && Number.isFinite(lineH), anchorStyle)
+    ok(`the anchor renders 48px (${padY}*2 + ${lineH})`, rendered === 48, `${rendered}`)
+    ok(`the VML height matches it exactly (${vmlH} === ${rendered})`, vmlH === rendered, `vml ${vmlH} vs anchor ${rendered}`)
   }
   {
     // Widths are per-label, and every eligible label has one.
