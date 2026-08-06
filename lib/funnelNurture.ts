@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { bookingTimeLabel } from './bookingTimezone'
 import {
   CoachBrand,
   loadCoachBrand,
@@ -93,13 +94,11 @@ function unsubscribeUrl(funnelId: string, leadId: string): string {
 function escapeHtml(s: unknown): string {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string))
 }
-function utcLabel(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short', timeZone: 'UTC' }) + ' (UTC)'
-  } catch {
-    return iso
-  }
-}
+// Call reminders go to the LEAD, so they carry the lead's own zone when the
+// booking captured one — the same rule as the confirmation email. Without it
+// this rendered "11:30 PM (UTC)" for a call the visitor picked at 6:30 PM, a day
+// before the call, which is the moment a no-show gets decided.
+// bookingTimeLabel keeps the exact UTC wording when no zone was captured.
 
 async function isUnsubscribed(leadId: string): Promise<boolean> {
   const { data } = await supabase.from('funnel_leads').select('email_unsubscribed').eq('id', leadId).maybeSingle()
@@ -259,7 +258,10 @@ export async function scheduleBookingReminders(
   joinUrl: string,
   bookingId: string,
   manageUrl?: string,
-  nowMs: number = Date.now()
+  nowMs: number = Date.now(),
+  // The zone the visitor booked in, when one was captured. Optional and last so
+  // every existing caller keeps working and keeps rendering UTC.
+  timezone: string | null = null
 ): Promise<void> {
   try {
     if (!email) return
@@ -267,7 +269,7 @@ export async function scheduleBookingReminders(
     const startMs = new Date(startIso).getTime()
     if (!Number.isFinite(startMs)) return
     const brand = await loadCoachBrand(funnel.user_id as string)
-    const label = utcLabel(startIso)
+    const label = bookingTimeLabel(startIso, timezone)
     const manageLine = manageUrl
       ? `<p style="margin:14px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;">Need to change your time? You can <a href="${escapeHtml(manageUrl)}" target="_blank" style="color:#8A94A6;text-decoration:underline;">reschedule or cancel here</a>.</p>`
       : ''

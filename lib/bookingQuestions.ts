@@ -116,6 +116,65 @@ export async function loadBookingTypes(): Promise<string[]> {
   return normalizeBookingTypes(data.value)
 }
 
+// The reserved custom_answers entry the booking type is stored as.
+//
+// It rides in custom_answers rather than a column so every admin view that
+// already renders answers renders it with no admin-side change — but it is
+// accepted as a TOP-LEVEL request field, never as an answers-map key. The
+// answers map is validated against admin-defined questions and the type is not
+// one of those: validateBookingAnswers iterates the DEFINED questions and reads
+// answersMap[q.id], so an unknown key is never read. A type sent inside answers
+// is silently discarded, which is exactly what happened to booking
+// 937c0f16 — the request carried four answers and the row stored three, with no
+// error and no signal.
+export const BOOKING_TYPE_ANSWER_ID = 'booking_type'
+export const BOOKING_TYPE_LABEL = 'What kind of call is this?'
+
+export type BookingTypeResolution =
+  | { ok: true; entry: ValidatedAnswer | null }
+  | { ok: false; error: string; message: string }
+
+/**
+ * Validate a submitted booking type against the configured list.
+ *
+ * ABSENCE IS ALWAYS ALLOWED, even when types ARE configured. Making it required
+ * the moment an admin saves booking_types would break every booking made
+ * between this deploy and the frontend's — the page currently sends the type
+ * inside `answers`, where nothing reads it. A booking that loses its type is a
+ * missing label; a booking that 400s is a lost lead.
+ *
+ * A SUPPLIED value must be one of the configured types. Matching is exact
+ * first, then case-insensitive, and the CONFIGURED spelling is what gets
+ * stored — so the value in the row always comes from the admin's list rather
+ * than from whatever casing the client sent.
+ *
+ * With no types configured, a stray value is ignored rather than rejected:
+ * absent configuration must not become a required field, and it must not become
+ * a forbidden one either.
+ */
+export async function resolveBookingType(raw: unknown): Promise<BookingTypeResolution> {
+  const configured = await loadBookingTypes()
+  if (!configured.length) return { ok: true, entry: null }
+
+  const value = typeof raw === 'string' ? raw.trim() : ''
+  if (!value) return { ok: true, entry: null }
+
+  const match =
+    configured.find((t) => t === value) ?? configured.find((t) => t.toLowerCase() === value.toLowerCase())
+  if (!match) {
+    return {
+      ok: false,
+      error: 'invalid_booking_type',
+      message: `Please choose one of: ${configured.join(', ')}.`,
+    }
+  }
+
+  return {
+    ok: true,
+    entry: { id: BOOKING_TYPE_ANSWER_ID, label: BOOKING_TYPE_LABEL, type: 'dropdown', answer: match },
+  }
+}
+
 // Loads the GLOBAL active question definitions (legacy shared booking path).
 // Returns [] when unset or malformed, never throws.
 export async function loadBookingQuestions(): Promise<BookingQuestion[]> {
