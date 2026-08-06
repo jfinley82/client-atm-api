@@ -477,9 +477,59 @@ export type GapResolution =
   | { kind: 'stated'; focus: GapFocus }
   | { kind: 'conflict'; stated: GapFocus; evidenced: QuizPillar }
 
+/**
+ * What each focus CLAIMS beyond "this is the gap", and what to do when the
+ * scores do not support it.
+ *
+ * A table rather than a branch per focus, because a branch per focus is what a
+ * carve-out is made of and the carve-out is where this has leaked three times.
+ * Adding a fourth focus means adding a row here — it cannot be added without
+ * declaring what it asserts.
+ *
+ * The two directions are genuinely different, which is why they are data:
+ *   a pillar claims "this is the thing to fix", unsupported when the pillar is
+ *     already in the top band — there is nothing to fix, so: no gap.
+ *   capacity claims "the offer sells", unsupported below the lowest band that
+ *     declares a working business — so something else is the gap: conflict.
+ */
+const FOCUS_CLAIM: Record<
+  GapFocus,
+  { supported: (scores: Record<QuizPillar, number>, composite: number) => boolean; whenUnsupported: 'none' | 'conflict' }
+> = {
+  attract: { supported: (s) => s.attract < GAP_FLOOR, whenUnsupported: 'none' },
+  transform: { supported: (s) => s.transform < GAP_FLOOR, whenUnsupported: 'none' },
+  monetize: { supported: (s) => s.monetize < GAP_FLOOR, whenUnsupported: 'none' },
+  capacity: { supported: (_s, composite) => composite >= CAPACITY_EVIDENCE_FLOOR, whenUnsupported: 'conflict' },
+}
+
 /** The lowest-scoring pillar, ties broken by fixed pillar order so it is stable. */
 export function weakestPillar(scores: Record<QuizPillar, number>): QuizPillar {
   return QUIZ_PILLARS.reduce((low, p) => (scores[p] < scores[low] ? p : low), QUIZ_PILLARS[0])
+}
+
+/**
+ * Where a focus STANDS on the pillars' own 0-100 scale.
+ *
+ * This exists so the ordering rule is one comparison covering every focus rather
+ * than a pillar rule plus a capacity clause. Two rules that agree today are two
+ * rules, and the capacity clause is the third place this has leaked.
+ *
+ * A pillar stands at its own score. CAPACITY STANDS AT THE HIGHEST PILLAR,
+ * because "the offer sells and the constraint is delivery" is a claim that
+ * everything measured is already working — capacity is downstream of all three,
+ * so it cannot honestly stand lower than the best of them.
+ *
+ * That is what makes the capacity case checkable at all. Measured before this:
+ * 8128 of 65536 named Delivery capacity while a pillar sat materially below the
+ * highest — worst case Attract 0, Transform 50, Monetize 100, composite 50,
+ * clearing the evidence floor and printing "the offer sells and the constraint
+ * is delivery... not a problem more leads or a better page can solve" to a coach
+ * scoring ZERO on Attract. Silence would have been a gap in the advice; that
+ * clause is advice pointing the wrong way.
+ */
+export function focusStanding(scores: Record<QuizPillar, number>, focus: GapFocus): number {
+  if (focus === 'capacity') return Math.max(...QUIZ_PILLARS.map((p) => scores[p]))
+  return scores[focus]
 }
 
 /**
@@ -500,53 +550,42 @@ export function weakestPillar(scores: Record<QuizPillar, number>): QuizPillar {
  * out loud that the coach named something else — which is more useful than
  * either signal alone, and is the only outcome that asserts nothing contradicted.
  *
- * Order matters and is not arbitrary:
+ * ONE ORDERING RULE, EVERY FOCUS, NO CARVE-OUT. Capacity used to return from its
+ * own branch before the margin was applied, exactly as the strictly-highest test
+ * used to. That is three leaks in the same place, so the shape is the bug: a
+ * focus with its own path is a focus the shared rule does not reach.
  *
- *  1. Capacity without evidence is a conflict. No pillar measures delivery, so
- *     nothing can confirm it either — but "the offer sells" is checkable, and
- *     below CAPACITY_EVIDENCE_FLOOR the scores say it does not.
- *  2. A stated pillar sitting materially ABOVE the weakest is a conflict. This
- *     subsumes "stated is the strictly highest" and also catches the tied case,
- *     as one rule rather than two.
- *  3. Only then, no-meaningful-gap: everything is within a step of everything
- *     else AND the stated pillar is in the top band. Checked after the conflict
- *     rules on purpose — Attract 100 / Transform 0 with Attract stated used to
- *     fall in here and print "no single gap is holding you back" over a pillar
- *     at zero.
- *  4. Otherwise the coach's statement stands, because nothing contradicts it.
+ * The unification is `focusStanding` — where a focus sits on the pillars' own
+ * scale. Then there is one comparison for everything.
  */
 export function resolveGap(scores: Record<QuizPillar, number>, stated: GapFocus): GapResolution {
   const weakest = weakestPillar(scores)
   const composite = Math.round(QUIZ_PILLARS.reduce((sum, p) => sum + scores[p], 0) / QUIZ_PILLARS.length)
 
-  if (stated === 'capacity') {
-    if (composite < CAPACITY_EVIDENCE_FLOOR) return { kind: 'conflict', stated, evidenced: weakest }
-    return { kind: 'stated', focus: stated }
-  }
-
-  // THE PROPERTY: a named pillar may not sit MATERIAL_MARGIN or more above the
-  // lowest pillar. Distance to the bottom, and nothing else.
+  // THE ORDERING RULE. A named focus may not STAND MATERIAL_MARGIN or more above
+  // the lowest pillar. Distance to the bottom, and nothing else.
   //
-  // This is the whole condition, deliberately with no companion test. A previous
-  // version also required the named pillar to be the STRICTLY highest, on the
-  // reasoning that a pillar at 67 is not contradicted by another at 33 because
-  // 67 is not good. That reasoning was wrong, and wrong in a way worth keeping
-  // written down: the page does not print "X is bad", it prints "your biggest
-  // gap is X". BIGGEST is a superlative — a claim about ORDERING, not about
-  // whether the score is poor. A pillar materially above the lowest is not the
-  // biggest gap whatever its absolute value.
-  //
-  // The strictly-highest test also returned before the margin was ever applied,
-  // so a tie at the TOP granted permission on a question about the BOTTOM. Being
-  // tied with another pillar is not evidence about the lowest one. Measured at
-  // the seven-question set: 12086 of 65536 results named a pillar sitting a
-  // material distance above the lowest, worst case Attract 89 / Transform 100 /
-  // Monetize 0 printing "your biggest gap is Attract" with Monetize at zero.
-  if (scores[stated] - scores[weakest] >= MATERIAL_MARGIN) {
+  // Deliberately with no companion test, because both companions it has had
+  // leaked. A previous version also required a pillar to be the STRICTLY
+  // highest, on the reasoning that a pillar at 67 is not contradicted by another
+  // at 33 because 67 is not good. That was wrong in a way worth keeping written
+  // down: the page does not print "X is bad", it prints "your biggest gap is X".
+  // BIGGEST is a superlative — a claim about ORDERING, not about whether the
+  // score is poor. Measured, that term let 12086 of 65536 through, worst case
+  // Attract 89 / Transform 100 / Monetize 0 naming Attract with Monetize at 0.
+  if (focusStanding(scores, stated) - scores[weakest] >= MATERIAL_MARGIN) {
     return { kind: 'conflict', stated, evidenced: weakest }
   }
 
-  if (scores[stated] >= GAP_FLOOR) return { kind: 'none' }
+  // THE CLAIM RULE, from the focus's own entry rather than an `if` per focus.
+  // Every focus asserts something beyond "this is the gap", and the scores have
+  // to support it. The two differ in direction and in what to do instead, so
+  // they are DATA on the focus rather than branches here — a branch is what a
+  // carve-out is made of.
+  const claim = FOCUS_CLAIM[stated]
+  if (!claim.supported(scores, composite)) {
+    return claim.whenUnsupported === 'none' ? { kind: 'none' } : { kind: 'conflict', stated, evidenced: weakest }
+  }
 
   return { kind: 'stated', focus: stated }
 }

@@ -17,6 +17,7 @@ import {
   CAPACITY_EVIDENCE_FLOOR,
   MATERIAL_MARGIN,
   SCORED_QUESTIONS,
+  focusStanding,
   normalizeProblemStatement,
   pointsFor,
   scoreQuiz,
@@ -483,7 +484,10 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
       const namesTopBand: string[] = []
       const outOfRange: string[] = []
       const noCopy: string[] = []
+      const anyFocusViolation: string[] = []
+      const standingMismatch: string[] = []
       let tiedHighest = 0
+      let capacityNamed = 0
 
       const walk = (i: number, acc: Record<string, string>) => {
         if (i === ids.length) {
@@ -495,6 +499,34 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
 
             if (r.composite < 0 || r.composite > 100) outOfRange.push(`${r.composite}`)
             if (!r.gap.title.trim() || !r.gap.body.trim() || !r.quick_win.title.trim()) noCopy.push(where)
+
+            // THE PREDICATE, EVERY FOCUS — and spelled out HERE rather than via
+            // lib's focusStanding.
+            //
+            // The first version of this assertion called focusStanding, which
+            // made it self-referential: mutating that function moved the rule
+            // AND the test together, so swapping capacity's standing from the
+            // highest pillar to the lowest passed cleanly while capacity was
+            // named 8612 times again. A test that reuses the thing it is
+            // checking is checking nothing. Found by mutation, not by reading.
+            if (r.gap.focus) {
+              const vals = QUIZ_PILLARS.map((p) => r.scores[p])
+              const lo = Math.min(...vals)
+              const hi = Math.max(...vals)
+              // A pillar is measured from its own score; capacity claims the
+              // business is working, so it is measured from the top.
+              const standing = r.gap.focus === 'capacity' ? hi : r.scores[r.gap.focus as 'attract' | 'transform' | 'monetize']
+              if (standing - lo >= MATERIAL_MARGIN && anyFocusViolation.length < 3) {
+                anyFocusViolation.push(`${where} -> named ${r.gap.focus}, standing ${standing}, lowest ${lo}`)
+              }
+              if (r.gap.focus === 'capacity') capacityNamed++
+              // And the lib agrees with the predicate written out here — kept as
+              // a separate check so the two can disagree loudly instead of the
+              // assertion silently inheriting whatever the lib decides.
+              if (focusStanding(r.scores, r.gap.focus) !== standing && standingMismatch.length < 3) {
+                standingMismatch.push(`${where}: lib says ${focusStanding(r.scores, r.gap.focus)}, predicate says ${standing}`)
+              }
+            }
 
             const pillar = r.gap.focus && r.gap.focus !== 'capacity' ? (r.gap.focus as 'attract' | 'transform' | 'monetize') : null
             if (pillar) {
@@ -537,7 +569,12 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
       ok(`swept every combination (${total} results)`, total === Math.pow(4, ids.length) * FOCUS_QUESTION.options.length, `${total}`)
 
       // THE TWO REPORTED DEFECTS, as general assertions.
+      // ONE ASSERTION, EVERY FOCUS — pillar and capacity alike. The pillar-only
+      // version below is kept as the narrower restatement, but this is the one
+      // that would have caught the capacity leak.
+      ok('no focus of ANY kind is named while standing MATERIAL_MARGIN or more above the lowest pillar', anyFocusViolation.length === 0, anyFocusViolation.join(' ; '))
       ok('no result names a pillar sitting MATERIAL_MARGIN or more above the lowest', namesStrongest.length === 0, namesStrongest.join(' ; '))
+      ok("lib's focusStanding agrees with the predicate written out independently", standingMismatch.length === 0, standingMismatch.join(' ; '))
       ok('capacity is never named without supporting evidence in the scores', capacityUnevidenced.length === 0, capacityUnevidenced.join(' ; '))
 
       // The original one, still ruled out.
@@ -551,6 +588,7 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
       // would still pass.
       console.log(`      census of ${total}: stated ${census.stated}, conflict ${census.conflict}, none ${census.none}`)
       console.log(`      names a TIED-highest pillar with a material spread: ${tiedHighest} (must be 0 — the tie is not an exemption)`)
+      console.log(`      capacity named: ${capacityNamed} of ${total}`)
       // WHAT THESE ASSERT, AND WHAT THEY DELIBERATELY DO NOT.
       //
       // An earlier version required `stated` to be the majority and `conflict`
