@@ -18,6 +18,27 @@ export type Authz = { ok: true; isAdmin: boolean } | { ok: false; status: number
  * probing ids learns whether a post exists either way (the feed is public), so
  * there is nothing to conceal by flattening them, and a distinct 403 is what
  * lets the frontend say "not yours" rather than "gone".
+ *
+ * THE ONE PATH NOTHING HERE COVERS: a real member being refused on another
+ * member's content. tests/forumThreading.test.ts exercises this branch, but
+ * handler-level against a mocked database — it proves the logic below, not that
+ * production refuses. And production could not be checked, for two separate
+ * reasons that both have to clear before it can be:
+ *
+ *   1. A signed-in session for a non-admin member. Non-admin ACCOUNTS already
+ *      exist (a full-tier member and a low_ticket member, both role: 'user'), so
+ *      "an account appears" is not the trigger — the account is not the missing
+ *      piece, a session for one is, and nobody can produce that without entering
+ *      someone else's credentials. Jamaul is admin, so his token passes every
+ *      check and proves nothing about this branch.
+ *   2. Content belonging to a second member to attempt against. Neither of those
+ *      accounts has ever posted or commented, so even with a session there would
+ *      be nothing of theirs to try to edit.
+ *
+ * So the trigger to watch for is narrower than a new account: a second member
+ * signed in AND having posted. When that happens naturally, one edit or delete
+ * attempt against their comment from another member's session closes this in ten
+ * seconds. Whoever is there when the conditions line up: take the shot.
  */
 export async function authorizeOwnerOrAdmin(
   table: 'forum_posts' | 'forum_comments',
