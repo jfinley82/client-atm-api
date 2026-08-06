@@ -48,17 +48,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     // Every key is validated and canonicalised BEFORE anything is written, so a
     // multi-key save is all-or-nothing rather than half-applied.
-    //
-    // The current values are loaded first because canonicalisation can depend on
-    // them: a date-only workshop_event_date keeps the time already stored, since
-    // the form's date picker cannot express one and so cannot be asking to drop
-    // it. Best-effort — a read failure must not block the write.
-    let currentSettings: Record<string, string> = {}
-    try {
-      currentSettings = await loadSettings()
-    } catch (err) {
-      console.error('[admin/settings] PATCH could not read current values', err)
-    }
     const values: Record<string, string> = {}
     for (const key of keys) {
       // Fail loudly on a key nothing consumes — otherwise a stray form field
@@ -69,7 +58,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (typeof body[key] !== 'string') {
         return res.status(400).json({ error: `value for '${key}' must be a string` })
       }
-      const normalized = normalizeSettingValue(key, body[key] as string, currentSettings[key] ?? null)
+      const normalized = normalizeSettingValue(key, body[key] as string)
       if (!normalized.ok) {
         return res.status(400).json({ error: normalized.error })
       }

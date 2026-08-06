@@ -201,20 +201,25 @@ export function normalizeWorkshopDate(raw: unknown): string | null {
 /**
  * Move a stored time onto a new date.
  *
- * WHY THIS IS NOT MAGIC, which was my objection to it the first time round.
+ * NOT WIRED TO ANY WRITE PATH, deliberately. Do not reconnect it to one on the
+ * basis of the incoming value's shape.
  *
- * The admin form renders `<input type="date">`. That control cannot express a
- * time at all, so when it posts '2026-08-28' the admin cannot possibly have
- * meant "and clear the time" — they meant "change the date". Dropping the time
- * is the interpretation that ignores what they could have intended; carrying it
- * is the faithful one. That is the difference between this and a rule that
- * guesses between two things the user might have wanted.
+ * It briefly ran in normalizeSettingValue, carrying a stored time onto a
+ * date-only post. The argument was that `<input type="date">` cannot express a
+ * time, so such a post could not mean "clear the time" — and the note claimed
+ * the rule was self-limiting, since a form that sent datetimes would never
+ * trigger it. Both statements were about a CONTROL, not about the data. The form
+ * gained date, time and zone inputs and began posting date-only to mean exactly
+ * that, at which point the rule made "a day, no particular time" unreachable:
+ * the only way out was an empty string, which clears the date as well.
  *
- * It is also self-limiting: once the form sends a datetime, every value arrives
- * with a time and this never fires again.
+ * The lesson is the reusable part. Intent inferred from the shape of a value is
+ * really an inference about whatever produced it, and it expires in silence when
+ * that thing is replaced. A net for legacy callers belongs behind an explicit
+ * signal in the request, where it can be seen and removed.
  *
- * Clearing stays possible — send an empty string, which clears the setting
- * outright — and any explicit time replaces the old one.
+ * What remains here is the arithmetic, which is correct and worth keeping for a
+ * caller that has decided, on its own evidence, that a time should move.
  *
  * DST is re-resolved rather than copied. If the stored offset was the workshop
  * zone's own offset on its own date, the value is an Eastern wall-clock time and

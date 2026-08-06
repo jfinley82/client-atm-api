@@ -233,12 +233,13 @@ function makeRes() {
     )
   }
 
-  console.log('\n-- the date picker cannot drop a time it could not express --')
-  // The recurrence, not the symptom. Writing a time once fixes nothing while the
-  // admin form still posts <input type="date"> — the next Save truncates it
-  // again, which is exactly how 2026-07-25T11:00-04:00 became 2026-08-28.
+  console.log('\n-- what is sent is what is stored: a date CLEARS a time --')
+  // The form now has date, time and zone inputs, so a date-only post is the
+  // admin deliberately saying "that day, no particular time". This briefly
+  // carried the stored time forward instead, which made that unreachable — the
+  // only escape was an empty string, and that clears the date too.
   {
-    settings = { workshop_event_date: '2026-08-28T11:00-04:00' }
+    settings = { workshop_event_date: '2026-08-28T14:30-05:00[America/Chicago]' }
     const r = makeRes()
     await adminSettings(
       {
@@ -251,47 +252,19 @@ function makeRes() {
     )
     ok('a date-only save succeeds', r.out.status === 200, `${r.out.status}`)
     ok(
-      'and the time rides along to the new date',
-      settings.workshop_event_date === '2026-09-15T11:00-04:00',
+      'and the stored time is GONE, not re-added',
+      settings.workshop_event_date === '2026-09-15',
       settings.workshop_event_date
-    )
-
-    // Moving out of DST re-resolves the offset rather than copying it: 11am
-    // stays 11am to everyone involved, instead of becoming 10am.
-    settings = { workshop_event_date: '2026-08-28T11:00-04:00' }
-    const r2 = makeRes()
-    await adminSettings(
-      {
-        method: 'PATCH',
-        headers: { authorization: `Bearer ${await createSessionToken(ADMIN)}` },
-        query: {},
-        body: { workshop_event_date: '2027-01-14' },
-      },
-      r2.res
     )
     ok(
-      'a January date gets -05:00, still 11:00 local',
-      settings.workshop_event_date === '2027-01-14T11:00-05:00',
-      settings.workshop_event_date
+      'the response agrees, so the form does not show a time it did not send',
+      r.out.body?.settings?.workshop_event_date === '2026-09-15',
+      JSON.stringify(r.out.body?.settings?.workshop_event_date)
     )
 
-    // An explicit time always wins.
-    settings = { workshop_event_date: '2026-08-28T11:00-04:00' }
-    const r3 = makeRes()
-    await adminSettings(
-      {
-        method: 'PATCH',
-        headers: { authorization: `Bearer ${await createSessionToken(ADMIN)}` },
-        query: {},
-        body: { workshop_event_date: '2026-08-28T18:45' },
-      },
-      r3.res
-    )
-    ok('an explicit time replaces the stored one', settings.workshop_event_date === '2026-08-28T18:45-04:00', settings.workshop_event_date)
-
-    // And clearing is still possible, so this is not a one-way door.
-    settings = { workshop_event_date: '2026-08-28T11:00-04:00' }
-    const r4 = makeRes()
+    // Clearing the date entirely is still separate from clearing the time.
+    settings = { workshop_event_date: '2026-08-28T14:30-04:00' }
+    const r2 = makeRes()
     await adminSettings(
       {
         method: 'PATCH',
@@ -299,33 +272,66 @@ function makeRes() {
         query: {},
         body: { workshop_event_date: '' },
       },
-      r4.res
+      r2.res
     )
-    ok('an empty value still clears the setting outright', settings.workshop_event_date === '', JSON.stringify(settings.workshop_event_date))
+    ok('an empty value clears the setting outright', settings.workshop_event_date === '', JSON.stringify(settings.workshop_event_date))
 
-    // Nothing to carry: a date-only value over a date-only value stays a date.
-    settings = { workshop_event_date: '2026-08-28' }
-    const r5 = makeRes()
+    // And a full datetime replaces a full datetime, zone and all.
+    settings = { workshop_event_date: '2026-08-28T14:30-04:00' }
+    const r3 = makeRes()
     await adminSettings(
       {
         method: 'PATCH',
         headers: { authorization: `Bearer ${await createSessionToken(ADMIN)}` },
         query: {},
-        body: { workshop_event_date: '2026-09-15' },
+        body: { workshop_event_date: '2026-08-28T18:45[America/Chicago]' },
       },
-      r5.res
+      r3.res
     )
-    ok('a date over a date stays a date', settings.workshop_event_date === '2026-09-15', settings.workshop_event_date)
-
-    // A deliberately pinned non-Eastern offset is preserved literally rather
-    // than re-resolved into the workshop zone.
     ok(
-      'a non-Eastern offset is carried as given',
+      'a datetime with a zone replaces what was there',
+      settings.workshop_event_date === '2026-08-28T18:45-05:00[America/Chicago]',
+      settings.workshop_event_date
+    )
+  }
+
+  console.log('\n-- carryTimeOnto is kept, and kept OFF the write path --')
+  // The arithmetic is correct and worth keeping for a caller that decides on its
+  // own evidence that a time should move. It must not be re-attached to the
+  // shape of an incoming value: that is an inference about whichever control
+  // produced it, and it expires silently when the control changes.
+  {
+    ok(
+      'the DST re-resolution still holds',
+      carryTimeOnto('2027-01-14', '2026-08-28T11:00-04:00') === '2027-01-14T11:00-05:00',
+      String(carryTimeOnto('2027-01-14', '2026-08-28T11:00-04:00'))
+    )
+    ok(
+      'a named zone follows its own rules across the boundary',
+      carryTimeOnto('2027-01-14', '2026-08-28T11:00-05:00[America/Chicago]') === '2027-01-14T11:00-06:00[America/Chicago]',
+      String(carryTimeOnto('2027-01-14', '2026-08-28T11:00-05:00[America/Chicago]'))
+    )
+    ok(
+      'a deliberately pinned offset is carried literally',
       carryTimeOnto('2026-09-15', '2026-08-28T11:00+02:00') === '2026-09-15T11:00+02:00',
       String(carryTimeOnto('2026-09-15', '2026-08-28T11:00+02:00'))
     )
-    ok('nothing is carried from a date-only current value', carryTimeOnto('2026-09-15', '2026-08-28') === null)
+    ok('nothing is carried from a date-only value', carryTimeOnto('2026-09-15', '2026-08-28') === null)
     ok('nothing is carried from junk', carryTimeOnto('2026-09-15', 'whatever') === null)
+
+    // The guard that matters: no write path may call it.
+    const { readFileSync } = await import('fs')
+    const { join } = await import('path')
+    for (const f of ['lib/appSettings.ts', 'api/admin/settings/index.ts', 'api/settings/index.ts']) {
+      // An invocation, not a mention: the note in appSettings.ts names the
+      // function precisely so the next person knows why it is absent, and a
+      // bare-word grep would fail on that explanation.
+      ok(
+        `${f} does not call carryTimeOnto`,
+        !/carryTimeOnto\s*\(/.test(readFileSync(join(process.cwd(), f), 'utf8')),
+        'reconnected to a write path — see the note in lib/workshopDate.ts'
+      )
+    }
   }
 
   console.log('\n-- other settings are untouched by this --')

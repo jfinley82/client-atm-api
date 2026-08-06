@@ -1,4 +1,4 @@
-import { carryTimeOnto, parseWorkshopDate } from './workshopDate'
+import { parseWorkshopDate } from './workshopDate'
 
 // The set of app_settings keys the write paths accept. Both write paths
 // (PATCH /api/admin/settings and the legacy POST /api/settings) validate
@@ -68,11 +68,7 @@ export const ALLOWED_SETTING_KEYS = new Set([
  */
 export function normalizeSettingValue(
   key: string,
-  value: string,
-  // The value currently stored for this key, when the caller has it. Only
-  // workshop_event_date uses it, and only to keep a time the incoming value
-  // could not have expressed — see carryTimeOnto.
-  current?: string | null
+  value: string
 ): { ok: true; value: string } | { ok: false; error: string } {
   if (key === 'workshop_event_date') {
     const parsed = parseWorkshopDate(value)
@@ -84,15 +80,24 @@ export function normalizeSettingValue(
       }
     }
 
-    // A date with no time, landing on a stored value that HAS one, is the admin
-    // form's date picker posting — a control that cannot express a time, so it
-    // cannot be asking to remove one. Keep it. An empty string still clears the
-    // setting outright, and any explicit time replaces what was there.
-    if (parsed.value && !parsed.hasTime) {
-      const carried = carryTimeOnto(parsed.value, current ?? null)
-      if (carried) return { ok: true, value: carried }
-    }
-
+    // WHAT IS SENT IS WHAT IS STORED. A date with no time clears any time that
+    // was there, because a date with no time is now a thing the admin can
+    // deliberately mean.
+    //
+    // This briefly did the opposite: it carried a stored time onto a date-only
+    // post, on the reasoning that <input type="date"> cannot express a time and
+    // so cannot be asking to remove one. That reasoning depended on the control,
+    // and the control changed — the form now has date, time and zone inputs, and
+    // posts date-only to mean exactly that. The rule then made "a day, no
+    // particular time" unreachable: the only escape was an empty string, which
+    // clears the date too.
+    //
+    // The general lesson, worth more than the rule: do not infer intent from the
+    // SHAPE of a value. Shape is a property of whatever control happened to
+    // produce it, so an inference drawn from it expires silently when that
+    // control is replaced. If a net for older callers is ever wanted, gate it on
+    // an explicit signal in the request. carryTimeOnto survives in
+    // lib/workshopDate.ts for that, and is deliberately not wired here.
     return { ok: true, value: parsed.value }
   }
   return { ok: true, value }
