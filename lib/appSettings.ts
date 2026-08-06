@@ -33,6 +33,14 @@ export const ALLOWED_SETTING_KEYS = new Set([
   'book_a_call_url',
   // JSON array of admin-defined booking-form questions (see lib/bookingQuestions.ts).
   'booking_questions',
+  // JSON array of booking-type labels ("Discovery Call", "Strategy Session")
+  // offered as a dropdown on the public /book page. Read from the unauthenticated
+  // GET, because that page has no session — which is also why the labels must be
+  // publishable copy and nothing else. Normalized by normalizeBookingTypes in
+  // lib/bookingQuestions.ts, which degrades a malformed value to no dropdown
+  // rather than a broken form. Stored as a JSON STRING, matching booking_questions:
+  // app_settings.value is text and both write paths reject a non-string value.
+  'booking_types',
   // Community page branding. The dashboard reads these from the public GET with
   // the current copy as fallbacks, so they light up the moment values exist.
   'community_title',
