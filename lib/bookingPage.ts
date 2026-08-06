@@ -140,6 +140,53 @@ export async function resolveBookingSlug(rawSlug: unknown): Promise<BookingPageO
   }
 }
 
+/**
+ * The app_settings key naming which coach MTM's OWN booking page belongs to.
+ *
+ * World-readable like everything in that allowlist, and that costs nothing here:
+ * a booking slug is public by construction — it is the address strangers type.
+ * This publishes which slug is the house one, not anything about the coach.
+ *
+ * It exists because MTM's internal book-a-call page has no slug in its URL. The
+ * alternative was hardcoding 'jamaul', which is a fact about today's world
+ * written into code that outlives it — the exact shape CLAUDE.md keeps
+ * collecting instances of.
+ */
+export const BOOKING_HOST_SLUG_KEY = 'booking_host_slug'
+
+/**
+ * Resolve the booking page's host, with or without a slug.
+ *
+ * ONE RESOLVER, and deliberately not two. A slug that was supplied and a slug
+ * that was looked up are the same kind of thing by the time they matter, so
+ * they go through the same `resolveBookingSlug` and produce the same owner —
+ * which is what makes "no slug" cost nothing to reason about: there is no
+ * second payload shape to keep in step, and no second place for a rule to rot.
+ *
+ * NO FALLBACK BEYOND THE SETTING. Not the first admin, not the oldest user, not
+ * the only coach with a slug. Every one of those is a guess that renders
+ * confidently, and a booking page whose entire job is telling a stranger WHO
+ * they are about to meet has no honest way to be unsure. Unset, malformed, or
+ * pointing at a slug nobody owns all answer the same: null, which the endpoint
+ * turns into a 404. A page with no host identity is a fixable state; a page
+ * showing the wrong person is a call in somebody's calendar with a stranger.
+ */
+export async function resolveBookingHost(rawSlug: unknown): Promise<BookingPageOwner | null> {
+  const supplied = Array.isArray(rawSlug) ? rawSlug[0] : rawSlug
+  if (typeof supplied === 'string' && supplied.trim()) return resolveBookingSlug(supplied)
+
+  const { data, error } = await supabase
+    .from('app_settings')
+    .select('value')
+    .eq('key', BOOKING_HOST_SLUG_KEY)
+    .maybeSingle()
+  // An unset key and a failed read are the same answer on purpose: neither is a
+  // reason to show somebody a host we cannot name.
+  if (error || !data?.value) return null
+
+  return resolveBookingSlug(data.value)
+}
+
 // Which image the page's circle shows, decided here rather than in the
 // component so every surface answers it the same way.
 //
