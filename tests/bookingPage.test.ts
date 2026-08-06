@@ -34,6 +34,16 @@ function ok(label: string, cond: boolean, extra?: string) {
 
 const COACH = 'coach-1'
 
+// Shaped like the real storage URLs, which SHARE THE `avatars` BUCKET and both
+// carry the coach's id — see the long note in tests/brandIdentity.test.ts. The
+// leak assertion below therefore tests for the account OBJECT PATH, which
+// appears in one and not the other. A guard phrased against the bucket, the id,
+// or the storage host would catch the leak and also reject a legitimate
+// headshot, and the tempting fix for that is to weaken the guard.
+const STORAGE = 'https://stub.supabase.co/storage/v1/object/public'
+const ACCOUNT_AVATAR = `${STORAGE}/avatars/avatars/${COACH}?v=1786022484350`
+const ACCOUNT_OBJECT = `/avatars/avatars/${COACH}`
+
 // A settings row with EVERY private field populated, so a leak has something to
 // leak. The whole point of these assertions is that the response is built by
 // construction rather than by subtraction — if it were a filtered row, adding a
@@ -42,8 +52,10 @@ const SETTINGS_ROW: Record<string, unknown> = {
   user_id: COACH,
   booking_slug: 'alex-rivera',
   business_name: 'Rivera Coaching',
-  logo_url: 'https://cdn.example.com/logo.png',
-  headshot_url: 'https://cdn.example.com/headshot.jpg',
+  logo_url: `${STORAGE}/avatars/brand/${COACH}/logo`,
+  // Same bucket and same coach id as ACCOUNT_AVATAR, deliberately — a leak
+  // assertion has to survive that collision to be worth having.
+  headshot_url: `${STORAGE}/avatars/brand/${COACH}/headshot?v=1786024979335`,
   brand_primary_color: '#2C5F2D',
   brand_secondary_color: '#97BC62',
   booking_page_title: 'Consultation with Alex',
@@ -89,7 +101,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
     return json(slugRow)
   }
   if (url.includes('/rest/v1/user_availability')) return json(workingHoursRow)
-  if (url.includes('/rest/v1/users')) return json({ id: COACH, name: 'Alex Rivera', avatar_url: 'https://cdn.example.com/PRIVATE-AVATAR.png' })
+  if (url.includes('/rest/v1/users')) return json({ id: COACH, name: 'Alex Rivera', avatar_url: ACCOUNT_AVATAR })
   if (url.includes('/rest/v1/app_settings')) return json(globalPhoneRow)
   if (url.includes('/rest/v1/funnels')) return json(funnelRowForId ? [funnelRowForId] : [])
   if (url.includes('/rest/v1/calendar_connections')) return json(null)
@@ -432,13 +444,25 @@ function deepKeys(v: unknown, acc: string[] = []): string[] {
 
     // users.name arrives from the SAME table as avatar_url, so this is the
     // moment the avatar could ride along. It must not.
+    //
+    // Tested by the account object's PATH, not by the bucket it sits in: a
+    // coach's own headshot is served from the same bucket under the same id,
+    // so a bucket-shaped assertion refuses a legitimate value.
     const strings = deepStrings(r.out.body)
     ok(
       'the account avatar is nowhere in the response',
-      !strings.some((x) => x.includes('PRIVATE-AVATAR')),
+      !strings.some((x) => x.includes(ACCOUNT_OBJECT)),
       JSON.stringify(strings)
     )
     ok('and no avatar_url key', !deepKeys(r.out.body).includes('avatar_url'))
+
+    // The headshot the coach DID set comes back, from the same bucket, proving
+    // the assertion above is discriminating rather than merely satisfied.
+    ok(
+      'while the brand headshot is published',
+      typeof r.out.body?.page?.headshot_url === 'string' && r.out.body.page.headshot_url.includes('/avatars/'),
+      JSON.stringify(r.out.body?.page?.headshot_url)
+    )
   }
 
   console.log('\n-- ACCEPTANCE 5: a coach gets THEIR questions, never the global set --')
