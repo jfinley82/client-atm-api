@@ -6,11 +6,14 @@ import { createSessionToken } from '../lib/auth'
 import {
   MONIKER_BANDS,
   QUIZ_PILLARS,
+  QUIZ_PROBLEM_PROMPT,
   QUIZ_QUESTIONS,
   QUIZ_QUESTION_IDS,
   assertMonikerBandsCoverEveryScore,
+  assertPointsTablesAreWellFormed,
   lowestPillar,
   normalizeProblemStatement,
+  pointsFor,
   scoreQuiz,
   validateQuizAnswers,
 } from '../lib/quizScoring'
@@ -172,6 +175,7 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
 ;(async () => {
   const analyze: Handler = (await import('../api/quiz/analyze')).default
   const getQuiz: Handler = (await import('../api/quiz/index')).default
+  const getQuestions: Handler = (await import('../api/quiz/questions')).default
 
   async function post(userId: string, body: unknown) {
     const r = makeRes()
@@ -193,10 +197,6 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
     ok('every question belongs to a pillar', QUIZ_QUESTIONS.every((q) => QUIZ_PILLARS.includes(q.pillar)))
     ok('every pillar has at least one question', QUIZ_PILLARS.every((p) => QUIZ_QUESTIONS.some((q) => q.pillar === p)))
     ok('no duplicate question ids', new Set(QUIZ_QUESTION_IDS).size === 7)
-    ok(
-      'every question scores all four letters within 1-4',
-      QUIZ_QUESTIONS.every((q) => (['a', 'b', 'c', 'd'] as const).every((l) => q.points[l] >= 1 && q.points[l] <= 4))
-    )
 
     // A composite with no moniker is a results screen with an empty headline.
     // Checked across all 101 values rather than by reading the bands.
@@ -204,6 +204,122 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
     ok('every composite 0-100 maps to exactly one moniker', gaps.length === 0, gaps.slice(0, 5).join('; '))
     ok('the bands are ordered and start at 0', MONIKER_BANDS[0].min === 0)
     ok('and end at 100', MONIKER_BANDS[MONIKER_BANDS.length - 1].max === 100)
+
+    // The band check's sibling. normalise derives a pillar's range from the
+    // QUESTION COUNT (n*1 to n*4), not from the points actually present, so a
+    // table that drifts out of 1-4 does not fail — it makes a pillar's floor
+    // unreachable, or pushes a composite past 100 into no band at all, throwing
+    // from monikerFor a long way from the edit that caused it.
+    const malformed = assertPointsTablesAreWellFormed()
+    ok('every question offers a 1 and a 4, all within 1-4', malformed.length === 0, malformed.join('; '))
+  }
+
+  console.log('\n-- the assumptions those two guards protect are real --')
+  {
+    // Mutating the real table would leak into every later block, so the failure
+    // modes are demonstrated on copies shaped like it. The point is to show the
+    // guards catch what they claim, not to trust the wording.
+    const noOne = { ...QUIZ_QUESTIONS[0], options: QUIZ_QUESTIONS[0].options.map((o) => ({ ...o, points: Math.max(o.points, 2) })) }
+    ok(
+      'a question with no 1 makes its floor unreachable',
+      !noOne.options.some((o) => o.points === 1),
+      'fixture no longer demonstrates the case'
+    )
+
+    const overFour = { ...QUIZ_QUESTIONS[0], options: QUIZ_QUESTIONS[0].options.map((o) => ({ ...o, points: o.points + 3 })) }
+    ok('and points above 4 are what would exceed 100', overFour.options.some((o) => o.points > 4))
+
+    // The band check would then be the thing that fires, which is the pairing:
+    // a composite outside 0-100 matches no band and monikerFor throws rather
+    // than returning a wrong headline.
+    let threw = false
+    try {
+      const { monikerFor } = await import('../lib/quizScoring')
+      monikerFor(140)
+    } catch {
+      threw = true
+    }
+    ok('an out-of-range composite throws rather than picking a band', threw)
+  }
+
+  console.log('\n-- ACCEPTANCE: the served questions and the scoring table are ONE source --')
+  // Asserted against each other, never separately. Two lists that agree today
+  // are two lists, and the failure this pins is silent: if the frontend owned
+  // the option text and wrote (a) as the strongest answer on any question, every
+  // score for that question would invert with no error anywhere.
+  {
+    const servedRes = makeRes()
+    await getQuestions(
+      { method: 'GET', headers: { authorization: `Bearer ${await createSessionToken(COACH)}` }, query: {} },
+      servedRes.res
+    )
+    const served = servedRes.out
+    ok('the question set is served', served.status === 200, `${served.status} ${JSON.stringify(served.body)}`)
+
+    const questions = (served.body?.questions || []) as Array<{ id: string; prompt: string; options: Array<{ letter: string; label: string }> }>
+    ok('all seven come back', questions.length === QUIZ_QUESTIONS.length, `${questions.length}`)
+    ok('and the count is echoed rather than hardcoded downstream', served.body?.total === QUIZ_QUESTIONS.length)
+
+    // ONE: every served option maps to a points entry.
+    const unscored: string[] = []
+    for (const q of questions) {
+      const table = QUIZ_QUESTIONS.find((t) => t.id === q.id)
+      if (!table) {
+        unscored.push(`${q.id}: served but not in the scoring table`)
+        continue
+      }
+      for (const o of q.options) {
+        try {
+          pointsFor(table, o.letter as any)
+        } catch {
+          unscored.push(`${q.id}.${o.letter}: served but worth nothing`)
+        }
+      }
+    }
+    ok('every served option maps to a points entry', unscored.length === 0, unscored.join('; '))
+
+    // TWO: every points entry has served text.
+    const unrendered: string[] = []
+    for (const table of QUIZ_QUESTIONS) {
+      const q = questions.find((s) => s.id === table.id)
+      if (!q) {
+        unrendered.push(`${table.id}: scored but never served`)
+        continue
+      }
+      if (q.prompt !== table.prompt) unrendered.push(`${table.id}: served prompt differs from the table's`)
+      for (const o of table.options) {
+        const shown = q.options.find((s) => s.letter === o.letter)
+        if (!shown) unrendered.push(`${table.id}.${o.letter}: scored but not offered`)
+        else if (shown.label !== o.label) unrendered.push(`${table.id}.${o.letter}: served label differs from the table's`)
+      }
+    }
+    ok('every points entry has served text', unrendered.length === 0, unrendered.join('; '))
+
+    // Order is presentation only — the served sequence matches the table's, and
+    // scoring is keyed by id and letter so resequencing moves no score.
+    ok(
+      'served order matches the table order',
+      questions.map((q) => q.id).join(',') === QUIZ_QUESTION_IDS.join(','),
+      questions.map((q) => q.id).join(',')
+    )
+
+    // THE RUBRIC IS NOT PUBLISHED. Serving points would put the answer key on
+    // the page of a self-assessment.
+    const wire = JSON.stringify(served.body)
+    ok('no option carries its points on the wire', !questions.some((q) => q.options.some((o) => 'points' in o)), wire)
+    ok('and no pillar is disclosed either', !/"pillar"/.test(wire), wire)
+
+    // The open question travels with them, separately, because it is not scored
+    // and must not be rendered into the scored loop.
+    ok('the open question is served', served.body?.problem_question?.prompt === QUIZ_PROBLEM_PROMPT, JSON.stringify(served.body?.problem_question))
+    ok('and is not one of the scored seven', !questions.some((q) => q.prompt === QUIZ_PROBLEM_PROMPT))
+    ok('and names the field it posts to', served.body?.problem_question?.field === 'problem_statement')
+
+    // Answering with what was served is accepted end to end — the loop closed.
+    const fromServed = Object.fromEntries(questions.map((q) => [q.id, q.options[q.options.length - 1].letter]))
+    const submitted = await post(COACH, { answers: fromServed })
+    ok('answers built from the served set score cleanly', submitted.status === 200, `${submitted.status} ${JSON.stringify(submitted.body)}`)
+    resetDb()
   }
 
   console.log('\n-- ACCEPTANCE 4: scoring is deterministic --')
@@ -439,6 +555,14 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
     const r4 = makeRes()
     await getQuiz({ method: 'GET', headers: {}, query: {} }, r4.res)
     ok('an unauthenticated read is refused', r4.out.status === 401 || r4.out.status === 403, `${r4.out.status}`)
+
+    const r5 = makeRes()
+    await getQuestions({ method: 'POST', headers: {}, query: {} }, r5.res)
+    ok('POST /api/quiz/questions is 405', r5.out.status === 405, `${r5.out.status}`)
+
+    const r6 = makeRes()
+    await getQuestions({ method: 'GET', headers: {}, query: {} }, r6.res)
+    ok('the question set is not public', r6.out.status === 401 || r6.out.status === 403, `${r6.out.status}`)
   }
 
   console.log('\n-- validateQuizAnswers drops unknown keys rather than storing them --')

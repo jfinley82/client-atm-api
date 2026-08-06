@@ -1,11 +1,20 @@
 // The ATM Quiz: seven multiple-choice questions, three sub-scores, one composite.
 //
-// EVERYTHING THAT DECIDES A NUMBER IS A TABLE IN THIS FILE. No points are
-// computed in the handler, none are derived from the order options happen to
-// appear in, and nothing reaches for the clock or a random seed. Same answers,
-// same numbers, forever — which is the whole requirement: a coach who retakes
-// the quiz and gets a different result for the same answers will not trust it,
-// and neither will whoever is debugging it a year from now.
+// EVERYTHING THAT DECIDES A NUMBER IS A TABLE IN THIS FILE, and so is every word
+// the coach reads. No points are computed in the handler, none are derived from
+// the order options happen to appear in, and nothing reaches for the clock or a
+// random seed. Same answers, same numbers, forever — which is the whole
+// requirement: a coach who retakes the quiz and gets a different result for the
+// same answers will not trust it, and neither will whoever is debugging it later.
+//
+// THE OPTION TEXT LIVES HERE WITH ITS POINTS, IN THE SAME OBJECT. An earlier
+// version put points against bare letters and left the wording to the frontend,
+// which protects against options being REORDERED and not at all against them
+// MEANING something else. If the frontend had written option (a) on any question
+// as the strongest answer, every score for that question would have inverted
+// silently — no error, no failing test, just wrong numbers under a coach's name.
+// Serving the text from here (see api/quiz/questions.ts) removes the second
+// place the meaning could live. Same reason resolveBookingQuestions exists.
 //
 // The three pillars are the method's own: Attract (can people find you and do
 // you know who they are), Transform (is the offer clear enough to deliver),
@@ -17,61 +26,127 @@ export type QuizPillar = 'attract' | 'transform' | 'monetize'
 export const QUIZ_LETTERS: QuizLetter[] = ['a', 'b', 'c', 'd']
 export const QUIZ_PILLARS: QuizPillar[] = ['attract', 'transform', 'monetize']
 
-type QuizQuestion = {
+/** One option: the words the coach reads and what choosing it is worth, together. */
+export type QuizOption = {
+  letter: QuizLetter
+  label: string
+  /** 1 is the least ready answer and 4 the most, on every question. */
+  points: number
+}
+
+export type QuizQuestion = {
   id: string
   pillar: QuizPillar
-  /** What the option means, so the points below can be read without the quiz UI. */
-  points: Record<QuizLetter, number>
+  prompt: string
+  options: QuizOption[]
 }
 
 /**
- * The seven scored questions.
+ * The seven scored questions, in the order they are asked.
  *
- * POINTS ARE WRITTEN PER LETTER, NOT DERIVED FROM POSITION. It would be shorter
- * to say "a=1, b=2, c=3, d=4 everywhere" and let each question order its own
- * options — and then reordering options in the frontend would silently change
- * every coach's score, with the quiz still looking correct on screen. Spelling
- * the mapping out here means the frontend can present options in any order it
- * likes and the numbers do not move.
- *
- * 1 is the least ready answer and 4 the most, on every question, so a raw sum
- * has a consistent direction.
+ * ARRAY ORDER IS PRESENTATION ORDER and nothing else — scoring is keyed by
+ * question id and by letter, so these can be resequenced without moving a single
+ * score. That separation is deliberate: the one thing a frontend must never be
+ * able to change by accident is what an answer is worth.
  */
 export const QUIZ_QUESTIONS: QuizQuestion[] = [
-  // "How consistent is your client flow right now?"
-  // none -> occasional referrals -> steady but manual -> predictable pipeline
-  { id: 'client_flow', pillar: 'attract', points: { a: 1, b: 2, c: 3, d: 4 } },
-
-  // "Where do your leads come from?"
-  // nowhere -> word of mouth only -> one channel working -> more than one
-  { id: 'lead_source', pillar: 'attract', points: { a: 1, b: 2, c: 3, d: 4 } },
-
-  // "How clear are you on your ideal client?"
-  // anyone who'll pay -> a rough idea -> a defined niche -> named, with evidence
-  { id: 'ideal_client', pillar: 'attract', points: { a: 1, b: 2, c: 3, d: 4 } },
-
-  // "What's your biggest challenge?"
-  // Not a ladder — these are four different problems, and the points say how
-  // far along someone usually is when that problem is the one in front of them.
-  // Finding people at all sits earlier than pricing what already works.
-  { id: 'biggest_challenge', pillar: 'transform', points: { a: 1, b: 3, c: 2, d: 4 } },
-
-  // "How clear is your offer?"
-  // can't say it -> a paragraph -> one sentence -> one sentence buyers repeat
-  { id: 'offer_clarity', pillar: 'transform', points: { a: 1, b: 2, c: 3, d: 4 } },
-
-  // "How confident are you in your pricing?"
-  // discount to close -> flinch saying it -> hold it -> raised it and still close
-  { id: 'pricing_confidence', pillar: 'monetize', points: { a: 1, b: 2, c: 3, d: 4 } },
-
-  // "What's your ninety-day goal?"
-  // first paying client -> consistent months -> raise rates -> scale delivery
-  // Scored as a position, not an ambition: wanting to scale delivery implies
-  // something already sells. A goal is evidence about where somebody IS.
-  { id: 'ninety_day_goal', pillar: 'monetize', points: { a: 1, b: 2, c: 3, d: 4 } },
+  {
+    id: 'client_flow',
+    pillar: 'attract',
+    prompt: 'How consistent is your client flow right now?',
+    options: [
+      { letter: 'a', label: "Feast or famine — some months there's nothing", points: 1 },
+      { letter: 'b', label: "The odd referral, but I can't predict when", points: 2 },
+      { letter: 'c', label: "Fairly steady, but I'm chasing it every week", points: 3 },
+      { letter: 'd', label: 'Predictable — I know roughly what next month looks like', points: 4 },
+    ],
+  },
+  {
+    id: 'biggest_challenge',
+    pillar: 'transform',
+    // These are four DIFFERENT problems rather than four degrees of one, so the
+    // points say how far along somebody usually is when that particular problem
+    // is the one in front of them. Not being able to deliver more is a problem
+    // you only get to have once the thing sells.
+    prompt: "What's your biggest challenge right now?",
+    options: [
+      { letter: 'a', label: 'Not enough people know I exist', points: 1 },
+      { letter: 'b', label: "People are interested, but I can't explain the offer clearly", points: 2 },
+      { letter: 'c', label: "They understand it and still don't buy at my price", points: 3 },
+      { letter: 'd', label: "It sells, but I can't deliver more without breaking", points: 4 },
+    ],
+  },
+  {
+    id: 'lead_source',
+    pillar: 'attract',
+    prompt: 'Where do your leads come from?',
+    options: [
+      { letter: 'a', label: 'Nowhere reliable right now', points: 1 },
+      { letter: 'b', label: 'Word of mouth, when it happens', points: 2 },
+      { letter: 'c', label: 'One channel that works', points: 3 },
+      { letter: 'd', label: 'More than one, and I know which does what', points: 4 },
+    ],
+  },
+  {
+    id: 'ideal_client',
+    pillar: 'attract',
+    prompt: 'How clear are you on who you help?',
+    options: [
+      { letter: 'a', label: "Anyone who'll pay me", points: 1 },
+      { letter: 'b', label: 'A rough idea, but it moves', points: 2 },
+      { letter: 'c', label: 'A defined niche I can describe', points: 3 },
+      { letter: 'd', label: 'A named person, with evidence they buy', points: 4 },
+    ],
+  },
+  {
+    id: 'pricing_confidence',
+    pillar: 'monetize',
+    prompt: 'How confident are you in your pricing?',
+    options: [
+      { letter: 'a', label: 'I discount to close', points: 1 },
+      { letter: 'b', label: 'I say the number, but I flinch', points: 2 },
+      { letter: 'c', label: 'I hold my price', points: 3 },
+      { letter: 'd', label: 'I raised it and still close', points: 4 },
+    ],
+  },
+  {
+    id: 'offer_clarity',
+    pillar: 'transform',
+    prompt: 'How clear is your offer?',
+    options: [
+      { letter: 'a', label: 'I struggle to say it at all', points: 1 },
+      { letter: 'b', label: 'I can explain it, but it takes a paragraph', points: 2 },
+      { letter: 'c', label: 'One sentence, and it mostly lands', points: 3 },
+      { letter: 'd', label: 'One sentence buyers repeat back to me', points: 4 },
+    ],
+  },
+  {
+    id: 'ninety_day_goal',
+    pillar: 'monetize',
+    // Scored as a position, not an ambition: wanting to scale delivery implies
+    // something already sells. A goal is evidence about where somebody IS.
+    prompt: "What's your goal for the next ninety days?",
+    options: [
+      { letter: 'a', label: 'Land my first paying client', points: 1 },
+      { letter: 'b', label: 'Get to consistent months', points: 2 },
+      { letter: 'c', label: 'Raise my rates', points: 3 },
+      { letter: 'd', label: 'Scale delivery without breaking', points: 4 },
+    ],
+  },
 ]
 
 export const QUIZ_QUESTION_IDS = QUIZ_QUESTIONS.map((q) => q.id)
+
+/**
+ * The open question, asked last and never scored.
+ *
+ * Its wording lives here for the same reason the options do: Step 1 offers the
+ * answer back to the coach as their own words, so the question that produced
+ * those words is part of the contract, not frontend copy.
+ */
+export const QUIZ_PROBLEM_PROMPT = 'In your own words, what problem do you help people solve?'
+export const QUIZ_PROBLEM_HELP =
+  'However you would say it to someone at a dinner party. This is carried into Step 1 exactly as you write it.'
 
 // Human-readable pillar names, here rather than in the frontend so the results
 // screen, the gap line and any future email all say the same word.
@@ -92,11 +167,13 @@ export type QuizAnalysis = {
   quick_win: { title: string; body: string }
 }
 
-export type QuizResult = {
-  answers: QuizAnswers
-  problem_statement: string
-  score: number
-  analysis: QuizAnalysis
+/** What choosing `letter` on `question` is worth. One lookup, used everywhere. */
+export function pointsFor(question: QuizQuestion, letter: QuizLetter): number {
+  const option = question.options.find((o) => o.letter === letter)
+  // Unreachable for a validated answer; throwing rather than defaulting to 0,
+  // because a silently-zero question is a wrong composite nobody can see.
+  if (!option) throw new Error(`no option '${letter}' on question '${question.id}'`)
+  return option.points
 }
 
 /**
@@ -104,9 +181,13 @@ export type QuizResult = {
  *
  * Against the pillar's OWN range rather than against its maximum, so 0 means
  * "the least ready answer to every question here" and 100 means "the most
- * ready". Dividing by the max instead would floor a three-question pillar at 25
- * and a two-question pillar at 25 as well — the same number meaning different
- * distances from the bottom, and no coach ever able to score below it.
+ * ready". Dividing by the max instead would floor every pillar at 25 and make
+ * the bottom of the scale unreachable.
+ *
+ * THIS ASSUMES EVERY QUESTION OFFERS A 1 AND A 4. A question scored
+ * {a:2,b:3,c:4,d:4} would make 0 unreachable on its pillar; one scored above 4
+ * would push a composite past 100 and out of every moniker band.
+ * assertPointsTablesAreWellFormed pins that, and the suite runs it.
  */
 function normalise(raw: number, questions: QuizQuestion[]): number {
   const min = questions.length * 1
@@ -119,9 +200,9 @@ function normalise(raw: number, questions: QuizQuestion[]): number {
  * The moniker ladder, by composite.
  *
  * Bands are [min, max] inclusive and must cover 0-100 with no gap and no
- * overlap — `assertMonikerBandsCoverEveryScore` below proves that for all 101
- * values rather than leaving it to reading. A composite with no moniker would
- * be a results screen with an empty headline.
+ * overlap — `assertMonikerBandsCoverEveryScore` proves that for all 101 values
+ * rather than leaving it to reading. A composite with no moniker would be a
+ * results screen with an empty headline.
  */
 export const MONIKER_BANDS: Array<{ min: number; max: number; name: string; summary: string }> = [
   {
@@ -214,7 +295,7 @@ export function scoreQuiz(answers: QuizAnswers): QuizAnalysis {
 
   for (const pillar of QUIZ_PILLARS) {
     const questions = QUIZ_QUESTIONS.filter((q) => q.pillar === pillar)
-    const raw = questions.reduce((sum, q) => sum + q.points[answers[q.id]], 0)
+    const raw = questions.reduce((sum, q) => sum + pointsFor(q, answers[q.id]), 0)
     scores[pillar] = normalise(raw, questions)
   }
 
@@ -238,6 +319,32 @@ export function scoreQuiz(answers: QuizAnswers): QuizAnalysis {
   }
 }
 
+/**
+ * The question set as the frontend receives it.
+ *
+ * POINTS ARE NOT SERVED. The frontend renders the words and posts back a letter;
+ * what a letter is worth is the scoring rubric and stays server-side. Shipping it
+ * would put the answer key on the page of a self-assessment, and a coach who can
+ * see which option scores 4 is being invited to take a different quiz than the
+ * one that helps them.
+ *
+ * Built from QUIZ_QUESTIONS by projection, never as a parallel list — that is the
+ * whole point of the option text living beside its points.
+ */
+export type ServedQuestion = {
+  id: string
+  prompt: string
+  options: Array<{ letter: QuizLetter; label: string }>
+}
+
+export function servedQuestions(): ServedQuestion[] {
+  return QUIZ_QUESTIONS.map((q) => ({
+    id: q.id,
+    prompt: q.prompt,
+    options: q.options.map((o) => ({ letter: o.letter, label: o.label })),
+  }))
+}
+
 export type AnswerCheck =
   | { ok: true; answers: QuizAnswers }
   | { ok: false; error: string; message: string }
@@ -245,11 +352,14 @@ export type AnswerCheck =
 /**
  * Validate the submitted letters.
  *
- * Every question must be present and every value must be one of four letters.
+ * Every question must be present and every value must be an option that exists
+ * ON THAT QUESTION — checked against its own option list rather than against the
+ * alphabet, so a question that ever offers three choices cannot be answered with
+ * a fourth.
+ *
  * NO DEFAULTING A MISSING ANSWER — a skipped question silently scored as 'a'
- * would produce a real-looking composite built partly out of something the
- * coach never said, and there is no way to tell that from the stored row
- * afterwards.
+ * would produce a real-looking composite built partly out of something the coach
+ * never said, and there is no way to tell that from the stored row afterwards.
  */
 export function validateQuizAnswers(raw: unknown): AnswerCheck {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -258,34 +368,35 @@ export function validateQuizAnswers(raw: unknown): AnswerCheck {
   const input = raw as Record<string, unknown>
   const answers: QuizAnswers = {}
 
-  for (const id of QUIZ_QUESTION_IDS) {
-    const value = input[id]
-    if (typeof value !== 'string' || !QUIZ_LETTERS.includes(value.toLowerCase() as QuizLetter)) {
+  for (const question of QUIZ_QUESTIONS) {
+    const value = input[question.id]
+    const letter = typeof value === 'string' ? (value.toLowerCase() as QuizLetter) : null
+    if (!letter || !question.options.some((o) => o.letter === letter)) {
       return {
         ok: false,
         error: 'answer_missing_or_invalid',
-        message: `answer for '${id}' must be one of a, b, c, d`,
+        message: `answer for '${question.id}' must be one of ${question.options.map((o) => o.letter).join(', ')}`,
       }
     }
-    answers[id] = value.toLowerCase() as QuizLetter
+    answers[question.id] = letter
   }
 
   // Unknown keys are dropped rather than rejected: the stored answers object is
-  // built from QUIZ_QUESTION_IDS only, so a frontend sending an extra field
-  // cannot get it persisted, and a stale client sending one is not an error
-  // worth failing a completed quiz over.
+  // built from QUIZ_QUESTIONS only, so a frontend sending an extra field cannot
+  // get it persisted, and a stale client sending one is not an error worth
+  // failing a completed quiz over.
   return { ok: true, answers }
 }
 
 /**
- * The open question, stored VERBATIM.
+ * The open question's answer, stored VERBATIM.
  *
  * Trailing whitespace is trimmed at the ends and nothing else is touched — no
  * case folding, no punctuation normalising, no collapsing of blank lines. This
  * sentence is carried into Step 1 and offered back to the coach as their own
- * words, so anything done to it here is a word the coach did not write
- * appearing under their own name. lib/phrasing.ts is the standing example of
- * what a well-meaning sanitizer does to a paragraph.
+ * words, so anything done to it here is a word the coach did not write appearing
+ * under their own name. lib/phrasing.ts is the standing example of what a
+ * well-meaning sanitizer does to a paragraph.
  *
  * Empty is allowed. A coach may finish the quiz without answering it, and Step 1
  * already has to handle having no problem statement at all.
@@ -295,13 +406,56 @@ export function normalizeProblemStatement(raw: unknown): string {
   return raw.trim()
 }
 
-// The quiz's own invariants, exported so the test suite proves them against the
-// real tables rather than against a copy of them.
+// ---------------------------------------------------------------------------
+// The quiz's own invariants, exported so the suite proves them against the real
+// tables rather than against a copy of them. Both return a list of failures so a
+// broken table names every problem at once instead of one per run.
+// ---------------------------------------------------------------------------
+
 export function assertMonikerBandsCoverEveryScore(): string[] {
   const failures: string[] = []
   for (let score = 0; score <= 100; score++) {
     const hits = MONIKER_BANDS.filter((b) => score >= b.min && score <= b.max)
     if (hits.length !== 1) failures.push(`composite ${score} matched ${hits.length} bands`)
   }
+  return failures
+}
+
+/**
+ * What `normalise` assumes about every question, checked rather than trusted.
+ *
+ * The sibling to the band check, and it exists because the assumption is
+ * invisible at the call site: normalise computes the range from the QUESTION
+ * COUNT (n*1 to n*4), not from the points actually present. So a table that
+ * drifts out of 1-4 does not fail — it produces a pillar whose floor is
+ * unreachable, or a composite above 100 that then matches no moniker band and
+ * throws from monikerFor, a long way from the edit that caused it.
+ */
+export function assertPointsTablesAreWellFormed(): string[] {
+  const failures: string[] = []
+
+  for (const q of QUIZ_QUESTIONS) {
+    const letters = q.options.map((o) => o.letter)
+    const points = q.options.map((o) => o.points)
+
+    if (new Set(letters).size !== letters.length) failures.push(`${q.id}: duplicate option letters`)
+    for (const l of letters) {
+      if (!QUIZ_LETTERS.includes(l)) failures.push(`${q.id}: unknown option letter '${l}'`)
+    }
+    for (const p of points) {
+      if (!Number.isInteger(p)) failures.push(`${q.id}: non-integer points ${p}`)
+      if (p < 1 || p > 4) failures.push(`${q.id}: points ${p} outside 1-4 — a composite could exceed 100`)
+    }
+    // The two normalise actually depends on. Without a 1 the pillar's floor is
+    // unreachable; without a 4 its ceiling is.
+    if (!points.includes(1)) failures.push(`${q.id}: no option worth 1 — 0 is unreachable on ${q.pillar}`)
+    if (!points.includes(4)) failures.push(`${q.id}: no option worth 4 — 100 is unreachable on ${q.pillar}`)
+
+    if (!q.prompt.trim()) failures.push(`${q.id}: no prompt text`)
+    for (const o of q.options) {
+      if (!o.label.trim()) failures.push(`${q.id}: option '${o.letter}' has no label`)
+    }
+  }
+
   return failures
 }
