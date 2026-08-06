@@ -145,6 +145,33 @@ about the code, until the predicate has been watched to fail.
   helper moves the rule and the check together, and the test passes while the
   bug runs. Write the predicate out independently and assert the lib agrees.
 
+### Can this fixture tell the difference?
+
+Ask it of every guard, and note that it is a QUESTION rather than a conclusion:
+the only way to answer it is to mutate the code and watch whether the suite
+notices. Reading the fixture cannot answer it, because a fixture that isolates
+nothing looks exactly like one that isolates everything.
+
+The failure is not a wrong assertion. It is a correctly-worded assertion whose
+fixture cannot vary the thing it is about, so the guard is decorative and green
+means nothing. Three of these on 2026-08-06, all the same shape:
+
+- **A trim guard passed with trimming added**, because every fixture was already
+  trimmed at the ends. Nothing in the suite could tell a function that trims from
+  one that does not.
+- **A tidied-quote detector passed with its normalisation removed**, because the
+  fixture shared an eight-word run before its first repaired word. The run was
+  doing the work; the normalisation was untested — and the version that would
+  have shipped scored a CLEANER copy as LESS like the original.
+- **An avatar-seed check passed with the seed replaced by a constant**, because
+  the two personas compared were of different genders and so landed in different
+  buckets anyway. Only the gender varied; the seed was never exercised.
+
+Each assertion was right. Each guard was worthless. The tell is that the mutation
+you expect to fail does not — so make the mutation, every time, and hold one
+variable at a time when building the fixture: same gender, same padding, same
+prefix. If two things differ between your fixtures, you are testing neither.
+
 ### Assert the thing, not its proxy
 
 - A guard shaped like a container (bucket, host, path prefix) passes until real
