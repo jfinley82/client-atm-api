@@ -255,10 +255,23 @@ export type QuizAnalysis = {
   moniker_summary: string
   /**
    * `focus` is null when there is no meaningful gap to name — see GAP_FLOOR.
-   * The frontend renders the same two cards either way; only the copy changes,
-   * so there is no branch it can forget.
+   *
+   * `resolution` says how the two signals were reconciled, and `disputed` carries
+   * what the coach named when the evidence pointed elsewhere. Both are exposed
+   * rather than kept internal so the results screen and Step 1 can tell a
+   * confirmed diagnosis from a resolved disagreement — and so nothing downstream
+   * has to re-derive it and get a different answer.
+   *
+   * The frontend renders the same two cards in every case; only the copy
+   * changes, so there is no branch it can forget.
    */
-  gap: { focus: GapFocus | null; title: string; body: string }
+  gap: {
+    focus: GapFocus | null
+    resolution: 'none' | 'stated' | 'conflict'
+    disputed: GapFocus | null
+    title: string
+    body: string
+  }
   quick_win: { title: string; body: string }
   /**
    * What the coach SAID, kept whole and separate from what was derived. Step 1
@@ -313,36 +326,55 @@ function normalise(raw: number, questions: ScoredQuestion[]): number {
  * rather than leaving it to reading. A composite with no moniker would be a
  * results screen with an empty headline.
  */
-export const MONIKER_BANDS: Array<{ min: number; max: number; name: string; summary: string }> = [
+export const MONIKER_BANDS: Array<{
+  min: number
+  max: number
+  name: string
+  summary: string
+  /**
+   * Does this band's own summary assert a business that is actually SELLING?
+   *
+   * Declared on the band rather than inferred from the prose, so the copy and
+   * the flag cannot drift. It is what CAPACITY_EVIDENCE_FLOOR is derived from:
+   * "the offer sells and the constraint is delivery" may only be printed where
+   * the band already says the pieces work.
+   */
+  working: boolean
+}> = [
   {
     min: 0,
     max: 24,
     name: 'The Well-Kept Secret',
     summary: 'You can do the work. Almost nobody knows it yet, and that is the whole problem.',
+    working: false,
   },
   {
     min: 25,
     max: 49,
     name: 'The Hidden Gem',
     summary: 'The people who find you tend to stay. Not enough of them find you.',
+    working: false,
   },
   {
     min: 50,
     max: 74,
     name: 'The Steady Builder',
     summary: 'The pieces work. They do not yet work together reliably enough to plan around.',
+    working: true,
   },
   {
     min: 75,
     max: 89,
     name: 'The Quiet Operator',
     summary: 'You have something that sells. The ceiling is how consistently you put it in front of people.',
+    working: true,
   },
   {
     min: 90,
     max: 100,
     name: 'The Full Engine',
     summary: 'Attract, transform and monetize are all pulling. Now it is a question of volume.',
+    working: true,
   },
 ]
 
@@ -408,30 +440,109 @@ const NO_GAP_ADVICE = {
  */
 export const GAP_FLOOR = MONIKER_BANDS[MONIKER_BANDS.length - 1].min
 
-export type GapResolution =
-  | { kind: 'none' }
-  | { kind: 'focus'; focus: GapFocus }
+/**
+ * The composite at or above which "the offer sells" is an evidenced claim.
+ *
+ * Derived from the lowest band that DECLARES a working business, not chosen.
+ * The capacity advice makes a factual assertion about the coach's business —
+ * "the offer sells and the constraint is delivery" — and a claim like that needs
+ * evidence before it may be printed. Measured: 172 of 16384 combinations named
+ * Delivery capacity at composite 0 with all three pillars at 0, directly under a
+ * moniker whose own summary says almost nobody knows they exist.
+ */
+export const CAPACITY_EVIDENCE_FLOOR = MONIKER_BANDS.find((b) => b.working)!.min
 
 /**
- * Which gap the result is about, given what the coach said and what they scored.
+ * The smallest difference between two pillars that means anything.
  *
- * THE STATED CHALLENGE WINS. It is the one question where the coach names their
- * constraint outright, and that beats a minimum derived from the other six —
- * which is how a coach who said "one sentence buyers repeat back to me" ended up
- * being told their offer was unclear.
+ * DERIVED FROM THE INSTRUMENT, not picked to make a sweep go quiet. Each pillar
+ * moves in steps of 100/(3n) for its n questions — Attract 11.1, Monetize 16.7,
+ * Transform 33.3 — so the finest movement anything can make is ~11 points. Two
+ * pillars differing by less than one step of the finest pillar is below the
+ * resolution of the quiz; at or above it, the scores are genuinely saying one is
+ * lower than the other.
  *
- * The single exception is the contradiction case: they named a pillar, and every
- * answer they gave about that pillar puts it in the top band. Then the page has
- * nothing honest to say about it, and says so rather than printing advice the
- * scores disagree with.
- *
- * CAPACITY IS NEVER SUPPRESSED. No pillar measures delivery capacity, so no
- * score can contradict it — "it sells and I cannot deliver more" is coherent at
- * 100/100/100 and is exactly the constraint that coach has.
+ * Recomputed from the tables, so adding the proposed second Transform question
+ * (or any other) re-derives it instead of leaving a stale constant behind.
  */
-export function resolveGap(scores: Record<QuizPillar, number>, focus: GapFocus): GapResolution {
-  if (focus !== 'capacity' && scores[focus] >= GAP_FLOOR) return { kind: 'none' }
-  return { kind: 'focus', focus }
+export const MATERIAL_MARGIN = Math.ceil(
+  Math.min(...QUIZ_PILLARS.map((p) => 100 / (3 * SCORED_QUESTIONS.filter((q) => q.pillar === p).length)))
+)
+
+export type GapResolution =
+  | { kind: 'none' }
+  | { kind: 'stated'; focus: GapFocus }
+  | { kind: 'conflict'; stated: GapFocus; evidenced: QuizPillar }
+
+/** The lowest-scoring pillar, ties broken by fixed pillar order so it is stable. */
+export function weakestPillar(scores: Record<QuizPillar, number>): QuizPillar {
+  return QUIZ_PILLARS.reduce((low, p) => (scores[p] < scores[low] ? p : low), QUIZ_PILLARS[0])
+}
+
+/**
+ * Which gap the result is about, given what the coach SAID and what they SCORED.
+ *
+ * THE RULE: the results screen may not assert something the scores contradict.
+ *
+ * Two signals, and neither is allowed to be the last writer that wins. Letting
+ * the SCORE win produced the first defect — a coach who answered "one sentence
+ * buyers repeat back to me" was told their offer was unclear. Letting the
+ * STATEMENT win produced the next two: in 3156 of 16384 combinations the gap
+ * named the coach's STRONGEST pillar (measured: Attract 0, Transform 0,
+ * Monetize 17, and the page said "Your biggest gap is Monetize"), and in 172 it
+ * asserted a selling business at composite 0.
+ *
+ * So where they disagree materially, the page RESOLVES the disagreement instead
+ * of picking a side silently. It names the pillar the evidence supports and says
+ * out loud that the coach named something else — which is more useful than
+ * either signal alone, and is the only outcome that asserts nothing contradicted.
+ *
+ * Order matters and is not arbitrary:
+ *
+ *  1. Capacity without evidence is a conflict. No pillar measures delivery, so
+ *     nothing can confirm it either — but "the offer sells" is checkable, and
+ *     below CAPACITY_EVIDENCE_FLOOR the scores say it does not.
+ *  2. A stated pillar sitting materially ABOVE the weakest is a conflict. This
+ *     subsumes "stated is the strictly highest" and also catches the tied case,
+ *     as one rule rather than two.
+ *  3. Only then, no-meaningful-gap: everything is within a step of everything
+ *     else AND the stated pillar is in the top band. Checked after the conflict
+ *     rules on purpose — Attract 100 / Transform 0 with Attract stated used to
+ *     fall in here and print "no single gap is holding you back" over a pillar
+ *     at zero.
+ *  4. Otherwise the coach's statement stands, because nothing contradicts it.
+ */
+export function resolveGap(scores: Record<QuizPillar, number>, stated: GapFocus): GapResolution {
+  const weakest = weakestPillar(scores)
+  const composite = Math.round(QUIZ_PILLARS.reduce((sum, p) => sum + scores[p], 0) / QUIZ_PILLARS.length)
+
+  if (stated === 'capacity') {
+    if (composite < CAPACITY_EVIDENCE_FLOOR) return { kind: 'conflict', stated, evidenced: weakest }
+    return { kind: 'stated', focus: stated }
+  }
+
+  // THE HARM IS NAMING THE BEST THING AS THE GAP, and the condition is written
+  // as that harm rather than as a proxy for it.
+  //
+  // An earlier attempt fired whenever the stated pillar sat materially above the
+  // WEAKEST, which put 8682 of 16384 results into conflict — the page arguing
+  // with the coach in more than half of all cases. That is over-firing, not
+  // safety: a coach who names a pillar scoring 67 while another scores 33 is not
+  // being contradicted, because 67 is not good. There is real room at 67 and
+  // three questions cannot see their business better than they can.
+  //
+  // The scores only contradict the statement when the named pillar is the single
+  // BEST of the three and something else is materially below it. Then "your
+  // biggest gap is X" is false on its face.
+  const values = QUIZ_PILLARS.map((p) => scores[p])
+  const isStrictlyHighest = values.filter((v) => v === scores[stated]).length === 1 && values.every((v) => v <= scores[stated])
+  if (isStrictlyHighest && scores[stated] - scores[weakest] >= MATERIAL_MARGIN) {
+    return { kind: 'conflict', stated, evidenced: weakest }
+  }
+
+  if (scores[stated] >= GAP_FLOOR) return { kind: 'none' }
+
+  return { kind: 'stated', focus: stated }
 }
 
 export function monikerFor(composite: number): { name: string; summary: string } {
@@ -468,19 +579,37 @@ export function scoreQuiz(answers: QuizAnswers): QuizAnalysis {
   const resolved = resolveGap(scores, stated)
   const moniker = monikerFor(composite)
 
-  const gap =
-    resolved.kind === 'none'
-      ? { focus: null, title: NO_GAP_ADVICE.title, body: NO_GAP_ADVICE.body }
-      : {
-          focus: resolved.focus,
-          title: `Your biggest gap is ${FOCUS_LABEL[resolved.focus]}`,
-          body: FOCUS_ADVICE[resolved.focus].gap,
-        }
+  let gap: QuizAnalysis['gap']
+  let win: QuizAnalysis['quick_win']
 
-  const win =
-    resolved.kind === 'none'
-      ? { title: NO_GAP_ADVICE.winTitle, body: NO_GAP_ADVICE.winBody }
-      : { title: FOCUS_ADVICE[resolved.focus].winTitle, body: FOCUS_ADVICE[resolved.focus].winBody }
+  if (resolved.kind === 'none') {
+    gap = { focus: null, resolution: 'none', disputed: null, title: NO_GAP_ADVICE.title, body: NO_GAP_ADVICE.body }
+    win = { title: NO_GAP_ADVICE.winTitle, body: NO_GAP_ADVICE.winBody }
+  } else if (resolved.kind === 'conflict') {
+    // The page names what the evidence supports and SAYS the coach named
+    // something else, rather than silently overriding them. Both signals stay
+    // visible, and nothing is asserted that the scores contradict.
+    gap = {
+      focus: resolved.evidenced,
+      resolution: 'conflict',
+      disputed: resolved.stated,
+      title: `Your biggest gap is ${FOCUS_LABEL[resolved.evidenced]}`,
+      body:
+        stated === 'capacity'
+          ? `You named delivery capacity, and that may well be what it feels like. Your answers do not yet show an offer that is selling, though, and they put ${FOCUS_LABEL[resolved.evidenced]} lowest. ${FOCUS_ADVICE[resolved.evidenced].gap}`
+          : `You named ${FOCUS_LABEL[stated]}, and it is the strongest of the three on your answers rather than the weakest. ${FOCUS_LABEL[resolved.evidenced]} is what they put lowest. ${FOCUS_ADVICE[resolved.evidenced].gap}`,
+    }
+    win = { title: FOCUS_ADVICE[resolved.evidenced].winTitle, body: FOCUS_ADVICE[resolved.evidenced].winBody }
+  } else {
+    gap = {
+      focus: resolved.focus,
+      resolution: 'stated',
+      disputed: null,
+      title: `Your biggest gap is ${FOCUS_LABEL[resolved.focus]}`,
+      body: FOCUS_ADVICE[resolved.focus].gap,
+    }
+    win = { title: FOCUS_ADVICE[resolved.focus].winTitle, body: FOCUS_ADVICE[resolved.focus].winBody }
+  }
 
   const statedLetter = answers[FOCUS_QUESTION.id]
   return {
@@ -685,8 +814,34 @@ export function assertPointsTablesAreWellFormed(): string[] {
  * appear above a named gap again.
  */
 export function assertGapFloorMatchesTopBand(): string[] {
+  const failures: string[] = []
   const top = MONIKER_BANDS[MONIKER_BANDS.length - 1]
-  return GAP_FLOOR === top.min
-    ? []
-    : [`GAP_FLOOR ${GAP_FLOOR} does not match the top band's floor ${top.min} — a full-engine score could still name a gap`]
+  if (GAP_FLOOR !== top.min) {
+    failures.push(`GAP_FLOOR ${GAP_FLOOR} does not match the top band's floor ${top.min} — a full-engine score could still name a gap`)
+  }
+
+  // The capacity floor is the lowest band that DECLARES a working business.
+  // Replacing the derivation with a literal fails here rather than letting
+  // "the offer sells" print over a moniker that says nobody has found them.
+  const firstWorking = MONIKER_BANDS.find((b) => b.working)
+  if (!firstWorking) failures.push('no moniker band declares a working business — capacity could never be named')
+  else if (CAPACITY_EVIDENCE_FLOOR !== firstWorking.min) {
+    failures.push(`CAPACITY_EVIDENCE_FLOOR ${CAPACITY_EVIDENCE_FLOOR} does not match the lowest working band ${firstWorking.min}`)
+  }
+  // The flag has to be monotonic, or "lowest working band" is not a threshold.
+  const flags = MONIKER_BANDS.map((b) => b.working)
+  if (flags.some((w, i) => w && flags.slice(i).some((later) => !later))) {
+    failures.push('the working flag is not monotonic — a higher band claims less than a lower one')
+  }
+
+  // The margin has to come from the tables, not from a literal that survives a
+  // question being added or removed.
+  const expected = Math.ceil(
+    Math.min(...QUIZ_PILLARS.map((p) => 100 / (3 * SCORED_QUESTIONS.filter((q) => q.pillar === p).length)))
+  )
+  if (MATERIAL_MARGIN !== expected) {
+    failures.push(`MATERIAL_MARGIN ${MATERIAL_MARGIN} is not the finest pillar step ${expected} — it has been pinned to a literal`)
+  }
+
+  return failures
 }

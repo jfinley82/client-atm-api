@@ -14,6 +14,8 @@ import {
   assertPointsTablesAreWellFormed,
   FOCUS_QUESTION,
   GAP_FLOOR,
+  CAPACITY_EVIDENCE_FLOOR,
+  MATERIAL_MARGIN,
   SCORED_QUESTIONS,
   normalizeProblemStatement,
   pointsFor,
@@ -423,32 +425,95 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
       const r = scoreQuiz({ ...WORST, biggest_challenge: o.letter } as any)
       ok(`all-worst + '${o.letter}': composite is 0`, r.composite === 0, `${r.composite}`)
       ok(`all-worst + '${o.letter}': moniker is The Well-Kept Secret`, r.moniker === 'The Well-Kept Secret', r.moniker)
-      // Nothing is suppressed at the bottom — the floor only ever silences a
-      // gap, never invents one.
-      ok(`all-worst + '${o.letter}': the stated gap IS named`, r.gap.focus === o.focus, `${r.gap.focus}`)
+
+      if (o.focus === 'capacity') {
+        // THE SECOND REPORTED DEFECT. At 0/0/0 the capacity body asserted "the
+        // offer sells and the constraint is delivery" directly under a moniker
+        // whose own summary says almost nobody knows they exist. Capacity makes
+        // a factual claim about the business, so it needs evidence.
+        ok('all-worst + capacity: capacity is NOT named', r.gap.focus !== 'capacity', `${r.gap.focus}`)
+        ok('the disagreement is resolved rather than hidden', r.gap.resolution === 'conflict', r.gap.resolution)
+        ok('and what the coach said is still reported', r.gap.disputed === 'capacity', `${r.gap.disputed}`)
+        ok('the body does not claim the offer sells', !r.gap.body.includes('The offer sells'), r.gap.body)
+      } else {
+        // A stated pillar at rock bottom is not contradicted by anything — every
+        // pillar is 0, so nothing is strictly highest. The statement stands.
+        ok(`all-worst + '${o.letter}': the stated gap IS named`, r.gap.focus === o.focus, `${r.gap.focus}`)
+        ok('and it is reported as the coach own statement', r.gap.resolution === 'stated', r.gap.resolution)
+      }
     }
 
-    console.log('\n-- ACCEPTANCE: exhaustive — no result contradicts itself --')
-    // Every combination of every scored question against every challenge. The
-    // contradiction being ruled out is the shape of both reported defects: the
-    // page naming a pillar as the gap while that same pillar sits in the top
-    // band. Reasoning about this is what produced the bug; counting it is not.
+    console.log('\n-- ACCEPTANCE: the reported case, by value --')
+    // Attract 0, Transform 0, Monetize 17, challenge (c). The page said "Your
+    // biggest gap is Monetize" — the only pillar with any score at all.
+    {
+      const r = scoreQuiz({
+        client_flow: 'a', lead_source: 'a', ideal_client: 'a',
+        offer_clarity: 'a', pricing_confidence: 'a', ninety_day_goal: 'b',
+        biggest_challenge: 'c',
+      } as any)
+      ok('the scores reproduce', JSON.stringify(r.scores) === JSON.stringify({ attract: 0, transform: 0, monetize: 17 }), JSON.stringify(r.scores))
+      ok('the gap is no longer Monetize', r.gap.focus !== 'monetize', `${r.gap.focus} — "${r.gap.title}"`)
+      ok('it names a pillar the scores actually put lowest', r.gap.focus !== null && r.scores[r.gap.focus as 'attract' | 'transform' | 'monetize'] === 0)
+      ok('and the coach is told what they said, not overruled in silence', r.gap.disputed === 'monetize' && r.gap.body.includes('Monetize'), r.gap.body)
+    }
+
+    console.log('\n-- ACCEPTANCE: exhaustive — the page never asserts what the scores deny --')
+    // Every combination of every scored question against every challenge.
+    //
+    // THE FIRST VERSION OF THIS SWEEP LOOKED FOR THE OLD DEFECT AND FOUND
+    // NOTHING, which is how it passed while two new ones shipped. It asked "does
+    // the page name a pillar that is in the top band" — the exact inverse of the
+    // bug that had just been fixed — instead of asking the general question the
+    // rule is actually about. Written the general way now: whatever the page
+    // names, the scores have to support it.
     {
       const ids = SCORED_QUESTIONS.map((q) => q.id)
       let total = 0
-      let contradictions: string[] = []
-      let noGap = 0
-      let outOfRange: string[] = []
+      const census = { none: 0, stated: 0, conflict: 0 }
+      const namesStrongest: string[] = []
+      const capacityUnevidenced: string[] = []
+      const namesTopBand: string[] = []
+      const outOfRange: string[] = []
+      const noCopy: string[] = []
+      let tiedHighest = 0
 
       const walk = (i: number, acc: Record<string, string>) => {
         if (i === ids.length) {
           for (const o of FOCUS_QUESTION.options) {
             const r = scoreQuiz({ ...acc, biggest_challenge: o.letter } as any)
             total++
-            if (r.gap.focus === null) noGap++
+            census[r.gap.resolution]++
+            const where = `${JSON.stringify(acc)}+${o.letter} scores=${JSON.stringify(r.scores)}`
+
             if (r.composite < 0 || r.composite > 100) outOfRange.push(`${r.composite}`)
-            if (r.gap.focus && r.gap.focus !== 'capacity' && r.scores[r.gap.focus as "attract" | "transform" | "monetize"] >= GAP_FLOOR) {
-              if (contradictions.length < 3) contradictions.push(`${JSON.stringify(acc)}+${o.letter} -> ${r.gap.focus} at ${r.scores[r.gap.focus as "attract" | "transform" | "monetize"]}`)
+            if (!r.gap.title.trim() || !r.gap.body.trim() || !r.quick_win.title.trim()) noCopy.push(where)
+
+            const pillar = r.gap.focus && r.gap.focus !== 'capacity' ? (r.gap.focus as 'attract' | 'transform' | 'monetize') : null
+            if (pillar) {
+              const values = QUIZ_PILLARS.map((p) => r.scores[p])
+              const lowest = Math.min(...values)
+              // THE GENERAL RULE: a named pillar may not be the strictly highest
+              // of the three while another sits materially below it.
+              const isStrictlyHighest = values.every((v) => v === r.scores[pillar] || v < r.scores[pillar])
+                && values.filter((v) => v === r.scores[pillar]).length === 1
+              if (isStrictlyHighest && r.scores[pillar] - lowest >= MATERIAL_MARGIN) {
+                if (namesStrongest.length < 3) namesStrongest.push(`${where} -> named ${pillar}`)
+              }
+              // The TIED-highest case, counted rather than asserted away. The
+              // rule allows it on purpose: a pillar tied at the top is not the
+              // single best, and at a middling score there is real room in it.
+              // Counted here so the allowance is a visible number in gate output
+              // instead of an unstated consequence of the word "strictly".
+              const isHighestOrTied = QUIZ_PILLARS.every((p) => r.scores[p] <= r.scores[pillar])
+              if (isHighestOrTied && !isStrictlyHighest && r.scores[pillar] - lowest >= MATERIAL_MARGIN) tiedHighest++
+              // And the original defect stays ruled out.
+              if (r.scores[pillar] >= GAP_FLOOR && namesTopBand.length < 3) namesTopBand.push(`${where} -> ${pillar}`)
+            }
+
+            // Capacity asserts a selling business. It needs evidence.
+            if (r.gap.focus === 'capacity' && r.composite < CAPACITY_EVIDENCE_FLOOR) {
+              if (capacityUnevidenced.length < 3) capacityUnevidenced.push(`${where} composite=${r.composite}`)
             }
           }
           return
@@ -458,12 +523,30 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
       walk(0, {})
 
       ok(`swept every combination (${total} results)`, total === Math.pow(4, ids.length) * FOCUS_QUESTION.options.length, `${total}`)
-      ok('no result names a pillar gap that is already in the top band', contradictions.length === 0, contradictions.join(' ; '))
+
+      // THE TWO REPORTED DEFECTS, as general assertions.
+      ok('no result names a pillar that is the strictly highest while another is materially lower', namesStrongest.length === 0, namesStrongest.join(' ; '))
+      ok('capacity is never named without supporting evidence in the scores', capacityUnevidenced.length === 0, capacityUnevidenced.join(' ; '))
+
+      // The original one, still ruled out.
+      ok('no result names a pillar gap that is already in the top band', namesTopBand.length === 0, namesTopBand.join(' ; '))
       ok('no composite falls outside 0-100', outOfRange.length === 0, outOfRange.slice(0, 3).join(', '))
-      // The no-gap state must be REACHABLE — a floor nothing ever crosses is a
-      // branch that has never run.
-      ok(`the no-gap state is reachable (${noGap} of ${total})`, noGap > 0)
-      ok('and is not the answer everywhere', noGap < total)
+      ok('every result renders copy in both cards', noCopy.length === 0, noCopy.slice(0, 2).join(' ; '))
+
+      // THE CENSUS. Reported so a guard that silently swallows everything is
+      // visible as one: if `none` or `conflict` were most of the sweep, the page
+      // would be refusing to diagnose almost anybody and every assertion above
+      // would still pass.
+      console.log(`      census of ${total}: stated ${census.stated}, conflict ${census.conflict}, none ${census.none}`)
+      console.log(`      names a TIED-highest pillar with a material spread: ${tiedHighest} (allowed deliberately — see below)`)
+      ok(`the stated challenge stands in most results (${census.stated})`, census.stated > total / 2, `${census.stated} of ${total}`)
+      ok(`disagreement is resolved, not swallowed (${census.conflict})`, census.conflict > 0 && census.conflict < total / 2, `${census.conflict} of ${total}`)
+      ok(`no-gap stays a narrow state (${census.none})`, census.none > 0 && census.none < total / 4, `${census.none} of ${total}`)
+      ok('the three states account for everything', census.none + census.stated + census.conflict === total)
+      // Pinned so the deliberate allowance cannot grow unnoticed. If a future
+      // change makes this much larger, the tie rule needs revisiting rather
+      // than the number needing raising.
+      ok(`tied-highest naming stays bounded (${tiedHighest})`, tiedHighest < total / 10, `${tiedHighest} of ${total}`)
     }
 
     // The floor and the top band are one number by construction. Replacing the
