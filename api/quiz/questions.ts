@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors, noStore } from '../../lib/cors'
-import { QUIZ_PROBLEM_HELP, QUIZ_PROBLEM_PROMPT, servedQuestions } from '../../lib/quizScoring'
+import { QUIZ_PROBLEM_HELP, QUIZ_PROBLEM_PIVOT, QUIZ_PROBLEM_PROMPT, servedQuestions } from '../../lib/quizScoring'
 
 // GET /api/quiz/questions — authenticated. The quiz itself: every
 // multiple-choice prompt with its options, in order, plus the open question
@@ -46,6 +46,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // does not auto-advance, and posts to a different field. Keeping it separate
     // means a frontend cannot render it into the scored loop by accident.
     problem_question: {
+      // Rendered ABOVE the prompt as a visible break — its own band, rule or
+      // spacing, not another line of question text. Seven questions ask about
+      // the coach and this one asks about their clients; the switch has to be
+      // seen, not implied. See the note in lib/quizScoring.ts for what happened
+      // without it.
+      pivot: QUIZ_PROBLEM_PIVOT,
       prompt: QUIZ_PROBLEM_PROMPT,
       help: QUIZ_PROBLEM_HELP,
       field: 'problem_statement',
