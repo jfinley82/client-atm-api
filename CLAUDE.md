@@ -161,6 +161,32 @@ read-path transforms need the same care as write-path ones, and `original` is
 excluded from `sanitizePhrasingDeep`'s walk so a read→save cycle can't launder
 mangled copy into the baseline that detects coach edits.
 
+**A comment states the invariant you were about to check, so you don't check it.**
+The worst version of a stale comment: one that was TRUE WHEN WRITTEN and quietly
+outlived its premise. `bookLegacyPath` said it validated against "the SAME
+computation behind `GET /api/calendar/availability`, which is the list the
+booking page renders" — true while that path served only MTM's funnel-less page,
+false from the moment native-calendar funnels started routing through it, because
+a funnel page calls `/api/funnel/availability` and a different engine. The list
+and the accept had been answering from two sources for months, wearing a comment
+saying they couldn't.
+Four instances of this shape surfaced in one day, so treat it as the default
+suspicion rather than a curiosity:
+- `isSlotOpen` returned false for one reason, so `false -> slot_taken` was safe —
+  until availability gating gave it a second.
+- `<input type="date">` couldn't express a time, so a date-only post couldn't
+  mean "clear the time" — until the form grew a time field.
+- A rule was "self-limiting because a form sending datetimes would never trigger
+  it" — the form changed, the rule didn't notice.
+- The comment above.
+**A claim about how the world is, written inside code, is a snapshot with no
+expiry date.** When a comment asserts two things agree, that agreement is the
+thing to verify, not the reason to skip verifying. Prefer comments that say what
+the code DOES and why the tradeoff was made; assertions about a caller you don't
+control are the ones that rot. Where the invariant matters, write a test that
+compares the two artifacts against each other — `tests/ctaSeam.test.ts` and the
+one-resolver assertion in `tests/bookingPage.test.ts` both exist for this.
+
 **An endpoint that 502s "intermittently" on a parameter the caller controls.**
 `GET /api/calendar/availability` forwarded `from`/`to` from the query string
 unbounded; Zoom's `available_times` rejects any window over 45 days with a 400,

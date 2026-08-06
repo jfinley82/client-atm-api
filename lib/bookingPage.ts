@@ -1,6 +1,7 @@
 import { supabase } from './supabase'
 import { loadUserAvailability } from './availabilitySettings'
 import { WorkingHours } from './availability'
+import { BookingQuestion, resolveBookingRequirements } from './bookingQuestions'
 
 // The coach's own public booking page.
 //
@@ -8,12 +9,15 @@ import { WorkingHours } from './availability'
 // with no session. Everything in this file exists to answer one question
 // safely: what may an anonymous request learn about a coach?
 
-// THE ENTIRE WORLD-READABLE SET. Approved 2026-08-06, and deliberately short.
+// THE ENTIRE WORLD-READABLE SET. Six fields as of 2026-08-06.
 //
-// Not the coach's personal name (users.name), not email, phone,
-// business_address, tracking, legal or notification_prefs — all of which live
-// on the SAME ROW as the fields below, which is exactly why nothing here ever
-// returns that row.
+// users.name was added deliberately: the design's name line is meant to say WHO
+// you are meeting, and business_name reads cold when it is "Finley Coaching LLC".
+// It is the only field here that does not live on funnel_business_settings.
+//
+// Everything else on that row stays private — email, phone (the COACH's),
+// business_address, website, industry, tracking, legal, notification_prefs —
+// which is exactly why nothing here ever returns the row itself.
 //
 // And never users.avatar_url. That is the account's profile picture, a private
 // field, and it is NOT a fallback for headshot_url. headshot_url is a separate
@@ -23,6 +27,7 @@ import { WorkingHours } from './availability'
 // is a test asserting avatar_url never appears in a response, so that change
 // fails loudly instead of shipping.
 export const PUBLIC_BRAND_FIELDS = [
+  'name',
   'business_name',
   'logo_url',
   'headshot_url',
@@ -78,6 +83,8 @@ export function normalizeBookingSlug(raw: unknown): SlugCheck {
 export type BookingPageOwner = {
   userId: string
   slug: string
+  /** The coach's own name — what the name line above the title renders. */
+  coachName: string | null
   businessName: string | null
   logoUrl: string | null
   headshotUrl: string | null
@@ -111,9 +118,18 @@ export async function resolveBookingSlug(rawSlug: unknown): Promise<BookingPageO
   const r = data as Record<string, unknown>
   const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null)
 
+  // ONE column from users, by name. Not the row: avatar_url lives there too, and
+  // it is private — see the note at the top of this file.
+  const { data: userRow } = await supabase
+    .from('users')
+    .select('name')
+    .eq('id', r.user_id as string)
+    .maybeSingle()
+
   return {
     userId: r.user_id as string,
     slug: checked.slug,
+    coachName: str((userRow as { name?: unknown } | null)?.name),
     businessName: str(r.business_name),
     logoUrl: str(r.logo_url),
     headshotUrl: str(r.headshot_url),
@@ -166,6 +182,8 @@ export async function hasConfiguredAvailability(userId: string): Promise<boolean
 
 export type PublicBookingPage = {
   slug: string
+  /** The coach's name, for the line above the title. */
+  name: string | null
   business_name: string | null
   logo_url: string | null
   headshot_url: string | null
@@ -177,7 +195,9 @@ export type PublicBookingPage = {
   slot_minutes: number
   timezone: string
   accepting_bookings: boolean
-  questions: unknown[]
+  /** Whether the form must collect the lead's phone. */
+  phone_required: boolean
+  questions: BookingQuestion[]
 }
 
 /**
@@ -189,14 +209,19 @@ export type PublicBookingPage = {
  * written on purpose.
  */
 export async function buildPublicBookingPage(owner: BookingPageOwner): Promise<PublicBookingPage> {
-  const [availability, configured] = await Promise.all([
+  const [availability, configured, requirements] = await Promise.all([
     loadUserAvailability(owner.userId),
     hasConfiguredAvailability(owner.userId),
+    // THE SAME resolver POST /api/calendar/book enforces from. The asterisk this
+    // payload drives and the refusal the server issues come from one call, so a
+    // coach flipping the phone toggle cannot leave the two disagreeing.
+    resolveBookingRequirements({ coachUserId: owner.userId }),
   ])
   const wh = availability.working_hours as WorkingHours
 
   return {
     slug: owner.slug,
+    name: owner.coachName,
     business_name: owner.businessName,
     logo_url: owner.logoUrl,
     headshot_url: owner.headshotUrl,
@@ -211,14 +236,11 @@ export async function buildPublicBookingPage(owner: BookingPageOwner): Promise<P
     // from an empty slot list, which cannot tell "none this fortnight" from
     // "never set any up".
     accepting_bookings: configured,
-    // DELIBERATELY EMPTY, and the key is present so the contract does not change
-    // when it stops being. There is no per-coach question store: booking
-    // questions live either on a funnel or in the global app_settings set, and
-    // this page belongs to neither — the same reason its title cannot borrow a
-    // funnel's offer copy. Wiring it to the coach's most recent funnel would
-    // reintroduce exactly the coupling this page exists to avoid. Giving it its
-    // own store is one migration plus a Profile Settings field; it needs a
-    // decision, not a guess.
-    questions: [],
+    phone_required: requirements.phoneRequired,
+    // The COACH's own questions, set in Profile -> Booking (decided 2026-08-06).
+    // Never the global app_settings set: those are MTM's discovery-call
+    // questions and would appear on a coach's page unasked. None configured
+    // means name, email and phone, which is a complete booking.
+    questions: requirements.questions,
   }
 }

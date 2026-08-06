@@ -6,7 +6,7 @@ import { isZoomConfigured, createZoomMeeting, slotMinutes } from '../../lib/zoom
 import { isSchedulerSlotOpen } from '../../lib/schedulerSlots'
 import { buildBookingIcs } from '../../lib/ics'
 import { resolveBookingBrand, sendBookingConfirmationEmail, sendCoachBookingNotification } from '../../lib/email'
-import { funnelBookingQuestions, loadBookingQuestions, validateBookingAnswers, bookingQuestionErrorMessage, resolveBookingType, ValidatedAnswer } from '../../lib/bookingQuestions'
+import { validateBookingAnswers, bookingQuestionErrorMessage, resolveBookingType, resolveBookingRequirements, normalizeLeadPhone, ValidatedAnswer } from '../../lib/bookingQuestions'
 import { bookingTimeLabel, normalizeTimeZone } from '../../lib/bookingTimezone'
 import { checkGate } from '../../lib/applicationGate'
 import { resolveLiveFunnel } from '../../lib/funnels'
@@ -29,11 +29,12 @@ import { resolveBookingSlug } from '../../lib/bookingPage'
 //   Calendar, set coach_user_id + google_event_id + meeting_url, meeting link is
 //   the coach's zoom_link (else an auto-created Meet).
 //   SHARED-ZOOM PATH — a funnel whose owner has no Google connection, or no
-//   funnel at all. Creates the meeting on the shared Zoom account and validates
-//   the slot with isSchedulerSlotOpen — the SAME computation behind
-//   GET /api/calendar/availability, which is the list the booking page renders.
-//   That shared source is the invariant: whenever the two have diverged, every
-//   listed slot was rejected as slot_taken.
+//   funnel at all. Creates the meeting on MTM's shared Zoom account. It
+//   validates against isSchedulerSlotOpen (that shared host must be free) AND,
+//   when a funnel is in play, against isSlotOpen for the coach — because a
+//   FUNNEL page lists from GET /api/funnel/availability, which reads the coach's
+//   working hours, not the scheduler. Checking only the scheduler is what let
+//   list and accept answer from different sources for the same funnel.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
   if (req.method !== 'POST') return res.status(405).end()
@@ -68,6 +69,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Optional. Absent or invalid falls back to the UTC rendering that shipped
   // before, so nothing regresses for a caller that does not send it.
   const timezone = normalizeTimeZone(body.timezone)
+
+  // CONTACT DETAIL, not a qualifying answer — it never lands in custom_answers.
+  // Validated loosely: people type spaces, dashes, brackets and country codes,
+  // and refusing a booking over formatting costs more than an untidy string.
+  const phoneCheck = normalizeLeadPhone(body.phone)
+  if (!phoneCheck.ok) {
+    return res.status(400).json({ error: 'phone_invalid', message: bookingQuestionErrorMessage('phone_invalid', '') })
+  }
+  const leadPhone = phoneCheck.phone
 
   const startMs = new Date(slotStart).getTime()
   if (startMs <= Date.now()) return res.status(400).json({ error: 'slot_start must be in the future' })
@@ -108,9 +118,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // for the same coach within a month.
     const coachOwner = slugOwner || (funnelRow && conn ? (funnelRow.user_id as string) : null)
     if (coachOwner) {
-      return await bookCoachPath(res, { funnelRow, owner: coachOwner, conn, startMs, startIso, name, email, answersMap, userId, timezone })
+      return await bookCoachPath(res, { funnelRow, owner: coachOwner, conn, startMs, startIso, name, email, answersMap, userId, timezone, leadPhone })
     }
-    return await bookLegacyPath(res, { funnelRow, startMs, startIso, name, email, answersMap, userId, timezone, bookingTypeRaw })
+    return await bookLegacyPath(res, { funnelRow, startMs, startIso, name, email, answersMap, userId, timezone, leadPhone, bookingTypeRaw })
   } catch (err) {
     console.error('[calendar/book] POST', err)
     return res.status(500).json({ error: 'Failed to book' })
@@ -194,22 +204,42 @@ async function bookCoachPath(
     answersMap: Record<string, unknown>
     userId: string | null
     timezone: string | null
+    leadPhone: string | null
   }
 ): Promise<VercelResponse> {
-  const { funnelRow, owner, conn, startMs, startIso, name, email, answersMap, userId, timezone } = ctx
+  const { funnelRow, owner, conn, startMs, startIso, name, email, answersMap, userId, timezone, leadPhone } = ctx
 
   const settings = await loadUserAvailability(owner)
   const endIso = new Date(startMs + settings.slot_minutes * 60_000).toISOString()
 
-  // Validate against the SAME set /api/calendar/questions serves this page, so a
-  // lead is never rejected for a field the form never rendered. Read straight off
-  // the already-loaded funnel row: its own application_questions_enabled +
-  // booking_questions, never the global defaults.
-  // A funnel answers from its own settings. The coach page has no per-coach
-  // question store, so it asks nothing beyond name and email — see the note on
-  // `questions` in lib/bookingPage.ts. Borrowing the coach's most recent funnel
-  // here would reintroduce the coupling this page exists to avoid.
-  const questions = funnelRow ? funnelBookingQuestions(funnelRow) : []
+  // COACH-LEVEL STATE IS ANSWERED FIRST, before anything about the form.
+  //
+  // isSlotOpen has two reasons to say no and the caller can only report one:
+  // until availability gating it was false only for "that slot is taken", so
+  // mapping false -> slot_taken was safe. It is not any more, and the frontend
+  // retries a 409 by refreshing slots — which for an unconfigured coach returns
+  // an empty list, so the page would ask someone to pick another time from
+  // nothing, forever.
+  //
+  // It also has to outrank the phone and question checks below. Telling a
+  // visitor to fix their phone number on a page that cannot take bookings at all
+  // is the same misleading-message problem one level down: they would correct
+  // the field and be refused again for the real reason, which was never shown.
+  //
+  // coach_not_bookable matches the code the no-meeting-room branch already uses,
+  // so the page has one state to render rather than two spellings of it.
+  if (!settings.configured) return res.status(503).json({ error: 'coach_not_bookable' })
+
+  // ONE resolution for what the form asks. Validated against the SAME set the
+  // page renders from, so a lead is never rejected for a field the form never
+  // showed them. The page renders from exactly this,
+  // so the asterisk it shows and the refusal below cannot disagree — a coach
+  // flipping the phone toggle must not leave leads refused for a field the form
+  // called optional.
+  const { questions, phoneRequired } = await resolveBookingRequirements({ funnelRow, coachUserId: owner })
+  if (phoneRequired && !leadPhone) {
+    return res.status(400).json({ error: 'phone_required', field: 'phone', message: bookingQuestionErrorMessage('phone_required', '') })
+  }
   const av = validateBookingAnswers(questions, answersMap)
   if (!av.ok) {
     return res
@@ -223,23 +253,6 @@ async function bookCoachPath(
     const gate = checkGate(funnelRow, questions, answersMap)
     if (!gate.qualified) return disqualified(res, gate)
   }
-
-  // ASKED BEFORE isSlotOpen, because isSlotOpen now has two reasons to say no
-  // and the caller can only report one of them.
-  //
-  // It returned false only for "that slot is taken" until availability gating
-  // was added; now an unconfigured coach makes it false too, and mapping that to
-  // slot_taken tells the visitor something untrue. Worse, the frontend's
-  // response to a 409 is to refresh the slots and ask them to pick again — and
-  // the refresh returns an empty list, so the page asks someone to choose
-  // another time from nothing, forever, with no explanation. A coach testing
-  // their own page gets the same dead end and no hint that the cause is their
-  // own availability settings.
-  //
-  // Same distinction as the list side: an empty result and an unconfigured coach
-  // are different facts and must not share a message. coach_not_bookable matches
-  // the code the no-meeting-room branch below already returns.
-  if (!settings.configured) return res.status(503).json({ error: 'coach_not_bookable' })
 
   // Parity: the slot must be genuinely open per the same engine the page showed.
   // Reaching here, false means exactly one thing again.
@@ -265,6 +278,7 @@ async function bookCoachPath(
       status: 'active',
       custom_answers: av.answers,
       timezone,
+      lead_phone: leadPhone,
     })
     .select('id')
     .single()
@@ -371,6 +385,7 @@ async function bookCoachPath(
     leadId,
     leadName: name,
     leadEmail: email,
+    leadPhone,
     startIso,
     answers: av.answers,
   })
@@ -408,10 +423,11 @@ async function bookLegacyPath(
     answersMap: Record<string, unknown>
     userId: string | null
     timezone: string | null
+    leadPhone: string | null
     bookingTypeRaw: unknown
   }
 ): Promise<VercelResponse> {
-  const { funnelRow, startMs, startIso, name, email, answersMap, userId, timezone, bookingTypeRaw } = ctx
+  const { funnelRow, startMs, startIso, name, email, answersMap, userId, timezone, leadPhone, bookingTypeRaw } = ctx
 
   if (!isZoomConfigured()) return res.status(503).json({ error: 'calendar_unavailable' })
 
@@ -422,7 +438,10 @@ async function bookLegacyPath(
   // A native-calendar funnel still books through this path. When a funnel is in
   // play its OWN settings decide the questions; the global set applies only to a
   // genuinely funnel-less booking.
-  const questions = funnelRow ? funnelBookingQuestions(funnelRow) : await loadBookingQuestions()
+  const { questions, phoneRequired } = await resolveBookingRequirements({ funnelRow })
+  if (phoneRequired && !leadPhone) {
+    return res.status(400).json({ error: 'phone_required', field: 'phone', message: bookingQuestionErrorMessage('phone_required', '') })
+  }
   const av = validateBookingAnswers(questions, answersMap)
   if (!av.ok) {
     return res
@@ -460,17 +479,45 @@ async function bookLegacyPath(
     if (typed.entry) answers = [typed.entry, ...answers]
   }
 
-  // 1) Confirm the slot is genuinely still open — against the SAME computation
-  // that produced the list the lead picked from (lib/schedulerSlots.ts). The page
-  // calls GET /api/calendar/availability, which now shares this exact function,
-  // so a listed slot always books.
+  // THE THIRD ROUTE, and the one coach_not_bookable did not reach.
   //
-  // Two earlier attempts got this wrong in the same way, both rejecting every
-  // valid pick: querying Zoom over a ~31-minute window (its available_times is
-  // DAY-granular, so nothing came back to match), then validating against the
-  // coach's own availability engine (which yields nothing for a coach who never
-  // configured custom availability). The fix is not a better window or a better
-  // engine — it is using ONE source for both sides.
+  // A funnel whose owner has no Google connection lands here, not in
+  // bookCoachPath — coachOwner requires `conn`. That is the worst case to leave
+  // uncovered: a coach who never connected Google is the coach most likely never
+  // to have set their hours either, so an unconfigured coach's funnel was still
+  // answering 409 slot_taken for a slot with nothing booked in it.
+  //
+  // Asked before either slot check, for the same reason it outranks the form
+  // checks above: a page that cannot take bookings must say so rather than send
+  // the visitor into a retry loop against an empty list.
+  if (funnelRow) {
+    const coachSettings = await loadUserAvailability(funnelRow.user_id as string)
+    if (!coachSettings.configured) return res.status(503).json({ error: 'coach_not_bookable' })
+  }
+
+  // 1) Confirm the slot is genuinely still open.
+  //
+  // TWO ENGINES, because two different things have to be free, and the comment
+  // that used to sit here was stale. It said the page "calls
+  // GET /api/calendar/availability, which now shares this exact function" —
+  // true when this path served only MTM's own funnel-less page, and false ever
+  // since native-calendar funnels started routing through it. A FUNNEL page
+  // calls GET /api/funnel/availability, which lists from computeOpenSlots
+  // against the COACH's working hours, so validating only against MTM's Zoom
+  // scheduler meant list and accept answered from different sources.
+  //
+  //   isSlotOpen(coach)     — the engine that produced the list the lead saw.
+  //   isSchedulerSlotOpen   — MTM's shared Zoom host, which physically holds the
+  //                           meeting this path creates and is shared across
+  //                           every coach on it.
+  //
+  // The historical objection to checking the coach's engine here was that it
+  // "yields nothing for a coach who never configured custom availability" and so
+  // rejected every valid pick. That case is now refused above, by name, before
+  // reaching this line — which is what makes the check safe to add.
+  if (funnelRow && !(await isSlotOpen(funnelRow.user_id as string, startIso))) {
+    return res.status(409).json({ error: 'slot_taken' })
+  }
   if (!(await isSchedulerSlotOpen(startIso))) {
     return res.status(409).json({ error: 'slot_taken' })
   }
@@ -487,6 +534,7 @@ async function bookLegacyPath(
       status: 'active',
       custom_answers: answers,
       timezone,
+      lead_phone: leadPhone,
       // funnel_id only. coach_user_id stays NULL on purpose: this path books the
       // ONE shared Zoom host, so the NULLS NOT DISTINCT uniqueness backstop must
       // keep these globally unique per start_time. Scoping them per coach (tried
@@ -553,6 +601,7 @@ async function bookLegacyPath(
       leadId,
       leadName: name,
       leadEmail: email,
+      leadPhone,
       startIso,
       answers,
     })

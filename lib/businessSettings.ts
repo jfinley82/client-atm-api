@@ -1,4 +1,5 @@
 import { normalizeBookingSlug } from './bookingPage'
+import { BookingQuestion, normalizeBookingQuestions } from './bookingQuestions'
 import { supabase } from './supabase'
 import { isValidBrandColor, isValidBrandFont, validateTrackingInput, Tracking, DEFAULT_BRAND_PRIMARY, DEFAULT_BRAND_SECONDARY } from './funnels'
 
@@ -38,6 +39,8 @@ export type BusinessSettings = {
   booking_slug: string | null
   booking_page_title: string | null
   booking_page_description: string | null
+  booking_questions: BookingQuestion[]
+  booking_phone_required: boolean
   brand_primary_color: string
   brand_secondary_color: string
   theme_mode: string
@@ -147,6 +150,8 @@ const ALLOWED_KEYS = new Set([
   'booking_slug',
   'booking_page_title',
   'booking_page_description',
+  'booking_questions',
+  'booking_phone_required',
   'brand_primary_color',
   'brand_secondary_color',
   'theme_mode',
@@ -189,6 +194,21 @@ export function validateBusinessSettingsInput(
       if (!checked.ok) return { ok: false, field: 'booking_slug', reason: checked.error }
       update.booking_slug = checked.slug
     }
+  }
+
+  if ('booking_phone_required' in o) {
+    const v = o.booking_phone_required
+    if (typeof v !== 'boolean') return { ok: false, field: 'booking_phone_required' }
+    update.booking_phone_required = v
+  }
+
+  // Same shape and validator as a funnel's questions, so the admin editor is
+  // reused rather than reimplemented. Malformed entries are dropped rather than
+  // rejecting the save, matching normalizeBookingQuestions everywhere else.
+  if ('booking_questions' in o) {
+    const v = o.booking_questions
+    if (v !== null && !Array.isArray(v)) return { ok: false, field: 'booking_questions' }
+    update.booking_questions = v === null ? [] : normalizeBookingQuestions(v)
   }
 
   for (const field of ['booking_page_title', 'booking_page_description'] as const) {
@@ -293,6 +313,9 @@ export function normalizeBusinessSettings(row: Record<string, any> | null | unde
   }
   return {
     ...profile,
+    booking_questions: normalizeBookingQuestions(r.booking_questions),
+    // Column default is true; only an explicit false turns it off.
+    booking_phone_required: r.booking_phone_required === false ? false : true,
     booking_slug: typeof r.booking_slug === 'string' && r.booking_slug.trim() ? r.booking_slug.trim() : null,
     booking_page_title: typeof r.booking_page_title === 'string' && r.booking_page_title.trim() ? r.booking_page_title.trim() : null,
     booking_page_description:

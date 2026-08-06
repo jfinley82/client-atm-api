@@ -242,18 +242,132 @@ export function funnelBookingQuestions(funnelRow: Record<string, any>): BookingQ
   return normalizeBookingQuestions(funnelRow.booking_questions)
 }
 
-// Resolve the question set for a booking context. Both the public questions
-// endpoint and the booking validator call this, so the set a lead is SHOWN and
-// the set they are VALIDATED against are the same by construction.
-export async function resolveBookingQuestions(funnelId?: string | null): Promise<BookingQuestion[]> {
-  const id = typeof funnelId === 'string' ? funnelId.trim() : ''
-  if (id) {
-    const funnelRow = await resolveLiveFunnel({ funnelId: id })
-    // A resolved funnel answers entirely from its own settings — never the global set.
-    if (funnelRow) return funnelBookingQuestions(funnelRow)
+// A COACH's own booking-page questions. Same shape and validator as a funnel's,
+// so the admin editor can be reused unchanged.
+export async function loadCoachBookingQuestions(coachUserId: string): Promise<BookingQuestion[]> {
+  const { data } = await supabase
+    .from('funnel_business_settings')
+    .select('booking_questions')
+    .eq('user_id', coachUserId)
+    .maybeSingle()
+  return normalizeBookingQuestions((data as { booking_questions?: unknown } | null)?.booking_questions)
+}
+
+// Is the lead's phone required? Coach setting when there is a coach, the global
+// app_settings key when there is not.
+async function loadPhoneRequired(coachUserId: string | null): Promise<boolean> {
+  if (coachUserId) {
+    const { data } = await supabase
+      .from('funnel_business_settings')
+      .select('booking_phone_required')
+      .eq('user_id', coachUserId)
+      .maybeSingle()
+    const v = (data as { booking_phone_required?: unknown } | null)?.booking_phone_required
+    // Column default is true; only an explicit false turns it off, so a missing
+    // row reads as required rather than as permission to skip.
+    return v === false ? false : true
   }
-  // No funnel in play: the legacy shared booking page, unchanged.
-  return loadBookingQuestions()
+  const { data } = await supabase
+    .from('app_settings')
+    .select('value')
+    .eq('key', 'booking_phone_required')
+    .maybeSingle()
+  const raw = (data as { value?: unknown } | null)?.value
+  // THE GLOBAL KEY DEFAULTS TO NOT-REQUIRED WHEN ABSENT, unlike the coach
+  // column, and the asymmetry is deliberate.
+  //
+  // The coach column defaults true and governs pages that do not exist yet — no
+  // coach has a slug, so nothing can break. This key governs /book, which is
+  // LIVE and does not collect a phone. Defaulting an unset key to required would
+  // 400 every public booking from the moment this deploys until the frontend
+  // ships the field: a booking that loses a phone number is a missing detail, a
+  // booking that 400s is a lost lead. Same reasoning that keeps booking_type
+  // optional.
+  //
+  // Once an admin saves the key it is honoured in both directions.
+  if (typeof raw !== 'string' || !raw.trim()) return false
+  return coerceBooleanSetting(raw)
+}
+
+// app_settings.value is TEXT, so the global toggle arrives as a string. A stored
+// value that is not recognisably false counts as required — a malformed value
+// must not quietly stop asking for the number once an admin has turned it on.
+export function coerceBooleanSetting(v: unknown): boolean {
+  if (typeof v !== 'string') return true
+  return !/^(false|0|no|off)$/i.test(v.trim())
+}
+
+export type BookingRequirements = { questions: BookingQuestion[]; phoneRequired: boolean }
+
+/**
+ * Everything the booking FORM asks for, in one resolution.
+ *
+ * This is the extension of resolveBookingQuestions rather than a second
+ * resolver, and the reason is the same one that function was built for: the set
+ * a lead is SHOWN and the set they are VALIDATED against must be the same by
+ * construction. A parallel path for phone would reintroduce exactly the drift —
+ * a coach flips the toggle, the page stops showing an asterisk, and the server
+ * keeps refusing.
+ *
+ * Questions and phone resolve from DIFFERENT places for a funnel booking, which
+ * is deliberate:
+ *   questions — the funnel's own, else the coach's, else the global MTM set.
+ *   phone     — the COACH's, else the global setting.
+ * A funnel's questions belong to that funnel's offer; whether the coach needs a
+ * phone number is a fact about the coach, and it should not change depending on
+ * which of their funnels a lead came through.
+ *
+ * A coach with no questions configured gets NONE. It never falls back to the
+ * global set: those are MTM's own discovery-call questions and would appear on a
+ * coach's page unasked.
+ */
+export async function resolveBookingRequirements(ctx: {
+  funnelId?: string | null
+  funnelRow?: Record<string, any> | null
+  coachUserId?: string | null
+}): Promise<BookingRequirements> {
+  let funnelRow = ctx.funnelRow ?? null
+  const id = typeof ctx.funnelId === 'string' ? ctx.funnelId.trim() : ''
+  if (!funnelRow && id) funnelRow = await resolveLiveFunnel({ funnelId: id })
+
+  const coachUserId = ctx.coachUserId ?? (funnelRow ? (funnelRow.user_id as string) : null)
+
+  const questions = funnelRow
+    ? funnelBookingQuestions(funnelRow)
+    : coachUserId
+      ? await loadCoachBookingQuestions(coachUserId)
+      : await loadBookingQuestions()
+
+  return { questions, phoneRequired: await loadPhoneRequired(coachUserId) }
+}
+
+// Back-compat wrapper for callers that only need the questions.
+export async function resolveBookingQuestions(funnelId?: string | null): Promise<BookingQuestion[]> {
+  return (await resolveBookingRequirements({ funnelId })).questions
+}
+
+/**
+ * The lead's phone, loosely validated.
+ *
+ * People type spaces, dashes, brackets, dots and country codes, and no booking
+ * should be refused over formatting — a lost lead costs more than a tidy string.
+ * The only real checks are that it contains enough digits to be a number at all,
+ * and not so many that it is something else.
+ *
+ * Stored as GIVEN, not reformatted: the coach is going to read it and dial it,
+ * and a number rewritten into a shape its owner did not use is harder to
+ * recognise, not easier.
+ */
+export function normalizeLeadPhone(raw: unknown): { ok: true; phone: string | null } | { ok: false } {
+  if (raw === null || raw === undefined) return { ok: true, phone: null }
+  if (typeof raw !== 'string') return { ok: false }
+  const phone = raw.trim()
+  if (!phone) return { ok: true, phone: null }
+  if (phone.length > 40) return { ok: false }
+  const digits = phone.replace(/\D/g, '')
+  if (digits.length < 7 || digits.length > 15) return { ok: false }
+  if (!/^[+()\-.\s\d]+$/.test(phone)) return { ok: false }
+  return { ok: true, phone }
 }
 
 // Human-readable text for a validation failure, so a lead never sees a raw code.
@@ -263,6 +377,10 @@ export function bookingQuestionErrorMessage(error: string, question: string): st
       return `Please answer "${question}" to complete your booking.`
     case 'invalid_option':
       return `Please choose one of the listed options for "${question}".`
+    case 'phone_required':
+      return 'Please add a phone number so we can reach you.'
+    case 'phone_invalid':
+      return 'That phone number does not look right, please check it.'
     default:
       return 'Please check your answers and try again.'
   }

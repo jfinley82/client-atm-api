@@ -43,6 +43,11 @@ export const ALLOWED_SETTING_KEYS = new Set([
   // rather than a broken form. Stored as a JSON STRING, matching booking_questions:
   // app_settings.value is text and both write paths reject a non-string value.
   'booking_types',
+  // Whether /book requires the lead's phone. MTM's own page has no coach, so it
+  // reads this where a coach's page reads their column. World-readable like
+  // everything here, which is fine and in fact necessary: the public page has to
+  // know whether to mark the field required.
+  'booking_phone_required',
   // Community page branding. The dashboard reads these from the public GET with
   // the current copy as fallbacks, so they light up the moment values exist.
   'community_title',
