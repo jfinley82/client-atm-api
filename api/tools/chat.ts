@@ -120,6 +120,28 @@ export function deriveAudienceDisplayFields(raw: Record<string, unknown>): Recor
       ? rawGender
       : genderFromName(avatarName || '')
   const problemStatement = asString(raw.problem_statement)
+
+  // The avatar hero's six. These had no camelCase alias, so the panel's choices
+  // were to thin the hero or to read raw snake_case keys directly — and reading
+  // raw keys is how a second renderer starts, drifting from the one
+  // api/tools/results.ts uses. One renderer, so they are derived here.
+  //
+  // ALL SIX ARE STRAIGHT CAMELISATIONS, deliberately. Four of the existing
+  // nineteen are not — buyingDecisions, pastAttempts, motivatingStatements,
+  // turnAwayStatements — and that is exactly what nearly cost four blank cards,
+  // because a reasonable person camelises the raw key and gets undefined. There
+  // was no reason to rename any of these, so none is renamed: whoTheyAre,
+  // theirWorld, emotionalState, internalDialogue, triggeringMoment, whyItFailed.
+  //
+  // emotionalState and internalDialogue also feed the fearsAndDoubts fallback
+  // above. That is not duplication to collapse — the fallback is a degraded
+  // early-turn shape for a different card, and these are the hero's own fields.
+  const whoTheyAre = asString(raw.who_they_are)
+  const theirWorld = asString(raw.their_world)
+  const emotionalState = asString(raw.emotional_state)
+  const internalDialogue = asString(raw.internal_dialogue)
+  const triggeringMoment = asString(raw.triggering_moment)
+  const whyItFailed = asString(raw.why_it_failed)
   // camelCase aliases for The Gap card. The model emits these as snake_case
   // (perceived_problem/real_problem) and they always have — but the Gap-card UI
   // reads output.perceivedProblem / output.realProblem, so the raw snake_case
@@ -227,6 +249,12 @@ export function deriveAudienceDisplayFields(raw: Record<string, unknown>): Recor
   // carries a valid avatar_gender for gender-matched avatar selection on read.
   derived.avatar_gender = avatarGender
   if (problemStatement !== null) derived.problemStatement = problemStatement
+  if (whoTheyAre !== null) derived.whoTheyAre = whoTheyAre
+  if (theirWorld !== null) derived.theirWorld = theirWorld
+  if (emotionalState !== null) derived.emotionalState = emotionalState
+  if (internalDialogue !== null) derived.internalDialogue = internalDialogue
+  if (triggeringMoment !== null) derived.triggeringMoment = triggeringMoment
+  if (whyItFailed !== null) derived.whyItFailed = whyItFailed
   if (perceivedProblem !== null) derived.perceivedProblem = perceivedProblem
   if (realProblem !== null) derived.realProblem = realProblem
   if (connectionSummary !== null) derived.connectionSummary = connectionSummary

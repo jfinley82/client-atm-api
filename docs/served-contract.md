@@ -57,7 +57,7 @@ a surprise.
 
 ## Step 1 Attract — `saved_outputs.content` where `tool_type = 'audience'`
 
-Read these. 20 keys, across the twelve sections of §14.
+Read these. 26 keys, across the twelve sections of §14.
 
 ### Avatar hero
 
@@ -66,7 +66,12 @@ Read these. 20 keys, across the twelve sections of §14.
 | `avatar_gender` | string (enum) | `avatar_gender (or inferred from avatarName)` |
 | `avatarName` | string | `avatar_name` |
 | `connectionSummary` | string | `connection_summary` |
+| `emotionalState` | string | `emotional_state` |
+| `internalDialogue` | string | `internal_dialogue` |
 | `problemStatement` | string | `problem_statement` |
+| `theirWorld` | string | `their_world` |
+| `triggeringMoment` | string | `triggering_moment` |
+| `whoTheyAre` | string | `who_they_are` |
 
 ### The Gap
 
@@ -120,6 +125,7 @@ Read these. 20 keys, across the twelve sections of §14.
 | served name | type | derived from |
 |---|---|---|
 | `pastAttempts` | string[] | `tried_before` |
+| `whyItFailed` | string | `why_it_failed` |
 
 ### Where to find them
 

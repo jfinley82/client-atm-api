@@ -86,6 +86,38 @@ function ok(label: string, cond: boolean, extra?: string) {
       ok(`${raw} -> ${servedName} is called out`, doc.includes('`' + raw + '`') && doc.includes('`' + servedName + '`'))
     }
 
+    // THE AVATAR HERO'S SIX, added because they had no camelCase alias and the
+    // panel's only alternatives were to thin the hero or read raw keys — which
+    // is how a second renderer starts. Asserted to be STRAIGHT camelisations:
+    // four of the original nineteen are not, and that is what nearly cost four
+    // blank cards, so any new key that breaks the rule has to be a decision
+    // somebody made rather than one that slipped in.
+    const camelise = (k: string) => k.replace(/_([a-z])/g, (_m, c) => c.toUpperCase())
+    for (const rawKey of [
+      'who_they_are',
+      'their_world',
+      'emotional_state',
+      'internal_dialogue',
+      'triggering_moment',
+      'why_it_failed',
+    ]) {
+      const expected = camelise(rawKey)
+      ok(`${rawKey} is served as ${expected}`, doc.includes('`' + expected + '`'), `not in the contract`)
+      ok(`and ${expected} is a straight camelisation`, camelise(rawKey) === expected)
+      // Scoped to the guesses-wrong table's OWN row shape (`raw` | **`served`**),
+      // not to the raw key anywhere in the document — the per-section tables
+      // carry the raw key too, so the looser pattern matched those and failed
+      // on correct output.
+      ok(
+        `so ${expected} is NOT in the guesses-wrong table`,
+        !new RegExp('\\| `' + rawKey + '` \\| \\*\\*`').test(doc),
+        `${rawKey} was renamed — the contract must say why`
+      )
+    }
+    // And the guesses-wrong list did not grow: still exactly the six known ones.
+    const surpriseRows = (doc.match(/^\| `[a-z_]+` \| \*\*`/gm) || []).length
+    ok(`the non-camelised list is still 6, not larger (${surpriseRows})`, surpriseRows === 6, `${surpriseRows}`)
+
     ok('avatar_gender is flagged as the snake_case exception', /deliberate snake_case exception/i.test(doc))
     ok('and the reason is given, not just the fact', /genderFromName|always carries a valid value/i.test(doc))
 
