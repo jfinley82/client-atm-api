@@ -188,7 +188,13 @@ const aiCoachOf = () => savedOutputs.find((s) => s.tool_type === 'ai_coach')
   businessSettings = { user_id: COACH, business_name: null, headshot_url: null }
   const p2 = await call(profile, token)
   ok('falls back to users.name', p2.body?.coach?.name === 'Jamaul Finley')
-  ok('falls back to users.avatar_url', p2.body?.coach?.photo === 'https://img.example.com/avatar.png')
+  // NO PHOTO FALLBACK, deliberately reversed. This used to assert
+  // photo === users.avatar_url, which was the account's own profile picture
+  // being published to a lead because no Brand Identity headshot was set. The
+  // name falls back because a name IS the coach's public identity either way; a
+  // private image is not, and a fallback reaching into a different record is a
+  // decision about someone's data rather than a default.
+  ok('does NOT fall back to users.avatar_url', p2.body?.coach?.photo === null, JSON.stringify(p2.body?.coach?.photo))
   reset()
   users[COACH] = { ...users[COACH], name: null, profession: null, bio: null, avatar_url: null }
   businessSettings = { user_id: COACH, business_name: null, headshot_url: null }

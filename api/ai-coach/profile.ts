@@ -8,10 +8,15 @@ import { resolveLeadSession } from '../../lib/aiCoachSession'
 // GET /api/ai-coach/profile — lead-authed. Coach identity + bot identity + the
 // two side actions, for the AI coach shell's header.
 //
-// The coach half is the SAME resolution the public funnel pages already use
-// (api/funnels/render.ts): funnel_business_settings first, the owner's own
-// profile as the fallback, so the bot's header and the coach's funnel show the
+// The coach half is the SAME resolution the public funnel pages use
+// (api/funnels/render.ts), so the bot's header and the coach's funnel show the
 // same person rather than drifting apart.
+//
+// That consistency is why this endpoint ALSO published users.avatar_url when no
+// Brand Identity headshot was set: the fallback was copied here because it
+// matched, and the comment cited the match as the justification. Both are gone.
+// Agreeing with another surface is a reason to check what that surface does, not
+// a reason to trust it.
 export const config = { maxDuration: 30 }
 
 // The bot's one-line tagline, derived from the coach's configured goal — this is
@@ -46,7 +51,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const [userRes, settings] = await Promise.all([
       // No `tagline` column exists on users — `profession` is the one-line
       // self-description the account already collects, so it fills that slot.
-      supabase.from('users').select('name, avatar_url, bio, profession').eq('id', session.coachUserId).maybeSingle(),
+      supabase.from('users').select('name, bio, profession').eq('id', session.coachUserId).maybeSingle(),
       loadBusinessSettings(session.coachUserId),
     ])
     const user = (userRes.data || {}) as Record<string, unknown>
@@ -72,7 +77,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // the coach did not write appearing under their own name.
         tagline: trimmed(user.profession) ?? '',
         bio: trimmed(user.bio),
-        photo: firstUrl(settings.headshot_url, user.avatar_url),
+        // Brand Identity only, never users.avatar_url — the account's own
+        // picture, which a coach who never opened Brand Identity has not agreed
+        // to publish. Still the same resolution the funnel pages use; they no
+        // longer fall back either.
+        photo: firstUrl(settings.headshot_url),
       },
       bot: {
         bot_name: session.aiCoach.bot_name || session.aiCoach.config.coach_bot_name,

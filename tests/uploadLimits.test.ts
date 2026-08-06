@@ -207,6 +207,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
     const guide: Handler = (await import('../api/guide/publish')).default
     const transcribe: Handler = (await import('../api/transcribe')).default
     const render: Handler = (await import('../api/pdf/render')).default
+    const brandUpload: Handler = (await import('../api/brand/upload-image')).default
     const forumUpload: Handler = (await import('../api/forum/upload-image')).default
     const slidesUpload: Handler = (await import('../api/slides/upload-image')).default
 
@@ -222,6 +223,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
       { name: 'hub/listings/[id]/cover', handler: cover, contentType: 'image/png', query: { id: 'listing-1' } },
       { name: 'guide/publish', handler: guide, contentType: 'application/pdf', query: { card_id: 'card-1' } },
       { name: 'transcribe', handler: transcribe, contentType: 'audio/webm' },
+      { name: 'brand/upload-image', handler: brandUpload, contentType: 'image/png', query: { field: 'logo' } },
       { name: 'pdf/render', handler: render, contentType: 'application/json' },
     ]
 

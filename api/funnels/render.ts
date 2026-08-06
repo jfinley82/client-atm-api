@@ -182,16 +182,29 @@ function trackingHead(t: Tracking): string {
 export async function loadBranding(funnel: Record<string, any>): Promise<Branding> {
   const [settings, ownerRes] = await Promise.all([
     loadBusinessSettings(funnel.user_id as string),
-    supabase.from('users').select('name, avatar_url').eq('id', funnel.user_id).maybeSingle(),
+    // NAME ONLY. avatar_url is not selected because it must not be reachable
+    // from here — see headshotUrl below. Not selecting it is the version of that
+    // rule a future edit cannot undo by accident.
+    supabase.from('users').select('name').eq('id', funnel.user_id).maybeSingle(),
   ])
-  const owner = (ownerRes.data || {}) as { name?: string | null; avatar_url?: string | null }
+  const owner = (ownerRes.data || {}) as { name?: string | null }
 
   const brand = brandKit(settings)
   return {
     brand,
     head: trackingHead(sanitizeTracking(settings.tracking)),
     logoUrl: firstUrl(settings.logo_url),
-    headshotUrl: firstUrl(settings.headshot_url, owner.avatar_url),
+    // ONLY the Brand Identity headshot. It used to fall back to
+    // users.avatar_url, so a coach who had never opened Brand Identity had
+    // their ACCOUNT profile picture published on their funnel page, with
+    // nothing anywhere telling them.
+    //
+    // It looked like a kindness — show something rather than nothing — but a
+    // fallback that reaches into a DIFFERENT RECORD than the feature is about
+    // is not a default, it is a decision about someone's data. Whatever a coach
+    // did not set is not published; the page renders without a headshot, the
+    // same way the booking page renders initials.
+    headshotUrl: firstUrl(settings.headshot_url),
     businessName: settings.business_name || (owner.name ? owner.name.trim() : null) || null,
     legal: settings.legal || {},
     cookieNotice: funnel.cookie_notice_enabled !== false,
