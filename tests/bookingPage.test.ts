@@ -87,6 +87,7 @@ let workingHoursRow: any = {
 }
 let slugRow: Record<string, unknown> | null = SETTINGS_ROW
 let globalPhoneRow: any = null
+let hostSlugRow: any = null
 let funnelRowForId: any = null
 
 const realFetch = globalThis.fetch
@@ -102,7 +103,14 @@ globalThis.fetch = (async (input: any, init?: any) => {
   }
   if (url.includes('/rest/v1/user_availability')) return json(workingHoursRow)
   if (url.includes('/rest/v1/users')) return json({ id: COACH, name: 'Alex Rivera', avatar_url: ACCOUNT_AVATAR })
-  if (url.includes('/rest/v1/app_settings')) return json(globalPhoneRow)
+  // app_settings is keyed, and more than one key is read on this path now. The
+  // mock has to dispatch on `key=eq.` or the booking_host_slug lookup silently
+  // receives the phone row and the no-slug case "passes" for the wrong reason.
+  if (url.includes('/rest/v1/app_settings')) {
+    const k = /key=eq\.([^&]+)/.exec(url)?.[1]
+    if (k === 'booking_host_slug') return json(hostSlugRow)
+    return json(globalPhoneRow)
+  }
   if (url.includes('/rest/v1/funnels')) return json(funnelRowForId ? [funnelRowForId] : [])
   if (url.includes('/rest/v1/calendar_connections')) return json(null)
   if (url.includes('/rest/v1/bookings')) return json([])
@@ -326,9 +334,26 @@ function deepKeys(v: unknown, acc: string[] = []): string[] {
 
   console.log('\n-- method and input guards --')
   {
+    // REVERSED DELIBERATELY. This asserted `no slug is 400`, which was the right
+    // contract while the endpoint served only coach pages addressed by slug. A
+    // slugless request now means "MTM's own booking page" and resolves through
+    // booking_host_slug, so the absent-slug case is no longer a malformed
+    // request — it is a lookup that either finds a host or does not.
+    //
+    // 404 with the setting unset, and it must stay 404 rather than drifting back
+    // to 400: the two are indistinguishable to a caller, but 400 would say the
+    // REQUEST was wrong when the request was fine and the configuration is not.
+    hostSlugRow = null
     const noSlug = makeRes()
     await page({ method: 'GET', headers: {}, query: {} }, noSlug.res)
-    ok('no slug is 400', noSlug.out.status === 400, `${noSlug.out.status}`)
+    ok('no slug with no host configured is 404, not 400', noSlug.out.status === 404, `${noSlug.out.status}`)
+
+    // The availability endpoint still requires one, and that is not an oversight:
+    // a caller reaches it only after GET /api/booking-page has told it the slug.
+    const avail: Handler = (await import('../api/booking-page/availability')).default
+    const availNoSlug = makeRes()
+    await avail({ method: 'GET', headers: {}, query: {} }, availNoSlug.res)
+    ok('availability still requires a slug', availNoSlug.out.status === 400, `${availNoSlug.out.status}`)
 
     const post = makeRes()
     await page({ method: 'POST', headers: {}, query: { slug: 'alex-rivera' } }, post.res)
@@ -432,6 +457,107 @@ function deepKeys(v: unknown, acc: string[] = []): string[] {
       buffer_minutes: 15,
       booking_window_days: 14,
     }
+  }
+
+  console.log('\n-- ACCEPTANCE: no slug resolves MTM\'s own host, identically --')
+  // MTM's internal book-a-call page has no slug in its URL. Rather than
+  // hardcoding whose page it is, the slug is looked up from booking_host_slug
+  // and run through the SAME resolver — so the assertion that matters is not
+  // "it returns something" but "it returns the same thing", compared field by
+  // field against the slug-supplied response rather than spot-checked.
+  {
+    slugRow = SETTINGS_ROW
+    hostSlugRow = { value: 'alex-rivera' }
+
+    const withSlug = makeRes()
+    await page({ method: 'GET', headers: {}, query: { slug: 'alex-rivera' } }, withSlug.res)
+    const without = makeRes()
+    await page({ method: 'GET', headers: {}, query: {} }, without.res)
+
+    ok('a slugless request is 200', without.out.status === 200, `${without.out.status} ${JSON.stringify(without.out.body)}`)
+    ok(
+      'and the payload is byte-identical to the slug-supplied one',
+      JSON.stringify(without.out.body) === JSON.stringify(withSlug.out.body),
+      `\n      no slug: ${JSON.stringify(without.out.body)}\n      slug:    ${JSON.stringify(withSlug.out.body)}`
+    )
+    // Named explicitly because it is the field the page actually renders, and
+    // an initials fallback would still compare equal to an initials fallback.
+    ok(
+      'including avatar.kind === image',
+      without.out.body?.page?.avatar?.kind === 'image',
+      JSON.stringify(without.out.body?.page?.avatar)
+    )
+    // The response carries the slug it resolved, which is what lets a caller
+    // that arrived without one address availability and booking afterwards.
+    ok('and the slug it resolved is on the payload', without.out.body?.page?.slug === 'alex-rivera')
+
+    // A capitalised or padded value saves canonicalised, but a row written
+    // before that validation existed can still hold one — so the read tolerates
+    // it too rather than 404ing on a value an admin can see is right.
+    hostSlugRow = { value: '  Alex-Rivera  ' }
+    const messy = makeRes()
+    await page({ method: 'GET', headers: {}, query: {} }, messy.res)
+    ok('a stored value with case and padding still resolves', messy.out.status === 200, `${messy.out.status}`)
+
+    console.log('\n-- ACCEPTANCE: unset or unresolvable means 404, never a guess --')
+    // The failure mode being refused here is a page that renders CONFIDENTLY
+    // with the wrong host: first admin, oldest user, only coach with a slug.
+    // Each would 200 with a real name and a real calendar, and a stranger would
+    // book a call with somebody who never offered one.
+    for (const [label, row] of [
+      ['unset', null],
+      ['empty string', { value: '' }],
+      ['whitespace', { value: '   ' }],
+      ['a slug nobody owns', { value: 'nobody-here' }],
+      ['a malformed slug', { value: 'Not A Slug!' }],
+    ] as Array<[string, any]>) {
+      hostSlugRow = row
+      const r = makeRes()
+      await page({ method: 'GET', headers: {}, query: {} }, r.res)
+      ok(`${label} -> 404`, r.out.status === 404, `${r.out.status} ${JSON.stringify(r.out.body)}`)
+      ok(`${label} -> no host identity leaked`, !r.out.body?.page, JSON.stringify(r.out.body))
+    }
+
+    // And the setting is not consulted at all when a slug WAS supplied — a
+    // caller asking for a specific coach must never be answered with the house
+    // one because the house one happened to be configured.
+    hostSlugRow = { value: 'alex-rivera' }
+    const other = makeRes()
+    await page({ method: 'GET', headers: {}, query: { slug: 'someone-else' } }, other.res)
+    ok('an unknown slug is still 404 even with a host configured', other.out.status === 404, `${other.out.status}`)
+
+    hostSlugRow = null
+  }
+
+  console.log('\n-- ACCEPTANCE: booking_host_slug is validated on the way in --')
+  {
+    const { ALLOWED_SETTING_KEYS, normalizeSettingValue } = await import('../lib/appSettings')
+    ok('the key is writable at all', ALLOWED_SETTING_KEYS.has('booking_host_slug'))
+
+    const good = normalizeSettingValue('booking_host_slug', '  Jamaul  ')
+    ok(
+      'a capitalised value is canonicalised rather than stored verbatim',
+      good.ok && good.value === 'jamaul',
+      JSON.stringify(good)
+    )
+    // Without this the row saves cleanly, the form shows a value that looks
+    // right, and the page 404s — the lookup is an exact match on booking_slug.
+
+    const cleared = normalizeSettingValue('booking_host_slug', '')
+    ok('clearing it is allowed', cleared.ok && cleared.value === '', JSON.stringify(cleared))
+
+    for (const bad of ['not a slug', 'ab', 'api', 'Bad_Slug', 'a--b']) {
+      const r = normalizeSettingValue('booking_host_slug', bad)
+      ok(`'${bad}' is refused at write time`, !r.ok, JSON.stringify(r))
+    }
+
+    // Refused by the SAME normalizer the public slug uses, so the two cannot
+    // drift into accepting different things.
+    const { normalizeBookingSlug } = await import('../lib/bookingPage')
+    ok(
+      'and it is the same normalizer, not a second copy of the pattern',
+      !normalizeBookingSlug('api').ok && !normalizeSettingValue('booking_host_slug', 'api').ok
+    )
   }
 
   console.log('\n-- ACCEPTANCE 2: the coach name is published, the avatar still is not --')

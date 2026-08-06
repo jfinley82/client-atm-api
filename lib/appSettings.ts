@@ -1,4 +1,5 @@
 import { parseWorkshopDate } from './workshopDate'
+import { normalizeBookingSlug } from './bookingPage'
 
 // The set of app_settings keys the write paths accept. Both write paths
 // (PATCH /api/admin/settings and the legacy POST /api/settings) validate
@@ -48,6 +49,17 @@ export const ALLOWED_SETTING_KEYS = new Set([
   // everything here, which is fine and in fact necessary: the public page has to
   // know whether to mark the field required.
   'booking_phone_required',
+  // Which coach MTM's OWN booking page belongs to, as a booking slug. Read by
+  // GET /api/booking-page when the caller supplies no slug — the internal
+  // book-a-call page, whose URL has none.
+  //
+  // Publishing it costs nothing: a booking slug is the address strangers type,
+  // so it is public by construction. This says which slug is the house one.
+  //
+  // Validated below through the SAME normalizer the public slug uses, so a typo
+  // fails the save loudly instead of turning into a 404 on a page nobody is
+  // watching. Unset is a legitimate state and means "no house page".
+  'booking_host_slug',
   // Community page branding. The dashboard reads these from the public GET with
   // the current copy as fallbacks, so they light up the moment values exist.
   'community_title',
@@ -105,5 +117,31 @@ export function normalizeSettingValue(
     // lib/workshopDate.ts for that, and is deliberately not wired here.
     return { ok: true, value: parsed.value }
   }
+
+  // The house booking slug, checked against the SAME rules a coach's own slug is
+  // checked against — same normalizer, not a second copy of the pattern, so the
+  // two cannot drift into accepting different things.
+  //
+  // An empty value is allowed and clears the setting: "MTM has no booking page
+  // right now" is a state an admin may legitimately want, and it degrades to a
+  // 404 rather than to a guess.
+  //
+  // The trimming and lowercasing matter more than they look. An admin typing
+  // "Jamaul" is asking for the same page as "jamaul", but app_settings stores
+  // text verbatim and the lookup is an exact match on booking_slug — so without
+  // canonicalising here, a capital letter would save cleanly and 404 silently,
+  // with the settings form showing a value that looks right.
+  if (key === 'booking_host_slug') {
+    if (!value.trim()) return { ok: true, value: '' }
+    const checked = normalizeBookingSlug(value)
+    if (!checked.ok) {
+      return {
+        ok: false,
+        error: `value for 'booking_host_slug' is not a valid booking slug (${checked.error}) — it must match a coach's booking slug exactly`,
+      }
+    }
+    return { ok: true, value: checked.slug }
+  }
+
   return { ok: true, value }
 }
