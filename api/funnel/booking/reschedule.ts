@@ -57,6 +57,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const newStartIso = new Date(newStartMs).toISOString()
     const newEndIso = new Date(newStartMs + durationMin * 60_000).toISOString()
 
+    // Same two-reasons problem as the booking submit: for a coach, isSlotOpen is
+    // false both when the slot is taken and when they never configured hours.
+    // The manage page retries on slot_taken, so the second case would loop
+    // against an empty list.
+    if (coach && settings && !settings.configured) {
+      return res.status(503).json({ error: 'coach_not_bookable' })
+    }
     const stillOpen = coach ? await isSlotOpen(coach, newStartIso) : await isSchedulerSlotOpen(newStartIso)
     if (!stillOpen) return res.status(409).json({ error: 'slot_taken' })
 

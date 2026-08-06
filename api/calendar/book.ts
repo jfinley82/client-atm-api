@@ -224,7 +224,25 @@ async function bookCoachPath(
     if (!gate.qualified) return disqualified(res, gate)
   }
 
+  // ASKED BEFORE isSlotOpen, because isSlotOpen now has two reasons to say no
+  // and the caller can only report one of them.
+  //
+  // It returned false only for "that slot is taken" until availability gating
+  // was added; now an unconfigured coach makes it false too, and mapping that to
+  // slot_taken tells the visitor something untrue. Worse, the frontend's
+  // response to a 409 is to refresh the slots and ask them to pick again — and
+  // the refresh returns an empty list, so the page asks someone to choose
+  // another time from nothing, forever, with no explanation. A coach testing
+  // their own page gets the same dead end and no hint that the cause is their
+  // own availability settings.
+  //
+  // Same distinction as the list side: an empty result and an unconfigured coach
+  // are different facts and must not share a message. coach_not_bookable matches
+  // the code the no-meeting-room branch below already returns.
+  if (!settings.configured) return res.status(503).json({ error: 'coach_not_bookable' })
+
   // Parity: the slot must be genuinely open per the same engine the page showed.
+  // Reaching here, false means exactly one thing again.
   if (!(await isSlotOpen(owner, startIso))) return res.status(409).json({ error: 'slot_taken' })
 
   // Reserve first (per-coach unique index is the concurrency backstop), then

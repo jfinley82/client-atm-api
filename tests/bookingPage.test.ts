@@ -326,6 +326,68 @@ function deepKeys(v: unknown, acc: string[] = []): string[] {
     ok('one configured day is enough', (await loadUserAvailability(COACH)).configured === true)
   }
 
+  console.log('\n-- refusing for the RIGHT reason --')
+  // The gate refused correctly and reported the wrong cause: isSlotOpen gained a
+  // second reason to be false, and the caller still mapped false -> slot_taken
+  // because taken was the only reason it could previously be false. Measured
+  // against production: a slot with zero active bookings came back 409
+  // slot_taken. The frontend retries on 409 by refreshing the slots — which for
+  // an unconfigured coach returns an empty list, so the page asks someone to
+  // pick another time from nothing, forever.
+  {
+    const book: Handler = (await import('../api/calendar/book')).default
+    const slugRowSaved = slugRow
+    slugRow = SETTINGS_ROW
+
+    async function attempt() {
+      const start = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
+      start.setUTCHours(12, 45, 0, 0)
+      const r = makeRes()
+      await book(
+        {
+          method: 'POST',
+          headers: {},
+          query: {},
+          body: {
+            booking_slug: 'alex-rivera',
+            slot_start: start.toISOString(),
+            first_name: 'A',
+            last_name: 'B',
+            email: 'a@example.com',
+          },
+        },
+        r.res
+      )
+      return r.out
+    }
+
+    workingHoursRow = null
+    const unconfigured = await attempt()
+    ok('an unconfigured coach refuses with 503, not 409', unconfigured.status === 503, `${unconfigured.status} ${JSON.stringify(unconfigured.body)}`)
+    ok(
+      'and names the actual cause',
+      unconfigured.body?.error === 'coach_not_bookable',
+      JSON.stringify(unconfigured.body)
+    )
+    ok(
+      'never slot_taken, which would send the page into a retry loop',
+      unconfigured.body?.error !== 'slot_taken',
+      JSON.stringify(unconfigured.body)
+    )
+    ok(
+      'the code matches the one the no-meeting-room branch already uses',
+      unconfigured.body?.error === 'coach_not_bookable'
+    )
+
+    slugRow = slugRowSaved
+    workingHoursRow = {
+      working_hours: { timezone: 'America/Chicago', mon: { start: '09:00', end: '17:00' } },
+      slot_minutes: 30,
+      buffer_minutes: 15,
+      booking_window_days: 14,
+    }
+  }
+
   globalThis.fetch = realFetch
   console.log(`\n${pass} passed, ${fail} failed`)
   if (fail) process.exit(1)
