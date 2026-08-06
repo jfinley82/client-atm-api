@@ -29,11 +29,12 @@ import { resolveBookingSlug } from '../../lib/bookingPage'
 //   Calendar, set coach_user_id + google_event_id + meeting_url, meeting link is
 //   the coach's zoom_link (else an auto-created Meet).
 //   SHARED-ZOOM PATH — a funnel whose owner has no Google connection, or no
-//   funnel at all. Creates the meeting on the shared Zoom account and validates
-//   the slot with isSchedulerSlotOpen — the SAME computation behind
-//   GET /api/calendar/availability, which is the list the booking page renders.
-//   That shared source is the invariant: whenever the two have diverged, every
-//   listed slot was rejected as slot_taken.
+//   funnel at all. Creates the meeting on MTM's shared Zoom account. It
+//   validates against isSchedulerSlotOpen (that shared host must be free) AND,
+//   when a funnel is in play, against isSlotOpen for the coach — because a
+//   FUNNEL page lists from GET /api/funnel/availability, which reads the coach's
+//   working hours, not the scheduler. Checking only the scheduler is what let
+//   list and accept answer from different sources for the same funnel.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
   if (req.method !== 'POST') return res.status(405).end()
@@ -478,17 +479,45 @@ async function bookLegacyPath(
     if (typed.entry) answers = [typed.entry, ...answers]
   }
 
-  // 1) Confirm the slot is genuinely still open — against the SAME computation
-  // that produced the list the lead picked from (lib/schedulerSlots.ts). The page
-  // calls GET /api/calendar/availability, which now shares this exact function,
-  // so a listed slot always books.
+  // THE THIRD ROUTE, and the one coach_not_bookable did not reach.
   //
-  // Two earlier attempts got this wrong in the same way, both rejecting every
-  // valid pick: querying Zoom over a ~31-minute window (its available_times is
-  // DAY-granular, so nothing came back to match), then validating against the
-  // coach's own availability engine (which yields nothing for a coach who never
-  // configured custom availability). The fix is not a better window or a better
-  // engine — it is using ONE source for both sides.
+  // A funnel whose owner has no Google connection lands here, not in
+  // bookCoachPath — coachOwner requires `conn`. That is the worst case to leave
+  // uncovered: a coach who never connected Google is the coach most likely never
+  // to have set their hours either, so an unconfigured coach's funnel was still
+  // answering 409 slot_taken for a slot with nothing booked in it.
+  //
+  // Asked before either slot check, for the same reason it outranks the form
+  // checks above: a page that cannot take bookings must say so rather than send
+  // the visitor into a retry loop against an empty list.
+  if (funnelRow) {
+    const coachSettings = await loadUserAvailability(funnelRow.user_id as string)
+    if (!coachSettings.configured) return res.status(503).json({ error: 'coach_not_bookable' })
+  }
+
+  // 1) Confirm the slot is genuinely still open.
+  //
+  // TWO ENGINES, because two different things have to be free, and the comment
+  // that used to sit here was stale. It said the page "calls
+  // GET /api/calendar/availability, which now shares this exact function" —
+  // true when this path served only MTM's own funnel-less page, and false ever
+  // since native-calendar funnels started routing through it. A FUNNEL page
+  // calls GET /api/funnel/availability, which lists from computeOpenSlots
+  // against the COACH's working hours, so validating only against MTM's Zoom
+  // scheduler meant list and accept answered from different sources.
+  //
+  //   isSlotOpen(coach)     — the engine that produced the list the lead saw.
+  //   isSchedulerSlotOpen   — MTM's shared Zoom host, which physically holds the
+  //                           meeting this path creates and is shared across
+  //                           every coach on it.
+  //
+  // The historical objection to checking the coach's engine here was that it
+  // "yields nothing for a coach who never configured custom availability" and so
+  // rejected every valid pick. That case is now refused above, by name, before
+  // reaching this line — which is what makes the check safe to add.
+  if (funnelRow && !(await isSlotOpen(funnelRow.user_id as string, startIso))) {
+    return res.status(409).json({ error: 'slot_taken' })
+  }
   if (!(await isSchedulerSlotOpen(startIso))) {
     return res.status(409).json({ error: 'slot_taken' })
   }

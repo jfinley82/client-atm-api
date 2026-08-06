@@ -2,6 +2,13 @@ process.env.SUPABASE_URL = 'https://stub.supabase.co'
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'stub-key'
 process.env.JWT_SECRET = 'stub-secret'
 process.env.RESEND_API_KEY = 'stub-resend'
+// The legacy path checks isZoomConfigured() before anything else — MTM's shared
+// host is what it books on. Production has these; without them the third-route
+// test would be measuring a missing env var rather than the gate.
+process.env.ZOOM_ACCOUNT_ID = 'a'
+process.env.ZOOM_CLIENT_ID = 'b'
+process.env.ZOOM_CLIENT_SECRET = 'c'
+process.env.ZOOM_SCHEDULE_ID = 'sched'
 
 import {
   bookingPageAvatar,
@@ -67,6 +74,7 @@ let workingHoursRow: any = {
 }
 let slugRow: Record<string, unknown> | null = SETTINGS_ROW
 let globalPhoneRow: any = null
+let funnelRowForId: any = null
 
 const realFetch = globalThis.fetch
 globalThis.fetch = (async (input: any, init?: any) => {
@@ -82,6 +90,8 @@ globalThis.fetch = (async (input: any, init?: any) => {
   if (url.includes('/rest/v1/user_availability')) return json(workingHoursRow)
   if (url.includes('/rest/v1/users')) return json({ id: COACH, name: 'Alex Rivera', avatar_url: 'https://cdn.example.com/PRIVATE-AVATAR.png' })
   if (url.includes('/rest/v1/app_settings')) return json(globalPhoneRow)
+  if (url.includes('/rest/v1/funnels')) return json(funnelRowForId ? [funnelRowForId] : [])
+  if (url.includes('/rest/v1/calendar_connections')) return json(null)
   if (url.includes('/rest/v1/bookings')) return json([])
   return json({})
 }) as typeof fetch
@@ -558,6 +568,55 @@ function deepKeys(v: unknown, acc: string[] = []): string[] {
     const optional = await attempt({ answers: { q_goal: 'growth' } })
     ok('with the toggle off, no phone is accepted past validation', optional.body?.error !== 'phone_required', JSON.stringify(optional.body))
     slugRow = SETTINGS_ROW
+  }
+
+  console.log('\n-- ACCEPTANCE 1: the THIRD route, a funnel with no Google --')
+  // coach_not_bookable covered the slug page and a Google-connected funnel.
+  // A funnel whose owner has no Google connection never reaches bookCoachPath
+  // (coachOwner requires `conn`), so it fell through to the legacy path and kept
+  // answering 409 slot_taken. That is the worst case to leave uncovered: a coach
+  // who never connected Google is the coach most likely never to have set their
+  // hours either. charge-demo is exactly that coach.
+  {
+    const book: Handler = (await import('../api/calendar/book')).default
+    const start = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
+    start.setUTCHours(14, 0, 0, 0)
+
+    // A live funnel, owner with NO google connection (calendar_connections empty).
+    funnelRowForId = { id: 'funnel-1', user_id: COACH, status: 'live', subdomain: 'charge-demo' }
+    workingHoursRow = null
+
+    const r = makeRes()
+    await book(
+      {
+        method: 'POST',
+        headers: {},
+        query: {},
+        body: {
+          funnel_id: 'funnel-1',
+          slot_start: start.toISOString(),
+          first_name: 'A',
+          last_name: 'B',
+          email: 'a@example.com',
+          phone: '555-010-1234',
+        },
+      },
+      r.res
+    )
+    ok(
+      'an unconfigured coach on the legacy path answers coach_not_bookable',
+      r.out.status === 503 && r.out.body?.error === 'coach_not_bookable',
+      `${r.out.status} ${JSON.stringify(r.out.body)}`
+    )
+    ok('not slot_taken, which sends the page into a retry loop', r.out.body?.error !== 'slot_taken', JSON.stringify(r.out.body))
+
+    funnelRowForId = null
+    workingHoursRow = {
+      working_hours: { timezone: 'America/Chicago', mon: { start: '09:00', end: '17:00' } },
+      slot_minutes: 30,
+      buffer_minutes: 15,
+      booking_window_days: 14,
+    }
   }
 
   globalThis.fetch = realFetch
