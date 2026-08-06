@@ -74,6 +74,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ? bookingTimeLabel(booking.start_time, booking.timezone)
     : formatInTz(booking.start_time, settings?.working_hours?.timezone)
   const funnelId = ctx.funnel?.id ? String(ctx.funnel.id) : ''
+  // ONE zone for the whole page. The heading already rendered the booked time in
+  // the visitor's zone while the slot buttons below used the browser's raw
+  // toLocaleString() — right times, no zone label, seconds and all — so the page
+  // showed two clocks and named neither. Whatever frames the heading frames the
+  // list.
+  const displayZone = booking.timezone || settings?.working_hours?.timezone || 'UTC'
   // Where the reschedule panel fetches open times from. A funnel booking asks
   // its funnel; a shared-Zoom booking asks the same public endpoint the /book
   // page uses, which is the list it was booked from in the first place.
@@ -87,6 +93,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const rescheduleSection = capped
     ? `<p class="muted" style="margin-top:18px;">You've already moved this call twice, so it can't be moved again. You can still cancel, or reply to your confirmation email.</p>`
     : `<h2>Pick a new time</h2>
+      <p class="muted" style="margin:0 0 8px;">Times shown in ${escapeHtml(displayZone)}.</p>
       <div id="slots"><p class="muted">Loading available times…</p></div>
       <div class="err" id="rerr"></div>`
 
@@ -136,9 +143,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const script = `
     var TOKEN = ${JSON.stringify(token)};
     var SLOTS_URL = ${JSON.stringify(slotsUrl)};
+    var DISPLAY_ZONE = ${JSON.stringify(displayZone)};
     var doneEl = document.getElementById('done');
     var cardEl = document.querySelector('.card');
-    function fmt(iso){ try { return new Date(iso).toLocaleString(); } catch(e){ return iso; } }
+    // Formatted in the SAME zone the heading uses, and stated once above the
+    // list rather than repeated on every button. dateStyle/timeStyle rather than
+    // a bare toLocaleString, which emits seconds nobody needs on a slot picker.
+    function fmt(iso){
+      try { return new Date(iso).toLocaleString('en-US', { weekday:'short', month:'short', day:'numeric', hour:'numeric', minute:'2-digit', timeZone: DISPLAY_ZONE }); }
+      catch(e){ try { return new Date(iso).toLocaleString(); } catch(e2){ return iso; } }
+    }
     function finish(title, body){ cardEl.style.display='none'; doneEl.style.display='block'; doneEl.innerHTML = '<h1>'+title+'</h1><p>'+body+'</p>'; }
     document.getElementById('cancelBtn').addEventListener('click', function(){
       var err = document.getElementById('cerr'); err.textContent=''; this.disabled=true;
