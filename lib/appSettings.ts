@@ -1,4 +1,4 @@
-import { normalizeWorkshopDate } from './workshopDate'
+import { carryTimeOnto, parseWorkshopDate } from './workshopDate'
 
 // The set of app_settings keys the write paths accept. Both write paths
 // (PATCH /api/admin/settings and the legacy POST /api/settings) validate
@@ -68,18 +68,32 @@ export const ALLOWED_SETTING_KEYS = new Set([
  */
 export function normalizeSettingValue(
   key: string,
-  value: string
+  value: string,
+  // The value currently stored for this key, when the caller has it. Only
+  // workshop_event_date uses it, and only to keep a time the incoming value
+  // could not have expressed — see carryTimeOnto.
+  current?: string | null
 ): { ok: true; value: string } | { ok: false; error: string } {
   if (key === 'workshop_event_date') {
-    const normalized = normalizeWorkshopDate(value)
-    if (normalized === null) {
+    const parsed = parseWorkshopDate(value)
+    if (parsed === null) {
       return {
         ok: false,
         error:
           "value for 'workshop_event_date' must be a date (2026-08-28) or a date and time (2026-08-28T14:30, or 2026-08-28T14:30-04:00)",
       }
     }
-    return { ok: true, value: normalized }
+
+    // A date with no time, landing on a stored value that HAS one, is the admin
+    // form's date picker posting — a control that cannot express a time, so it
+    // cannot be asking to remove one. Keep it. An empty string still clears the
+    // setting outright, and any explicit time replaces what was there.
+    if (parsed.value && !parsed.hasTime) {
+      const carried = carryTimeOnto(parsed.value, current ?? null)
+      if (carried) return { ok: true, value: carried }
+    }
+
+    return { ok: true, value: parsed.value }
   }
   return { ok: true, value }
 }

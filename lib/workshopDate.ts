@@ -8,9 +8,16 @@
 // instant, the time and the offset were destroyed, and nothing anywhere noticed
 // because nothing anywhere was looking.
 //
-// THE CANONICAL FORM is ISO 8601 with an explicit offset:
+// THE CANONICAL FORM is ISO 8601 with an explicit offset, plus an optional
+// bracketed IANA zone (RFC 9557 / IXDTF, the suffix Temporal emits):
 //
 //     2026-08-28T14:30-04:00
+//     2026-08-28T14:30-05:00[America/Chicago]
+//
+// The offset pins the instant; the zone name is what lets a renderer say
+// "Central" and follow the zone across a DST boundary, which an offset alone
+// cannot do. Both round-trip, so an admin zone picker has somewhere to put its
+// value.
 //
 // An offset rather than a bare local time because a workshop happens at ONE
 // instant and is read by people in several timezones; a naive '14:30' is only
@@ -39,7 +46,17 @@ export type WorkshopDate = {
   hasTime: boolean
   /** The instant, when a time is present. Null for a date-only value. */
   instant: Date | null
+  /** The IANA zone the admin chose, when they named one. */
+  timeZone: string | null
 }
+
+// A NAMED ZONE may be appended in brackets: ...T14:30[America/Chicago].
+// That is RFC 9557 / IXDTF, the same suffix Temporal emits — a real standard
+// rather than a shape invented here, so a zone picker on the admin form has
+// something to send that survives a round trip. It is what an offset alone
+// cannot carry: -05:00 pins the instant but cannot say "Central", so a renderer
+// has no zone name to show and no way to follow the zone across a DST boundary.
+const ZONE_SUFFIX = /\[([A-Za-z0-9_+\-\/]+)\]$/
 
 // Date only: 2026-08-28
 const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/
@@ -70,14 +87,25 @@ function formatOffset(minutes: number): string {
  * second corrects it — which matters only within an hour of a DST boundary, but
  * that is exactly the case nobody tests and everybody hits eventually.
  */
-function resolveWallClock(y: number, mo: number, d: number, h: number, mi: number, s: number) {
+function resolveWallClock(y: number, mo: number, d: number, h: number, mi: number, s: number, timeZone: string) {
   const naiveUtc = Date.UTC(y, mo - 1, d, h, mi, s)
-  let offset = zoneOffsetMinutes(new Date(naiveUtc), WORKSHOP_TIME_ZONE)
+  let offset = zoneOffsetMinutes(new Date(naiveUtc), timeZone)
   let instant = new Date(naiveUtc - offset * 60_000)
-  offset = zoneOffsetMinutes(instant, WORKSHOP_TIME_ZONE)
+  offset = zoneOffsetMinutes(instant, timeZone)
   instant = new Date(naiveUtc - offset * 60_000)
   return { instant, offset }
 }
+
+function isKnownZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: tz })
+    return true
+  } catch {
+    return false
+  }
+}
+
+const zoneTag = (tz: string | null): string => (tz ? `[${tz}]` : '')
 
 function isRealDate(y: number, mo: number, d: number): boolean {
   if (mo < 1 || mo > 12 || d < 1 || d > 31) return false
@@ -94,6 +122,9 @@ function isRealDate(y: number, mo: number, d: number): boolean {
  *   '2026-08-28T14:30:00'         with seconds              -> offset added
  *   '2026-08-28T14:30-04:00'      already canonical         -> kept
  *   '2026-08-28T18:30Z'           UTC                       -> converted
+ *   '2026-08-28T14:30[America/Chicago]'  zone picker         -> offset resolved
+ *                                                               IN that zone,
+ *                                                               zone preserved
  *   ''                            cleared                   -> empty, valid
  *
  * Returns null for anything it cannot make sense of, including an impossible
@@ -101,14 +132,26 @@ function isRealDate(y: number, mo: number, d: number): boolean {
  */
 export function parseWorkshopDate(raw: unknown): WorkshopDate | null {
   if (typeof raw !== 'string') return null
-  const s = raw.trim()
-  if (!s) return { value: '', hasTime: false, instant: null }
+  let s = raw.trim()
+  if (!s) return { value: '', hasTime: false, instant: null, timeZone: null }
+
+  // Peel off a bracketed zone before anything else, so the rest of the parsing
+  // is unchanged whether or not one is present.
+  let namedZone: string | null = null
+  const zoneMatch = ZONE_SUFFIX.exec(s)
+  if (zoneMatch) {
+    if (!isKnownZone(zoneMatch[1])) return null
+    namedZone = zoneMatch[1]
+    s = s.slice(0, zoneMatch.index).trim()
+  }
 
   const dateOnly = DATE_ONLY.exec(s)
   if (dateOnly) {
     const [, y, mo, d] = dateOnly
     if (!isRealDate(Number(y), Number(mo), Number(d))) return null
-    return { value: `${y}-${mo}-${d}`, hasTime: false, instant: null }
+    // A day carries no instant, so a zone on it says nothing — drop it rather
+    // than store a claim the value cannot support.
+    return { value: `${y}-${mo}-${d}`, hasTime: false, instant: null, timeZone: null }
   }
 
   const full = DATE_TIME.exec(s)
@@ -125,15 +168,16 @@ export function parseWorkshopDate(raw: unknown): WorkshopDate | null {
   const stamp = `${ys}-${mos}-${ds}T${hs}:${mis}`
 
   if (!zone) {
-    // Naive wall clock — interpret it in the workshop's zone and pin the offset,
-    // so the stored value can never be re-read as a different instant.
-    const { instant, offset } = resolveWallClock(y, mo, d, h, mi, sec)
-    return { value: `${stamp}${formatOffset(offset)}`, hasTime: true, instant }
+    // Naive wall clock — interpret it in the NAMED zone when the admin chose one,
+    // otherwise the workshop's default zone, and pin the resulting offset so the
+    // stored value can never be re-read as a different instant.
+    const { instant, offset } = resolveWallClock(y, mo, d, h, mi, sec, namedZone || WORKSHOP_TIME_ZONE)
+    return { value: `${stamp}${formatOffset(offset)}${zoneTag(namedZone)}`, hasTime: true, instant, timeZone: namedZone }
   }
 
   if (/^z$/i.test(zone)) {
     const instant = new Date(Date.UTC(y, mo - 1, d, h, mi, sec))
-    return { value: `${stamp}+00:00`, hasTime: true, instant }
+    return { value: `${stamp}+00:00${zoneTag(namedZone)}`, hasTime: true, instant, timeZone: namedZone }
   }
 
   // Explicit offset: trust it, normalize its punctuation.
@@ -141,10 +185,60 @@ export function parseWorkshopDate(raw: unknown): WorkshopDate | null {
   if (!om) return null
   const offsetMinutes = (om[1] === '-' ? -1 : 1) * (Number(om[2]) * 60 + Number(om[3]))
   const instant = new Date(Date.UTC(y, mo - 1, d, h, mi, sec) - offsetMinutes * 60_000)
-  return { value: `${stamp}${formatOffset(offsetMinutes)}`, hasTime: true, instant }
+  return {
+    value: `${stamp}${formatOffset(offsetMinutes)}${zoneTag(namedZone)}`,
+    hasTime: true,
+    instant,
+    timeZone: namedZone,
+  }
 }
 
 /** The canonical string to store, or null if the input is not a workshop date. */
 export function normalizeWorkshopDate(raw: unknown): string | null {
   return parseWorkshopDate(raw)?.value ?? null
+}
+
+/**
+ * Move a stored time onto a new date.
+ *
+ * WHY THIS IS NOT MAGIC, which was my objection to it the first time round.
+ *
+ * The admin form renders `<input type="date">`. That control cannot express a
+ * time at all, so when it posts '2026-08-28' the admin cannot possibly have
+ * meant "and clear the time" — they meant "change the date". Dropping the time
+ * is the interpretation that ignores what they could have intended; carrying it
+ * is the faithful one. That is the difference between this and a rule that
+ * guesses between two things the user might have wanted.
+ *
+ * It is also self-limiting: once the form sends a datetime, every value arrives
+ * with a time and this never fires again.
+ *
+ * Clearing stays possible — send an empty string, which clears the setting
+ * outright — and any explicit time replaces the old one.
+ *
+ * DST is re-resolved rather than copied. If the stored offset was the workshop
+ * zone's own offset on its own date, the value is an Eastern wall-clock time and
+ * the new date gets the offset that applies THEN — moving an 11:00 -04:00 August
+ * workshop to January yields 11:00 -05:00, still 11am to everyone involved,
+ * rather than 10am. If the offset was something else the admin pinned another
+ * zone deliberately, so it is preserved literally.
+ */
+export function carryTimeOnto(dateOnly: string, currentValue: unknown): string | null {
+  const cur = parseWorkshopDate(currentValue)
+  if (!cur || !cur.hasTime || !cur.instant) return null
+
+  const m = /T(\d{2}):(\d{2})([+-]\d{2}:\d{2})/.exec(cur.value)
+  if (!m) return null
+  const [, hh, mi, off] = m
+
+  // A NAMED zone is the strongest signal: re-resolve the same wall-clock time in
+  // that zone on the new date, so the workshop stays at 11am to the people it
+  // was scheduled for even if the move crosses a DST boundary.
+  if (cur.timeZone) return normalizeWorkshopDate(`${dateOnly}T${hh}:${mi}[${cur.timeZone}]`)
+
+  // No named zone. If the stored offset was the default zone's own offset on its
+  // own date, treat it as a wall-clock time there and re-resolve; otherwise the
+  // admin pinned an offset deliberately and it is preserved literally.
+  const wasZoneLocal = formatOffset(zoneOffsetMinutes(cur.instant, WORKSHOP_TIME_ZONE)) === off
+  return normalizeWorkshopDate(wasZoneLocal ? `${dateOnly}T${hh}:${mi}` : `${dateOnly}T${hh}:${mi}${off}`)
 }

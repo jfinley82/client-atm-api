@@ -70,8 +70,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'value must be a string' })
     }
     // Same per-key canonicalisation as PATCH /api/admin/settings, so the legacy
-    // write path cannot store a shape the other one would reject.
-    const normalized = normalizeSettingValue(key, value)
+    // write path cannot store a shape the other one would reject — including the
+    // current value, which workshop_event_date needs to keep a stored time.
+    const { data: existing } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', key)
+      .maybeSingle()
+    const normalized = normalizeSettingValue(key, value, (existing?.value as string | undefined) ?? null)
     if (!normalized.ok) {
       return res.status(400).json({ error: normalized.error })
     }
