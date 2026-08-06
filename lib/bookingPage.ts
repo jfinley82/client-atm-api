@@ -145,8 +145,21 @@ export async function resolveBookingSlug(rawSlug: unknown): Promise<BookingPageO
 //
 //   headshot -> the more personal choice, and a coach who set one meant it here
 //   logo     -> otherwise
-//   initials -> otherwise, from the business name; never a broken image, never
-//               an empty circle, and never the account avatar
+//   initials -> the coach's NAME, then their business name, then a glyph
+//
+// Never a broken image, never an empty circle, and never the account avatar.
+//
+// THE NAME COMES FIRST, and it did not used to. The spec said business_name,
+// which was correct when business_name was the only name in the public set —
+// and stopped being correct the moment users.name joined it. Implemented
+// faithfully, it rendered "?" for any coach without a business name: verified
+// live on /api/booking-page?slug=jamaul, which returned name "Jamaul",
+// business_name null, initials "?". A page whose entire job is showing who you
+// are meeting should not open with a question mark.
+//
+// Same failure as the stale comments in CLAUDE.md, one level up: a SPEC is also
+// a claim about the world at the time it was written, and this one was
+// invalidated by a later line in the same brief.
 export type BookingPageAvatar =
   | { kind: 'image'; url: string }
   | { kind: 'initials'; initials: string }
@@ -154,12 +167,18 @@ export type BookingPageAvatar =
 export function bookingPageAvatar(owner: BookingPageOwner): BookingPageAvatar {
   if (owner.headshotUrl) return { kind: 'image', url: owner.headshotUrl }
   if (owner.logoUrl) return { kind: 'image', url: owner.logoUrl }
-  return { kind: 'initials', initials: initialsFrom(owner.businessName) }
+  return { kind: 'initials', initials: initialsFrom(owner.coachName || owner.businessName) }
 }
+
+// The glyph when there is genuinely nothing to derive initials from — no name
+// and no business name. A bullet rather than '?', which reads as an error the
+// visitor is expected to do something about; this is just a host who has not
+// filled anything in.
+export const NO_INITIALS_GLYPH = '\u2022'
 
 export function initialsFrom(name: string | null): string {
   const words = (name || '').trim().split(/\s+/).filter(Boolean)
-  if (!words.length) return '?'
+  if (!words.length) return NO_INITIALS_GLYPH
   if (words.length === 1) return words[0].slice(0, 2).toUpperCase()
   return (words[0][0] + words[words.length - 1][0]).toUpperCase()
 }

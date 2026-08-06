@@ -14,6 +14,7 @@ import {
   bookingPageAvatar,
   initialsFrom,
   normalizeBookingSlug,
+  NO_INITIALS_GLYPH,
   PUBLIC_BRAND_FIELDS,
 } from '../lib/bookingPage'
 
@@ -209,6 +210,7 @@ function deepKeys(v: unknown, acc: string[] = []): string[] {
       ({
         userId: COACH,
         slug: 's',
+        coachName: null,
         businessName: 'Rivera Coaching',
         logoUrl: null,
         headshotUrl: null,
@@ -225,13 +227,28 @@ function deepKeys(v: unknown, acc: string[] = []): string[] {
     const logoOnly = bookingPageAvatar(owner({ logoUrl: 'l.png' }))
     ok('logo when there is no headshot', logoOnly.kind === 'image' && logoOnly.url === 'l.png', JSON.stringify(logoOnly))
 
-    const neither = bookingPageAvatar(owner({}))
-    ok('initials when there is neither', neither.kind === 'initials' && neither.initials === 'RC', JSON.stringify(neither))
+    // THE COACH'S NAME COMES FIRST. The spec said business_name, which was right
+    // when that was the only name in the public set and wrong once users.name
+    // joined it — live, /api/booking-page?slug=jamaul returned name "Jamaul",
+    // business_name null, and initials "?". A page whose whole job is showing
+    // who you are meeting must not open with a question mark.
+    const neither = bookingPageAvatar(owner({ coachName: 'Alex Rivera' }))
+    ok('initials come from the coach name', neither.kind === 'initials' && neither.initials === 'AR', JSON.stringify(neither))
+
+    const jamaul = bookingPageAvatar(owner({ coachName: 'Jamaul', businessName: null }))
+    ok('a coach with no business name still gets real initials', jamaul.kind === 'initials' && jamaul.initials === 'JA', JSON.stringify(jamaul))
+
+    const businessOnly = bookingPageAvatar(owner({ coachName: null, businessName: 'Rivera Coaching' }))
+    ok('business name is the fallback, not the first choice', businessOnly.kind === 'initials' && businessOnly.initials === 'RC', JSON.stringify(businessOnly))
+
+    const nothing = bookingPageAvatar(owner({ coachName: null, businessName: null }))
+    ok('with neither, a neutral glyph rather than an error mark', nothing.kind === 'initials' && nothing.initials === NO_INITIALS_GLYPH, JSON.stringify(nothing))
+    ok('and never a question mark', nothing.kind === 'initials' && nothing.initials !== '?')
 
     ok('one word gives two letters', initialsFrom('Rivera') === 'RI')
     ok('three words take first and last', initialsFrom('Alex J Rivera') === 'AR')
-    ok('no name still gives something rather than an empty circle', initialsFrom(null) === '?')
-    ok('and a blank name too', initialsFrom('   ') === '?')
+    ok('no name gives the glyph rather than an empty circle', initialsFrom(null) === NO_INITIALS_GLYPH)
+    ok('and a blank name too', initialsFrom('   ') === NO_INITIALS_GLYPH)
 
     // THE GUARD THAT MATTERS. The tempting future change is "use the account
     // avatar when there is no headshot", which would publish every coach's
