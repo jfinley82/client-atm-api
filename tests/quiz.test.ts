@@ -9,9 +9,12 @@ import {
   QUIZ_PROBLEM_PROMPT,
   QUIZ_QUESTIONS,
   QUIZ_QUESTION_IDS,
+  assertGapFloorMatchesTopBand,
   assertMonikerBandsCoverEveryScore,
   assertPointsTablesAreWellFormed,
-  lowestPillar,
+  FOCUS_QUESTION,
+  GAP_FLOOR,
+  SCORED_QUESTIONS,
   normalizeProblemStatement,
   pointsFor,
   scoreQuiz,
@@ -193,9 +196,11 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
 
   console.log('\n-- the scoring table is complete and self-consistent --')
   {
-    ok('seven scored questions', QUIZ_QUESTIONS.length === 7, `${QUIZ_QUESTIONS.length}`)
-    ok('every question belongs to a pillar', QUIZ_QUESTIONS.every((q) => QUIZ_PILLARS.includes(q.pillar)))
-    ok('every pillar has at least one question', QUIZ_PILLARS.every((p) => QUIZ_QUESTIONS.some((q) => q.pillar === p)))
+    ok('seven questions are asked', QUIZ_QUESTIONS.length === 7, `${QUIZ_QUESTIONS.length}`)
+    ok('six of them are scored', SCORED_QUESTIONS.length === 6, `${SCORED_QUESTIONS.length}`)
+    ok('and exactly one names the gap', QUIZ_QUESTIONS.filter((q) => q.kind === 'focus').length === 1)
+    ok('every scored question belongs to a pillar', SCORED_QUESTIONS.every((q) => QUIZ_PILLARS.includes(q.pillar)))
+    ok('every pillar has at least one scored question', QUIZ_PILLARS.every((p) => SCORED_QUESTIONS.some((q) => q.pillar === p)))
     ok('no duplicate question ids', new Set(QUIZ_QUESTION_IDS).size === 7)
 
     // A composite with no moniker is a results screen with an empty headline.
@@ -350,9 +355,122 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
       `attract ${attractOnly.composite} vs monetize ${monetizeOnly.composite}`
     )
 
-    // A tie must resolve the same way every time, not by object key order.
-    const tied = { attract: 50, transform: 50, monetize: 50 } as Record<any, number>
-    ok('a three-way tie resolves stably', new Set(Array.from({ length: 10 }, () => lowestPillar(tied as any))).size === 1)
+    // The unscored question moves NO number. Same six scored answers, four
+    // different stated challenges, identical scores — which is the property
+    // that broke before: it summed into Transform and dragged it around.
+    const acrossChallenges = FOCUS_QUESTION.options.map((o) =>
+      JSON.stringify(scoreQuiz({ ...ANSWERS_C, biggest_challenge: o.letter } as any).scores)
+    )
+    ok(
+      'the stated challenge changes no score',
+      new Set(acrossChallenges).size === 1,
+      acrossChallenges.join(' | ')
+    )
+  }
+
+  console.log('\n-- ACCEPTANCE: the gap comes from what the coach SAID --')
+  // Asserted against the stated challenge, never against the derived minimum.
+  // The defect this replaces was measured, not theorised: all-best scored
+  // answers plus "not enough people know I exist" produced Attract 100,
+  // Transform 50, and the line "Your biggest gap is Transform — what you deliver
+  // is clearer in your head than it is out loud", contradicting the offer-clarity
+  // answer the coach had given two questions earlier.
+  {
+    const BEST = Object.fromEntries(SCORED_QUESTIONS.map((q) => [q.id, 'd']))
+    const WORST = Object.fromEntries(SCORED_QUESTIONS.map((q) => [q.id, 'a']))
+
+    // Mid scores, so nothing is suppressed by the floor and the stated challenge
+    // is visibly the thing choosing the advice.
+    for (const o of FOCUS_QUESTION.options) {
+      const r = scoreQuiz({ ...ANSWERS_C, biggest_challenge: o.letter } as any)
+      ok(
+        `challenge '${o.letter}' (${o.focus}) -> the gap is about ${o.focus}`,
+        r.gap.focus === o.focus,
+        `${r.gap.focus} — "${r.gap.title}"`
+      )
+      ok(`and the quick win is the ${o.focus} one`, r.quick_win.title.length > 0)
+      ok(`and the stated challenge travels for Step 1`, r.stated_challenge.focus === o.focus && r.stated_challenge.letter === o.letter, JSON.stringify(r.stated_challenge))
+      ok(`with the label, not just the letter`, r.stated_challenge.label === o.label)
+    }
+
+    console.log('\n-- ACCEPTANCE: the all-perfect case, stated explicitly --')
+    // The loud defect: composite 100, moniker "The Full Engine", and directly
+    // beneath it "Your biggest gap is Attract". lowestPillar had no floor, so
+    // three pillars tied at 100 resolved by tiebreak order and printed a gap
+    // that did not exist.
+    for (const o of FOCUS_QUESTION.options) {
+      const r = scoreQuiz({ ...BEST, biggest_challenge: o.letter } as any)
+      ok(`all-perfect + '${o.letter}': composite is 100`, r.composite === 100, `${r.composite}`)
+      ok(`all-perfect + '${o.letter}': moniker is The Full Engine`, r.moniker === 'The Full Engine', r.moniker)
+
+      if (o.focus === 'capacity') {
+        // Not suppressed, and correctly so: no pillar measures delivery
+        // capacity, so no score contradicts it. "The Full Engine" and "you
+        // cannot deliver more" are a coherent pair.
+        ok('capacity survives a perfect score', r.gap.focus === 'capacity', `${r.gap.focus}`)
+        ok('and it is not a pillar', !QUIZ_PILLARS.includes(r.gap.focus as any))
+      } else {
+        // THE ASSERTION THAT WOULD HAVE CAUGHT THE DEFECT.
+        ok(`all-perfect + '${o.letter}': NO gap pillar is named`, r.gap.focus === null, `named ${r.gap.focus}: "${r.gap.title}"`)
+        ok('and the copy says so rather than being blank', r.gap.body.length > 20 && r.gap.title.length > 0, r.gap.title)
+        ok('the quick win is the no-gap one, not a pillar fix', r.quick_win.title === 'Do more of what already worked', r.quick_win.title)
+        ok('the answer is still carried even though the advice is withheld', r.stated_challenge.focus === o.focus)
+      }
+    }
+
+    console.log('\n-- ACCEPTANCE: the all-worst case, stated explicitly --')
+    for (const o of FOCUS_QUESTION.options) {
+      const r = scoreQuiz({ ...WORST, biggest_challenge: o.letter } as any)
+      ok(`all-worst + '${o.letter}': composite is 0`, r.composite === 0, `${r.composite}`)
+      ok(`all-worst + '${o.letter}': moniker is The Well-Kept Secret`, r.moniker === 'The Well-Kept Secret', r.moniker)
+      // Nothing is suppressed at the bottom — the floor only ever silences a
+      // gap, never invents one.
+      ok(`all-worst + '${o.letter}': the stated gap IS named`, r.gap.focus === o.focus, `${r.gap.focus}`)
+    }
+
+    console.log('\n-- ACCEPTANCE: exhaustive — no result contradicts itself --')
+    // Every combination of every scored question against every challenge. The
+    // contradiction being ruled out is the shape of both reported defects: the
+    // page naming a pillar as the gap while that same pillar sits in the top
+    // band. Reasoning about this is what produced the bug; counting it is not.
+    {
+      const ids = SCORED_QUESTIONS.map((q) => q.id)
+      let total = 0
+      let contradictions: string[] = []
+      let noGap = 0
+      let outOfRange: string[] = []
+
+      const walk = (i: number, acc: Record<string, string>) => {
+        if (i === ids.length) {
+          for (const o of FOCUS_QUESTION.options) {
+            const r = scoreQuiz({ ...acc, biggest_challenge: o.letter } as any)
+            total++
+            if (r.gap.focus === null) noGap++
+            if (r.composite < 0 || r.composite > 100) outOfRange.push(`${r.composite}`)
+            if (r.gap.focus && r.gap.focus !== 'capacity' && r.scores[r.gap.focus as "attract" | "transform" | "monetize"] >= GAP_FLOOR) {
+              if (contradictions.length < 3) contradictions.push(`${JSON.stringify(acc)}+${o.letter} -> ${r.gap.focus} at ${r.scores[r.gap.focus as "attract" | "transform" | "monetize"]}`)
+            }
+          }
+          return
+        }
+        for (const l of ['a', 'b', 'c', 'd']) walk(i + 1, { ...acc, [ids[i]]: l })
+      }
+      walk(0, {})
+
+      ok(`swept every combination (${total} results)`, total === Math.pow(4, ids.length) * FOCUS_QUESTION.options.length, `${total}`)
+      ok('no result names a pillar gap that is already in the top band', contradictions.length === 0, contradictions.join(' ; '))
+      ok('no composite falls outside 0-100', outOfRange.length === 0, outOfRange.slice(0, 3).join(', '))
+      // The no-gap state must be REACHABLE — a floor nothing ever crosses is a
+      // branch that has never run.
+      ok(`the no-gap state is reachable (${noGap} of ${total})`, noGap > 0)
+      ok('and is not the answer everywhere', noGap < total)
+    }
+
+    // The floor and the top band are one number by construction. Replacing the
+    // derivation with a literal fails here rather than letting "The Full Engine"
+    // sit above a named gap again.
+    ok('the gap floor matches the top moniker band', assertGapFloorMatchesTopBand().length === 0, assertGapFloorMatchesTopBand().join('; '))
+    ok(`and that number is ${GAP_FLOOR}`, GAP_FLOOR === 90, `${GAP_FLOOR}`)
   }
 
   console.log('\n-- a missing or bogus answer is refused, never defaulted --')

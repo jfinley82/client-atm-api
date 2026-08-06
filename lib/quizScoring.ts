@@ -26,20 +26,64 @@ export type QuizPillar = 'attract' | 'transform' | 'monetize'
 export const QUIZ_LETTERS: QuizLetter[] = ['a', 'b', 'c', 'd']
 export const QUIZ_PILLARS: QuizPillar[] = ['attract', 'transform', 'monetize']
 
-/** One option: the words the coach reads and what choosing it is worth, together. */
-export type QuizOption = {
+/**
+ * What the gap line and quick win are about.
+ *
+ * 'capacity' is NOT a pillar and is deliberately not one: "it sells but I can't
+ * deliver more" is a constraint no amount of attracting, clarifying or pricing
+ * addresses, and nothing in the seven questions measures it. It can be STATED
+ * and acted on without being scored, which is exactly why the question that
+ * names it is not scored either.
+ */
+export type GapFocus = QuizPillar | 'capacity'
+
+/** One scored option: the words the coach reads and what choosing it is worth. */
+export type ScoredOption = {
   letter: QuizLetter
   label: string
-  /** 1 is the least ready answer and 4 the most, on every question. */
+  /** 1 is the least ready answer and 4 the most, on every scored question. */
   points: number
 }
 
-export type QuizQuestion = {
+/** One option on the unscored question: the words, and which gap they name. */
+export type FocusOption = {
+  letter: QuizLetter
+  label: string
+  focus: GapFocus
+}
+
+export type ScoredQuestion = {
+  kind: 'scored'
   id: string
   pillar: QuizPillar
   prompt: string
-  options: QuizOption[]
+  options: ScoredOption[]
 }
+
+/**
+ * The question the coach answers about their own gap, which is NOT scored.
+ *
+ * WHY IT STOPPED BEING SCORED. It used to add points to Transform while its four
+ * options name an Attract problem, a Transform problem, a Monetize problem and a
+ * capacity problem — so a coach who answered "one sentence buyers repeat back to
+ * me" on offer clarity and then "not enough people know I exist" here scored
+ * Attract 100, Transform 50, and was told their offer was unclear while they were
+ * telling the quiz nobody could find them. Answering the pricing option dragged
+ * Transform to 83 with Monetize sitting at 100. Measured, not reasoned about.
+ *
+ * It is now the PRIMARY source of the gap line: this is the one question where
+ * the coach states their constraint outright, and that is better evidence than a
+ * minimum derived from the other six. The answer is still stored, and travels in
+ * the result so Step 1 can use it alongside the problem statement.
+ */
+export type FocusQuestion = {
+  kind: 'focus'
+  id: string
+  prompt: string
+  options: FocusOption[]
+}
+
+export type QuizQuestion = ScoredQuestion | FocusQuestion
 
 /**
  * The seven scored questions, in the order they are asked.
@@ -51,6 +95,7 @@ export type QuizQuestion = {
  */
 export const QUIZ_QUESTIONS: QuizQuestion[] = [
   {
+    kind: 'scored',
     id: 'client_flow',
     pillar: 'attract',
     prompt: 'How consistent is your client flow right now?',
@@ -62,21 +107,24 @@ export const QUIZ_QUESTIONS: QuizQuestion[] = [
     ],
   },
   {
+    kind: 'focus',
     id: 'biggest_challenge',
-    pillar: 'transform',
-    // These are four DIFFERENT problems rather than four degrees of one, so the
-    // points say how far along somebody usually is when that particular problem
-    // is the one in front of them. Not being able to deliver more is a problem
-    // you only get to have once the thing sells.
+    // NOT SCORED, and not a ladder either. Each option names a DIFFERENT
+    // constraint, so there is no ordering along which one could be worth more
+    // points than another — which is why the previous 1,2,3,4 was wrong twice
+    // over: it summed a pricing statement into Transform, and it implied that
+    // naming a delivery problem meant you were further along than naming a
+    // visibility one. The answer selects what the advice is ABOUT instead.
     prompt: "What's your biggest challenge right now?",
     options: [
-      { letter: 'a', label: 'Not enough people know I exist', points: 1 },
-      { letter: 'b', label: "People are interested, but I can't explain the offer clearly", points: 2 },
-      { letter: 'c', label: "They understand it and still don't buy at my price", points: 3 },
-      { letter: 'd', label: "It sells, but I can't deliver more without breaking", points: 4 },
+      { letter: 'a', label: 'Not enough people know I exist', focus: 'attract' },
+      { letter: 'b', label: "People are interested, but I can't explain the offer clearly", focus: 'transform' },
+      { letter: 'c', label: "They understand it and still don't buy at my price", focus: 'monetize' },
+      { letter: 'd', label: "It sells, but I can't deliver more without breaking", focus: 'capacity' },
     ],
   },
   {
+    kind: 'scored',
     id: 'lead_source',
     pillar: 'attract',
     prompt: 'Where do your leads come from?',
@@ -88,6 +136,7 @@ export const QUIZ_QUESTIONS: QuizQuestion[] = [
     ],
   },
   {
+    kind: 'scored',
     id: 'ideal_client',
     pillar: 'attract',
     prompt: 'How clear are you on who you help?',
@@ -99,6 +148,7 @@ export const QUIZ_QUESTIONS: QuizQuestion[] = [
     ],
   },
   {
+    kind: 'scored',
     id: 'pricing_confidence',
     pillar: 'monetize',
     prompt: 'How confident are you in your pricing?',
@@ -110,6 +160,7 @@ export const QUIZ_QUESTIONS: QuizQuestion[] = [
     ],
   },
   {
+    kind: 'scored',
     id: 'offer_clarity',
     pillar: 'transform',
     prompt: 'How clear is your offer?',
@@ -121,6 +172,7 @@ export const QUIZ_QUESTIONS: QuizQuestion[] = [
     ],
   },
   {
+    kind: 'scored',
     id: 'ninety_day_goal',
     pillar: 'monetize',
     // Scored as a position, not an ambition: wanting to scale delivery implies
@@ -136,6 +188,37 @@ export const QUIZ_QUESTIONS: QuizQuestion[] = [
 ]
 
 export const QUIZ_QUESTION_IDS = QUIZ_QUESTIONS.map((q) => q.id)
+
+/** The six that produce numbers. Derived, never a second hand-written list. */
+export const SCORED_QUESTIONS = QUIZ_QUESTIONS.filter((q): q is ScoredQuestion => q.kind === 'scored')
+
+/** The one that names the gap. Derived the same way, and there is exactly one. */
+export const FOCUS_QUESTION = QUIZ_QUESTIONS.find((q): q is FocusQuestion => q.kind === 'focus')!
+
+// ---------------------------------------------------------------------------
+// PROPOSAL FOR JAMAUL — a second Transform question. NOT WIRED IN.
+//
+// Making biggest_challenge unscored leaves Transform resting on offer_clarity
+// alone. That is correct rather than broken — normalise handles a one-question
+// pillar — but it is coarse: Transform can only ever read 0, 33, 67 or 100,
+// while Attract moves in seven steps. A pillar that can only take four values
+// will look jumpy next to the other two on the results bars.
+//
+// The gap is real: offer_clarity asks whether the offer can be SAID. Nothing
+// asks whether it can be DELIVERED repeatably, which is the other half of
+// Transform and the half Step 2 works on. Suggested:
+//
+//   id: 'delivery_repeatability', pillar: 'transform'
+//   "How repeatable is the way you deliver results?"
+//     a  Every client is different and I improvise            1
+//     b  I have a rough process, but I rework it each time     2
+//     c  A defined process most clients go through             3
+//     d  Documented well enough that someone else could run it 4
+//
+// Left for Jamaul to accept, reword or reject — inventing an eighth question
+// silently is how the option text ended up needing writing down in the first
+// place. Adding it needs no code change beyond the entry itself.
+// ---------------------------------------------------------------------------
 
 /**
  * The open question, asked last and never scored.
@@ -158,22 +241,48 @@ export const PILLAR_LABEL: Record<QuizPillar, string> = {
 
 export type QuizAnswers = Record<string, QuizLetter>
 
+export const FOCUS_LABEL: Record<GapFocus, string> = {
+  attract: 'Attract',
+  transform: 'Transform',
+  monetize: 'Monetize',
+  capacity: 'Delivery capacity',
+}
+
 export type QuizAnalysis = {
   scores: Record<QuizPillar, number>
   composite: number
   moniker: string
   moniker_summary: string
-  gap: { pillar: QuizPillar; title: string; body: string }
+  /**
+   * `focus` is null when there is no meaningful gap to name — see GAP_FLOOR.
+   * The frontend renders the same two cards either way; only the copy changes,
+   * so there is no branch it can forget.
+   */
+  gap: { focus: GapFocus | null; title: string; body: string }
   quick_win: { title: string; body: string }
+  /**
+   * What the coach SAID, kept whole and separate from what was derived. Step 1
+   * reads this alongside the problem statement, and keeping the raw letter and
+   * label here means it never has to re-look-up the question set to know what
+   * was answered.
+   */
+  stated_challenge: { letter: QuizLetter; label: string; focus: GapFocus }
 }
 
-/** What choosing `letter` on `question` is worth. One lookup, used everywhere. */
-export function pointsFor(question: QuizQuestion, letter: QuizLetter): number {
+/** What choosing `letter` on a scored question is worth. One lookup, used everywhere. */
+export function pointsFor(question: ScoredQuestion, letter: QuizLetter): number {
   const option = question.options.find((o) => o.letter === letter)
   // Unreachable for a validated answer; throwing rather than defaulting to 0,
   // because a silently-zero question is a wrong composite nobody can see.
   if (!option) throw new Error(`no option '${letter}' on question '${question.id}'`)
   return option.points
+}
+
+/** Which gap the coach named. */
+export function focusFor(letter: QuizLetter): GapFocus {
+  const option = FOCUS_QUESTION.options.find((o) => o.letter === letter)
+  if (!option) throw new Error(`no option '${letter}' on question '${FOCUS_QUESTION.id}'`)
+  return option.focus
 }
 
 /**
@@ -189,7 +298,7 @@ export function pointsFor(question: QuizQuestion, letter: QuizLetter): number {
  * would push a composite past 100 and out of every moniker band.
  * assertPointsTablesAreWellFormed pins that, and the suite runs it.
  */
-function normalise(raw: number, questions: QuizQuestion[]): number {
+function normalise(raw: number, questions: ScoredQuestion[]): number {
   const min = questions.length * 1
   const max = questions.length * 4
   if (max === min) return 0
@@ -238,14 +347,14 @@ export const MONIKER_BANDS: Array<{ min: number; max: number; name: string; summ
 ]
 
 /**
- * The gap and the quick win, per pillar.
+ * The gap and the quick win, per focus.
  *
- * Keyed by the pillar that scored LOWEST, so the advice is always about the
- * thing actually holding the composite down. Fixed copy per pillar and not
- * generated: this is a diagnosis a coach acts on, so it says the same thing to
- * two coaches in the same position rather than being freshly worded each time.
+ * Keyed by the gap the coach NAMED, not by the pillar that scored lowest.
+ * Fixed copy per focus and not generated: this is a diagnosis a coach acts on,
+ * so it says the same thing to two coaches in the same position rather than
+ * being freshly worded each time.
  */
-const PILLAR_ADVICE: Record<QuizPillar, { gap: string; winTitle: string; winBody: string }> = {
+const FOCUS_ADVICE: Record<GapFocus, { gap: string; winTitle: string; winBody: string }> = {
   attract: {
     gap: 'Not enough of the right people know what you do. Everything downstream is capped by that, however good the offer is.',
     winTitle: 'Name one person, not an audience',
@@ -264,15 +373,65 @@ const PILLAR_ADVICE: Record<QuizPillar, { gap: string; winTitle: string; winBody
     winBody:
       'Pick the number before the call, say it once, and stop talking. Nothing changes about the offer — the practice is in not negotiating against yourself.',
   },
+  capacity: {
+    gap: 'The offer sells and the constraint is delivery. Every client you add from here costs hours you do not have, which is not a problem more leads or a better page can solve.',
+    winTitle: 'Take one hour out of every delivery',
+    winBody:
+      'Find the single step you repeat for every client and turn it into a template, a recording or a checklist. Do it once, and the next ten clients cost you less than the last ten did.',
+  },
 }
 
-/** The pillar the gap line is written about: lowest score, ties broken by fixed pillar order. */
-export function lowestPillar(scores: Record<QuizPillar, number>): QuizPillar {
-  // QUIZ_PILLARS order IS the tiebreak, and it is fixed — so two coaches with
-  // the same tied scores get the same gap. Reducing over an unordered object's
-  // keys would make the answer depend on insertion order, which is not
-  // something a scoring rule may depend on.
-  return QUIZ_PILLARS.reduce((low, p) => (scores[p] < scores[low] ? p : low), QUIZ_PILLARS[0])
+/**
+ * What the page says when there is no meaningful gap to name.
+ *
+ * This state exists because the old code had no floor: lowestPillar returned a
+ * pillar unconditionally, so a coach scoring 100/100/100 read the moniker "The
+ * Full Engine" and, directly beneath it, "Your biggest gap is Attract — not
+ * enough of the right people know what you do." Three pillars tied at the top
+ * and the tiebreak order printed a gap that did not exist.
+ */
+const NO_GAP_ADVICE = {
+  title: 'No single gap is holding you back',
+  body: 'Every pillar you were measured on is scoring in the top band, and nothing in your answers points at one thing to fix. From here the constraint is volume and consistency, not a missing piece.',
+  winTitle: 'Do more of what already worked',
+  winBody:
+    'Look at where your last three clients actually came from and put the next thirty days into that one route. At this score the risk is redesigning something that is working, not failing to improve it.',
+}
+
+/**
+ * The score at or above which a pillar is not a gap worth naming.
+ *
+ * DERIVED FROM THE TOP MONIKER BAND rather than written as its own number, so
+ * "no meaningful gap" and "The Full Engine" cannot drift apart into a page that
+ * calls you a full engine and names a gap anyway. Moving the band moves the
+ * floor, deliberately — assertGapFloorMatchesTopBand pins the relationship.
+ */
+export const GAP_FLOOR = MONIKER_BANDS[MONIKER_BANDS.length - 1].min
+
+export type GapResolution =
+  | { kind: 'none' }
+  | { kind: 'focus'; focus: GapFocus }
+
+/**
+ * Which gap the result is about, given what the coach said and what they scored.
+ *
+ * THE STATED CHALLENGE WINS. It is the one question where the coach names their
+ * constraint outright, and that beats a minimum derived from the other six —
+ * which is how a coach who said "one sentence buyers repeat back to me" ended up
+ * being told their offer was unclear.
+ *
+ * The single exception is the contradiction case: they named a pillar, and every
+ * answer they gave about that pillar puts it in the top band. Then the page has
+ * nothing honest to say about it, and says so rather than printing advice the
+ * scores disagree with.
+ *
+ * CAPACITY IS NEVER SUPPRESSED. No pillar measures delivery capacity, so no
+ * score can contradict it — "it sells and I cannot deliver more" is coherent at
+ * 100/100/100 and is exactly the constraint that coach has.
+ */
+export function resolveGap(scores: Record<QuizPillar, number>, focus: GapFocus): GapResolution {
+  if (focus !== 'capacity' && scores[focus] >= GAP_FLOOR) return { kind: 'none' }
+  return { kind: 'focus', focus }
 }
 
 export function monikerFor(composite: number): { name: string; summary: string } {
@@ -294,42 +453,66 @@ export function scoreQuiz(answers: QuizAnswers): QuizAnalysis {
   const scores = {} as Record<QuizPillar, number>
 
   for (const pillar of QUIZ_PILLARS) {
-    const questions = QUIZ_QUESTIONS.filter((q) => q.pillar === pillar)
+    const questions = SCORED_QUESTIONS.filter((q) => q.pillar === pillar)
     const raw = questions.reduce((sum, q) => sum + pointsFor(q, answers[q.id]), 0)
     scores[pillar] = normalise(raw, questions)
   }
 
   // The mean of the three NORMALISED pillars, so each pillar counts equally
   // regardless of how many questions it happens to hold. Attract has three and
-  // the others two; summing raw points instead would quietly make Attract worth
-  // half again as much as Monetize, which is not a decision anybody made.
+  // the others one or two; summing raw points instead would quietly make Attract
+  // worth three times Transform, which is not a decision anybody made.
   const composite = Math.round(QUIZ_PILLARS.reduce((sum, p) => sum + scores[p], 0) / QUIZ_PILLARS.length)
 
-  const pillar = lowestPillar(scores)
-  const advice = PILLAR_ADVICE[pillar]
+  const stated = focusFor(answers[FOCUS_QUESTION.id])
+  const resolved = resolveGap(scores, stated)
   const moniker = monikerFor(composite)
 
+  const gap =
+    resolved.kind === 'none'
+      ? { focus: null, title: NO_GAP_ADVICE.title, body: NO_GAP_ADVICE.body }
+      : {
+          focus: resolved.focus,
+          title: `Your biggest gap is ${FOCUS_LABEL[resolved.focus]}`,
+          body: FOCUS_ADVICE[resolved.focus].gap,
+        }
+
+  const win =
+    resolved.kind === 'none'
+      ? { title: NO_GAP_ADVICE.winTitle, body: NO_GAP_ADVICE.winBody }
+      : { title: FOCUS_ADVICE[resolved.focus].winTitle, body: FOCUS_ADVICE[resolved.focus].winBody }
+
+  const statedLetter = answers[FOCUS_QUESTION.id]
   return {
     scores,
     composite,
     moniker: moniker.name,
     moniker_summary: moniker.summary,
-    gap: { pillar, title: `Your biggest gap is ${PILLAR_LABEL[pillar]}`, body: advice.gap },
-    quick_win: { title: advice.winTitle, body: advice.winBody },
+    gap,
+    quick_win: win,
+    // Kept even when the gap is suppressed: what the coach said is still true
+    // and Step 1 still wants it. Only the advice is withheld, not the answer.
+    stated_challenge: {
+      letter: statedLetter,
+      label: FOCUS_QUESTION.options.find((o) => o.letter === statedLetter)!.label,
+      focus: stated,
+    },
   }
 }
 
 /**
  * The question set as the frontend receives it.
  *
- * POINTS ARE NOT SERVED. The frontend renders the words and posts back a letter;
- * what a letter is worth is the scoring rubric and stays server-side. Shipping it
- * would put the answer key on the page of a self-assessment, and a coach who can
- * see which option scores 4 is being invited to take a different quiz than the
- * one that helps them.
+ * NEITHER POINTS NOR FOCUS ARE SERVED. The frontend renders the words and posts
+ * back a letter; what a letter is worth, and which gap it names, are the rubric
+ * and stay server-side. Shipping either would put the answer key on the page of a
+ * self-assessment — and `focus` in particular would let a coach pick which advice
+ * they get rather than answer the question.
  *
  * Built from QUIZ_QUESTIONS by projection, never as a parallel list — that is the
- * whole point of the option text living beside its points.
+ * whole point of the option text living beside its points. Both question kinds
+ * project to the same shape on purpose: the frontend renders them identically and
+ * has no reason to know which one is scored.
  */
 export type ServedQuestion = {
   id: string
@@ -341,7 +524,10 @@ export function servedQuestions(): ServedQuestion[] {
   return QUIZ_QUESTIONS.map((q) => ({
     id: q.id,
     prompt: q.prompt,
-    options: q.options.map((o) => ({ letter: o.letter, label: o.label })),
+    options: (q.options as Array<{ letter: QuizLetter; label: string }>).map((o) => ({
+      letter: o.letter,
+      label: o.label,
+    })),
   }))
 }
 
@@ -371,11 +557,15 @@ export function validateQuizAnswers(raw: unknown): AnswerCheck {
   for (const question of QUIZ_QUESTIONS) {
     const value = input[question.id]
     const letter = typeof value === 'string' ? (value.toLowerCase() as QuizLetter) : null
-    if (!letter || !question.options.some((o) => o.letter === letter)) {
+    // The unscored question is required too: it is what the gap line is built
+    // from, so a submission without it has no diagnosis, only numbers.
+    if (!letter || !(question.options as Array<{ letter: QuizLetter }>).some((o) => o.letter === letter)) {
       return {
         ok: false,
         error: 'answer_missing_or_invalid',
-        message: `answer for '${question.id}' must be one of ${question.options.map((o) => o.letter).join(', ')}`,
+        message: `answer for '${question.id}' must be one of ${(question.options as Array<{ letter: QuizLetter }>)
+          .map((o) => o.letter)
+          .join(', ')}`,
       }
     }
     answers[question.id] = letter
@@ -434,14 +624,25 @@ export function assertMonikerBandsCoverEveryScore(): string[] {
 export function assertPointsTablesAreWellFormed(): string[] {
   const failures: string[] = []
 
+  // Shape checks that apply to BOTH kinds — a question the coach cannot read or
+  // answer is broken whether or not it produces a number.
   for (const q of QUIZ_QUESTIONS) {
-    const letters = q.options.map((o) => o.letter)
-    const points = q.options.map((o) => o.points)
+    const options = q.options as Array<{ letter: QuizLetter; label: string }>
+    const letters = options.map((o) => o.letter)
 
     if (new Set(letters).size !== letters.length) failures.push(`${q.id}: duplicate option letters`)
     for (const l of letters) {
       if (!QUIZ_LETTERS.includes(l)) failures.push(`${q.id}: unknown option letter '${l}'`)
     }
+    if (!q.prompt.trim()) failures.push(`${q.id}: no prompt text`)
+    for (const o of options) {
+      if (!o.label.trim()) failures.push(`${q.id}: option '${o.letter}' has no label`)
+    }
+  }
+
+  // Points checks, on the scored questions only.
+  for (const q of SCORED_QUESTIONS) {
+    const points = q.options.map((o) => o.points)
     for (const p of points) {
       if (!Number.isInteger(p)) failures.push(`${q.id}: non-integer points ${p}`)
       if (p < 1 || p > 4) failures.push(`${q.id}: points ${p} outside 1-4 — a composite could exceed 100`)
@@ -450,12 +651,42 @@ export function assertPointsTablesAreWellFormed(): string[] {
     // unreachable; without a 4 its ceiling is.
     if (!points.includes(1)) failures.push(`${q.id}: no option worth 1 — 0 is unreachable on ${q.pillar}`)
     if (!points.includes(4)) failures.push(`${q.id}: no option worth 4 — 100 is unreachable on ${q.pillar}`)
+  }
 
-    if (!q.prompt.trim()) failures.push(`${q.id}: no prompt text`)
-    for (const o of q.options) {
-      if (!o.label.trim()) failures.push(`${q.id}: option '${o.letter}' has no label`)
+  // Every pillar must still have at least one scored question, or its score is
+  // a constant nobody can move. Making biggest_challenge unscored is exactly the
+  // kind of edit that could have emptied one.
+  for (const pillar of QUIZ_PILLARS) {
+    if (!SCORED_QUESTIONS.some((q) => q.pillar === pillar)) {
+      failures.push(`${pillar}: no scored question — the pillar cannot vary`)
     }
   }
 
+  // Exactly one focus question, and its options must cover every focus the
+  // advice table can key on. A focus with no option is copy nobody can reach;
+  // an option with a focus the advice lacks is a crash on the results screen.
+  const focusQuestions = QUIZ_QUESTIONS.filter((q) => q.kind === 'focus')
+  if (focusQuestions.length !== 1) failures.push(`expected exactly one focus question, found ${focusQuestions.length}`)
+  const covered = new Set(FOCUS_QUESTION.options.map((o) => o.focus))
+  for (const f of [...QUIZ_PILLARS, 'capacity'] as GapFocus[]) {
+    if (!covered.has(f)) failures.push(`no option on ${FOCUS_QUESTION.id} names '${f}'`)
+    if (!FOCUS_ADVICE[f]) failures.push(`no advice copy for focus '${f}'`)
+  }
+
   return failures
+}
+
+/**
+ * The gap floor and the top moniker band must be the same number.
+ *
+ * They are, by construction — GAP_FLOOR is derived from the band — and this
+ * asserts the construction rather than the value, so replacing the derivation
+ * with a literal fails here instead of silently allowing "The Full Engine" to
+ * appear above a named gap again.
+ */
+export function assertGapFloorMatchesTopBand(): string[] {
+  const top = MONIKER_BANDS[MONIKER_BANDS.length - 1]
+  return GAP_FLOOR === top.min
+    ? []
+    : [`GAP_FLOOR ${GAP_FLOOR} does not match the top band's floor ${top.min} — a full-engine score could still name a gap`]
 }
