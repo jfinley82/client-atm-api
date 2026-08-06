@@ -1,3 +1,5 @@
+import { normalizeWorkshopDate } from './workshopDate'
+
 // The set of app_settings keys the write paths accept. Both write paths
 // (PATCH /api/admin/settings and the legacy POST /api/settings) validate
 // against this, so a stray form field can never silently upsert an orphan
@@ -47,3 +49,37 @@ export const ALLOWED_SETTING_KEYS = new Set([
   'community_description',
   'community_cover_url',
 ])
+
+/**
+ * Per-key validation and canonicalisation for a setting write.
+ *
+ * Both write paths run every value through here, so a key with a real format
+ * cannot be given a meaningless one by whichever form posts it. Keys with no
+ * entry pass through untouched — most settings are free text and should stay
+ * that way; this is for the ones where a bad value is a silent breakage rather
+ * than a visible typo.
+ *
+ * workshop_event_date earned its entry: it is an untyped text column nothing in
+ * the backend parses, so it silently went from '2026-07-25T11:00-04:00' to
+ * '2026-08-28' — a full instant replaced by a bare day, the time and offset
+ * destroyed, and no signal anywhere. It now round-trips through a normalizer
+ * that ACCEPTS both shapes (a day is a legitimate thing to mean) but rejects a
+ * value that is neither, and pins an offset onto any time given without one.
+ */
+export function normalizeSettingValue(
+  key: string,
+  value: string
+): { ok: true; value: string } | { ok: false; error: string } {
+  if (key === 'workshop_event_date') {
+    const normalized = normalizeWorkshopDate(value)
+    if (normalized === null) {
+      return {
+        ok: false,
+        error:
+          "value for 'workshop_event_date' must be a date (2026-08-28) or a date and time (2026-08-28T14:30, or 2026-08-28T14:30-04:00)",
+      }
+    }
+    return { ok: true, value: normalized }
+  }
+  return { ok: true, value }
+}

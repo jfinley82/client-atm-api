@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
 import { requireActiveUser } from '../../../lib/auth'
 import { setCors } from '../../../lib/cors'
-import { ALLOWED_SETTING_KEYS } from '../../../lib/appSettings'
+import { ALLOWED_SETTING_KEYS, normalizeSettingValue } from '../../../lib/appSettings'
 
 // app_settings is a key/value table (key text PK, value text, updated_at). GET
 // returns the settings as a flat object; PATCH accepts a flat object of
@@ -46,6 +46,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (keys.length === 0) {
       return res.status(400).json({ error: 'Provide at least one setting to update' })
     }
+    // Every key is validated and canonicalised BEFORE anything is written, so a
+    // multi-key save is all-or-nothing rather than half-applied.
+    const values: Record<string, string> = {}
     for (const key of keys) {
       // Fail loudly on a key nothing consumes — otherwise a stray form field
       // silently upserts an orphan row and the admin believes it saved.
@@ -55,11 +58,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (typeof body[key] !== 'string') {
         return res.status(400).json({ error: `value for '${key}' must be a string` })
       }
+      const normalized = normalizeSettingValue(key, body[key] as string)
+      if (!normalized.ok) {
+        return res.status(400).json({ error: normalized.error })
+      }
+      values[key] = normalized.value
     }
 
     try {
       const now = new Date().toISOString()
-      const rows = keys.map((key) => ({ key, value: body[key] as string, updated_at: now }))
+      const rows = keys.map((key) => ({ key, value: values[key], updated_at: now }))
 
       const { error } = await supabase.from('app_settings').upsert(rows, { onConflict: 'key' })
       if (error) throw error
