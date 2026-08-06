@@ -1044,6 +1044,9 @@ export async function sendCoachBookingNotification(opts: {
   leadId: string | null
   leadName: string
   leadEmail: string
+  // The LEAD's number, not the coach's. A booking alert without it is half a
+  // lead — the coach has someone's name and no way to reach them before the call.
+  leadPhone?: string | null
   startIso: string
   answers: Array<{ label: string; answer: string }>
 }): Promise<void> {
@@ -1073,6 +1076,7 @@ export async function sendCoachBookingNotification(opts: {
     const bodyHtml = `
           <p style="margin:0 0 6px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#0B1120;font-weight:bold;">${escapeHtml(startLabel)}</p>
           <p style="margin:0 0 4px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:22px;color:#4B5563;">${escapeHtml(opts.leadName)} &lt;${escapeHtml(opts.leadEmail)}&gt;</p>
+          ${opts.leadPhone ? `<p style="margin:0 0 4px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:22px;color:#4B5563;"><a href="tel:${escapeHtml(opts.leadPhone.replace(/[^+\d]/g, ''))}" style="color:#4B5563;text-decoration:none;">${escapeHtml(opts.leadPhone)}</a></p>` : ''}
           <p style="margin:0 0 18px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;">From ${escapeHtml(funnelName)}</p>
           ${answerRows ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-top:1px solid #E5E9F0;padding-top:12px;margin-top:4px;">${answerRows}</table>` : ''}
           <p style="margin:20px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;">It's on your calendar. The lead has the meeting link.</p>`

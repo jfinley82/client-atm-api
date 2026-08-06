@@ -40,6 +40,10 @@ const SETTINGS_ROW: Record<string, unknown> = {
   brand_secondary_color: '#97BC62',
   booking_page_title: 'Consultation with Alex',
   booking_page_description: 'A 30-minute call to see if we are a fit.',
+  booking_phone_required: true,
+  booking_questions: [
+    { id: 'q_goal', label: 'What are you hoping to solve?', type: 'single_line', required: true, order: 0 },
+  ],
   // None of these may ever appear in a public response.
   email: 'alex@private.example.com',
   phone: '+1 555 0100',
@@ -62,6 +66,7 @@ let workingHoursRow: any = {
   booking_window_days: 14,
 }
 let slugRow: Record<string, unknown> | null = SETTINGS_ROW
+let globalPhoneRow: any = null
 
 const realFetch = globalThis.fetch
 globalThis.fetch = (async (input: any, init?: any) => {
@@ -75,6 +80,8 @@ globalThis.fetch = (async (input: any, init?: any) => {
     return json(slugRow)
   }
   if (url.includes('/rest/v1/user_availability')) return json(workingHoursRow)
+  if (url.includes('/rest/v1/users')) return json({ id: COACH, name: 'Alex Rivera', avatar_url: 'https://cdn.example.com/PRIVATE-AVATAR.png' })
+  if (url.includes('/rest/v1/app_settings')) return json(globalPhoneRow)
   if (url.includes('/rest/v1/bookings')) return json([])
   return json({})
 }) as typeof fetch
@@ -386,6 +393,171 @@ function deepKeys(v: unknown, acc: string[] = []): string[] {
       buffer_minutes: 15,
       booking_window_days: 14,
     }
+  }
+
+  console.log('\n-- ACCEPTANCE 2: the coach name is published, the avatar still is not --')
+  {
+    slugRow = SETTINGS_ROW
+    const r = makeRes()
+    await page({ method: 'GET', headers: {}, query: { slug: 'alex-rivera' } }, r.res)
+    ok('the coach name is on the payload', r.out.body?.page?.name === 'Alex Rivera', JSON.stringify(r.out.body?.page?.name))
+    ok('business_name is still there for the email fromName', r.out.body?.page?.business_name === 'Rivera Coaching')
+
+    // users.name arrives from the SAME table as avatar_url, so this is the
+    // moment the avatar could ride along. It must not.
+    const strings = deepStrings(r.out.body)
+    ok(
+      'the account avatar is nowhere in the response',
+      !strings.some((x) => x.includes('PRIVATE-AVATAR')),
+      JSON.stringify(strings)
+    )
+    ok('and no avatar_url key', !deepKeys(r.out.body).includes('avatar_url'))
+  }
+
+  console.log('\n-- ACCEPTANCE 5: a coach gets THEIR questions, never the global set --')
+  {
+    const withQuestions = makeRes()
+    await page({ method: 'GET', headers: {}, query: { slug: 'alex-rivera' } }, withQuestions.res)
+    const qs = withQuestions.out.body?.page?.questions
+    ok('the coach configured question comes back', Array.isArray(qs) && qs.length === 1 && qs[0].id === 'q_goal', JSON.stringify(qs))
+
+    slugRow = { ...SETTINGS_ROW, booking_questions: null }
+    const none = makeRes()
+    await page({ method: 'GET', headers: {}, query: { slug: 'alex-rivera' } }, none.res)
+    ok(
+      'a coach with none gets an empty array, not MTM discovery questions',
+      Array.isArray(none.out.body?.page?.questions) && none.out.body.page.questions.length === 0,
+      JSON.stringify(none.out.body?.page?.questions)
+    )
+    slugRow = SETTINGS_ROW
+  }
+
+  console.log('\n-- ACCEPTANCE 4: the page and the server read ONE resolver --')
+  // Asserted directly rather than by testing each side and hoping. The value the
+  // payload renders its asterisk from IS the value the booking validator
+  // enforces, because both call resolveBookingRequirements.
+  {
+    const { resolveBookingRequirements } = await import('../lib/bookingQuestions')
+
+    slugRow = { ...SETTINGS_ROW, booking_phone_required: true }
+    const onPage = makeRes()
+    await page({ method: 'GET', headers: {}, query: { slug: 'alex-rivera' } }, onPage.res)
+    const onServer = await resolveBookingRequirements({ coachUserId: COACH })
+    ok('required: page and server agree', onPage.out.body?.page?.phone_required === onServer.phoneRequired && onServer.phoneRequired === true, JSON.stringify([onPage.out.body?.page?.phone_required, onServer.phoneRequired]))
+
+    slugRow = { ...SETTINGS_ROW, booking_phone_required: false }
+    const offPage = makeRes()
+    await page({ method: 'GET', headers: {}, query: { slug: 'alex-rivera' } }, offPage.res)
+    const offServer = await resolveBookingRequirements({ coachUserId: COACH })
+    ok('optional: page and server agree', offPage.out.body?.page?.phone_required === offServer.phoneRequired && offServer.phoneRequired === false, JSON.stringify([offPage.out.body?.page?.phone_required, offServer.phoneRequired]))
+
+    // A missing row must read as REQUIRED, not as permission to skip.
+    slugRow = { ...SETTINGS_ROW }
+    delete (slugRow as any).booking_phone_required
+    const missing = await resolveBookingRequirements({ coachUserId: COACH })
+    ok('an unset column still requires the phone', missing.phoneRequired === true)
+    slugRow = SETTINGS_ROW
+  }
+
+  console.log('\n-- coach-level refusal outranks form validation --')
+  // Telling a visitor to fix their phone number on a page that cannot take
+  // bookings at all is the same misleading-message problem one level down: they
+  // would correct the field and be refused again for the real reason, which was
+  // never shown.
+  {
+    const book: Handler = (await import('../api/calendar/book')).default
+    const start = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
+    start.setUTCHours(14, 0, 0, 0)
+    workingHoursRow = null
+    slugRow = { ...SETTINGS_ROW, booking_phone_required: true }
+    const r = makeRes()
+    await book(
+      {
+        method: 'POST',
+        headers: {},
+        query: {},
+        body: { booking_slug: 'alex-rivera', slot_start: start.toISOString(), first_name: 'A', last_name: 'B', email: 'a@example.com' },
+      },
+      r.res
+    )
+    ok(
+      'an unconfigured coach answers coach_not_bookable, not phone_required',
+      r.out.status === 503 && r.out.body?.error === 'coach_not_bookable',
+      `${r.out.status} ${JSON.stringify(r.out.body)}`
+    )
+    workingHoursRow = {
+      working_hours: { timezone: 'America/Chicago', mon: { start: '09:00', end: '17:00' } },
+      slot_minutes: 30,
+      buffer_minutes: 15,
+      booking_window_days: 14,
+    }
+    slugRow = SETTINGS_ROW
+  }
+
+  console.log('\n-- the lead phone is validated loosely --')
+  {
+    const { normalizeLeadPhone } = await import('../lib/bookingQuestions')
+    for (const good of ['+1 (555) 010-1234', '555-010-1234', '5550101234', '+44 20 7946 0958', '  555.010.1234  ']) {
+      const r = normalizeLeadPhone(good)
+      ok(`${JSON.stringify(good)} is accepted`, r.ok === true && !!r.phone, JSON.stringify(r))
+    }
+    // Stored as GIVEN — a coach reads and dials it.
+    const asGiven = normalizeLeadPhone('+1 (555) 010-1234')
+    ok('and kept in the shape its owner typed', asGiven.ok && asGiven.phone === '+1 (555) 010-1234', JSON.stringify(asGiven))
+
+    for (const bad of ['12345', 'call me', '1234567890123456789', 'x'.repeat(50), '555-010-1234 ext WHATEVER']) {
+      ok(`${JSON.stringify(bad.slice(0, 20))} is refused`, normalizeLeadPhone(bad).ok === false)
+    }
+    const absent = normalizeLeadPhone(undefined)
+    ok('absent is fine and yields null', absent.ok === true && absent.phone === null)
+    const blank = normalizeLeadPhone('   ')
+    ok('blank is fine and yields null', blank.ok === true && blank.phone === null)
+  }
+
+  console.log('\n-- ACCEPTANCE 3 and 6: booking with a phone and a question --')
+  {
+    const book: Handler = (await import('../api/calendar/book')).default
+    const start = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
+    start.setUTCHours(14, 0, 0, 0)
+
+    async function attempt(body: Record<string, unknown>) {
+      const r = makeRes()
+      await book(
+        {
+          method: 'POST',
+          headers: {},
+          query: {},
+          body: {
+            booking_slug: 'alex-rivera',
+            slot_start: start.toISOString(),
+            first_name: 'A',
+            last_name: 'B',
+            email: 'a@example.com',
+            ...body,
+          },
+        },
+        r.res
+      )
+      return r.out
+    }
+
+    slugRow = { ...SETTINGS_ROW, booking_phone_required: true }
+    const noPhone = await attempt({ answers: { q_goal: 'growth' } })
+    ok('a required phone is enforced', noPhone.status === 400 && noPhone.body?.error === 'phone_required', `${noPhone.status} ${JSON.stringify(noPhone.body)}`)
+    ok('and the field is named', noPhone.body?.field === 'phone', JSON.stringify(noPhone.body))
+
+    const badPhone = await attempt({ phone: 'call me', answers: { q_goal: 'growth' } })
+    ok('a malformed phone is refused readably', badPhone.status === 400 && badPhone.body?.error === 'phone_invalid', JSON.stringify(badPhone.body))
+
+    // ACCEPTANCE 6 — a configured question is enforced and NAMED.
+    const noAnswer = await attempt({ phone: '555-010-1234' })
+    ok('a missing configured answer is refused', noAnswer.status === 400 && noAnswer.body?.error === 'question_required', JSON.stringify(noAnswer.body))
+    ok('and the refusal names that question', noAnswer.body?.question === 'What are you hoping to solve?', JSON.stringify(noAnswer.body))
+
+    slugRow = { ...SETTINGS_ROW, booking_phone_required: false }
+    const optional = await attempt({ answers: { q_goal: 'growth' } })
+    ok('with the toggle off, no phone is accepted past validation', optional.body?.error !== 'phone_required', JSON.stringify(optional.body))
+    slugRow = SETTINGS_ROW
   }
 
   globalThis.fetch = realFetch

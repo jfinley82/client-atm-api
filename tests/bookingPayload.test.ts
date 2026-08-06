@@ -63,6 +63,9 @@ globalThis.fetch = (async (input: any, init?: any) => {
     const rows: any[] = [{ key: 'booking_questions', value: JSON.stringify(REFERENCE_QUESTIONS) }]
     if (configuredTypes) rows.push({ key: 'booking_types', value: JSON.stringify(configuredTypes) })
     if (url.includes('key=eq.booking_types')) return json(configuredTypes ? { value: JSON.stringify(configuredTypes) } : null)
+    // The global phone toggle: unset, which reads as not-required so /book keeps
+    // working until the frontend ships the field.
+    if (url.includes('key=eq.booking_phone_required')) return json(null)
     if (url.includes('key=eq.booking_questions')) return json({ value: JSON.stringify(REFERENCE_QUESTIONS) })
     return json(rows)
   }
