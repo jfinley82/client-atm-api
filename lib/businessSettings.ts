@@ -1,3 +1,4 @@
+import { normalizeBookingSlug } from './bookingPage'
 import { supabase } from './supabase'
 import { isValidBrandColor, isValidBrandFont, validateTrackingInput, Tracking, DEFAULT_BRAND_PRIMARY, DEFAULT_BRAND_SECONDARY } from './funnels'
 
@@ -34,6 +35,9 @@ export type BusinessSettings = {
   business_name: string | null
   logo_url: string | null
   headshot_url: string | null
+  booking_slug: string | null
+  booking_page_title: string | null
+  booking_page_description: string | null
   brand_primary_color: string
   brand_secondary_color: string
   theme_mode: string
@@ -140,6 +144,9 @@ const ALLOWED_KEYS = new Set([
   'business_name',
   'logo_url',
   'headshot_url',
+  'booking_slug',
+  'booking_page_title',
+  'booking_page_description',
   'brand_primary_color',
   'brand_secondary_color',
   'theme_mode',
@@ -157,7 +164,7 @@ const URL_FIELDS = ['logo_url', 'headshot_url', 'zoom_link'] as const
 // provided keys are updated; unknown keys rejected.
 export function validateBusinessSettingsInput(
   body: unknown
-): { ok: true; update: Record<string, unknown> } | { ok: false; field: string } {
+): { ok: true; update: Record<string, unknown> } | { ok: false; field: string; reason?: string } {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, field: 'body' }
   let o = body as Record<string, unknown>
   if (o.settings && typeof o.settings === 'object' && !Array.isArray(o.settings)) {
@@ -168,6 +175,30 @@ export function validateBusinessSettingsInput(
   }
 
   const update: Record<string, unknown> = {}
+
+  // The coach's public booking-page address. Canonicalised (trimmed, lowercased)
+  // rather than merely validated, so "Alex-Rivera" saves as "alex-rivera"
+  // instead of failing for something a coach would reasonably call the same
+  // thing. null clears it, which unpublishes the page.
+  if ('booking_slug' in o) {
+    const v = o.booking_slug
+    if (v === null || (typeof v === 'string' && !v.trim())) {
+      update.booking_slug = null
+    } else {
+      const checked = normalizeBookingSlug(v)
+      if (!checked.ok) return { ok: false, field: 'booking_slug', reason: checked.error }
+      update.booking_slug = checked.slug
+    }
+  }
+
+  for (const field of ['booking_page_title', 'booking_page_description'] as const) {
+    if (!(field in o)) continue
+    const v = (o as Record<string, unknown>)[field]
+    if (v !== null && typeof v !== 'string') return { ok: false, field }
+    const max = field === 'booking_page_title' ? 120 : 600
+    if (typeof v === 'string' && v.length > max) return { ok: false, field }
+    update[field] = v === null ? null : (v as string).trim() || null
+  }
 
   if ('business_name' in o) {
     const v = o.business_name
@@ -262,6 +293,10 @@ export function normalizeBusinessSettings(row: Record<string, any> | null | unde
   }
   return {
     ...profile,
+    booking_slug: typeof r.booking_slug === 'string' && r.booking_slug.trim() ? r.booking_slug.trim() : null,
+    booking_page_title: typeof r.booking_page_title === 'string' && r.booking_page_title.trim() ? r.booking_page_title.trim() : null,
+    booking_page_description:
+      typeof r.booking_page_description === 'string' && r.booking_page_description.trim() ? r.booking_page_description.trim() : null,
     business_name: typeof r.business_name === 'string' && r.business_name.trim() ? r.business_name.trim() : null,
     logo_url: typeof r.logo_url === 'string' && r.logo_url ? r.logo_url : null,
     headshot_url: typeof r.headshot_url === 'string' && r.headshot_url ? r.headshot_url : null,

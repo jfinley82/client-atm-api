@@ -16,6 +16,7 @@ import { getValidAccessToken, createCalendarEvent, deleteCalendarEvent, ValidTok
 import { loadBusinessSettings } from '../../lib/businessSettings'
 import { cancelLeadOutreach, scheduleBookingReminders } from '../../lib/funnelNurture'
 import { buildBookingManageUrl } from '../../lib/bookingManage'
+import { resolveBookingSlug } from '../../lib/bookingPage'
 
 // POST /api/calendar/book
 // Body: { slot_start, first_name, last_name, email, answers?, funnel_id? }
@@ -80,17 +81,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (payload) userId = payload.userId
   }
 
-  // Resolve the funnel + owner + Google connection to choose the path.
+  // A coach's own booking page identifies its owner by SLUG — the only public
+  // identifier a coach has. It is not a funnel: no application gate, no funnel
+  // questions, no funnel attribution, and no booking_type, since that is a
+  // global MTM setting and the argument that keeps it off funnel bookings keeps
+  // it off this one too.
+  const bookingSlug = typeof body.booking_slug === 'string' ? body.booking_slug.trim() : ''
+
+  // Resolve the owner + Google connection to choose the path.
   let funnelRow: Record<string, any> | null = null
   let conn: ValidToken | null = null
-  if (funnelId) {
+  let slugOwner: string | null = null
+  if (bookingSlug) {
+    const pageOwner = await resolveBookingSlug(bookingSlug)
+    if (!pageOwner) return res.status(404).json({ error: 'not_found' })
+    slugOwner = pageOwner.userId
+    conn = await getValidAccessToken(slugOwner)
+  } else if (funnelId) {
     funnelRow = await resolveLiveFunnel({ funnelId })
     if (funnelRow) conn = await getValidAccessToken(funnelRow.user_id as string)
   }
 
   try {
-    if (funnelRow && conn) {
-      return await bookGooglePath(res, { funnelRow, owner: funnelRow.user_id as string, conn, startMs, startIso, name, email, answersMap, userId, timezone })
+    // ONE coach implementation, whether the owner came from a funnel or a slug.
+    // A second copy for the coach page is how the two would answer differently
+    // for the same coach within a month.
+    const coachOwner = slugOwner || (funnelRow && conn ? (funnelRow.user_id as string) : null)
+    if (coachOwner) {
+      return await bookCoachPath(res, { funnelRow, owner: coachOwner, conn, startMs, startIso, name, email, answersMap, userId, timezone })
     }
     return await bookLegacyPath(res, { funnelRow, startMs, startIso, name, email, answersMap, userId, timezone, bookingTypeRaw })
   } catch (err) {
@@ -152,14 +170,23 @@ function eventDescription(name: string, email: string, answers: ValidatedAnswer[
   return lines.join('\n')
 }
 
-// ---- funnel Google path -----------------------------------------------------
+// ---- coach path (a funnel's owner, or a coach's own booking page) -----------
+//
+// Named for the OWNER rather than for Google, because that is what it actually
+// keys on. It serves a funnel booking whose owner is Google-connected and a
+// booking made through the coach's own slug, which may or may not be. Both set
+// coach_user_id; neither uses MTM's shared Zoom account.
 
-async function bookGooglePath(
+async function bookCoachPath(
   res: VercelResponse,
   ctx: {
-    funnelRow: Record<string, any>
+    // NULL for a booking made through the coach's own page: it has an owner but
+    // no funnel behind it.
+    funnelRow: Record<string, any> | null
     owner: string
-    conn: ValidToken
+    // NULL when the coach has no Google connection. They are still bookable if
+    // they have configured a meeting room of their own.
+    conn: ValidToken | null
     startMs: number
     startIso: string
     name: string
@@ -178,7 +205,11 @@ async function bookGooglePath(
   // lead is never rejected for a field the form never rendered. Read straight off
   // the already-loaded funnel row: its own application_questions_enabled +
   // booking_questions, never the global defaults.
-  const questions = funnelBookingQuestions(funnelRow)
+  // A funnel answers from its own settings. The coach page has no per-coach
+  // question store, so it asks nothing beyond name and email — see the note on
+  // `questions` in lib/bookingPage.ts. Borrowing the coach's most recent funnel
+  // here would reintroduce the coupling this page exists to avoid.
+  const questions = funnelRow ? funnelBookingQuestions(funnelRow) : []
   const av = validateBookingAnswers(questions, answersMap)
   if (!av.ok) {
     return res
@@ -186,10 +217,32 @@ async function bookGooglePath(
       .json({ error: av.error, question: av.question, message: bookingQuestionErrorMessage(av.error, av.question) })
   }
 
-  const gate = checkGate(funnelRow, questions, answersMap)
-  if (!gate.qualified) return disqualified(res, gate)
+  // The application gate belongs to a funnel. A coach handing out their own link
+  // has already decided this person may book.
+  if (funnelRow) {
+    const gate = checkGate(funnelRow, questions, answersMap)
+    if (!gate.qualified) return disqualified(res, gate)
+  }
+
+  // ASKED BEFORE isSlotOpen, because isSlotOpen now has two reasons to say no
+  // and the caller can only report one of them.
+  //
+  // It returned false only for "that slot is taken" until availability gating
+  // was added; now an unconfigured coach makes it false too, and mapping that to
+  // slot_taken tells the visitor something untrue. Worse, the frontend's
+  // response to a 409 is to refresh the slots and ask them to pick again — and
+  // the refresh returns an empty list, so the page asks someone to choose
+  // another time from nothing, forever, with no explanation. A coach testing
+  // their own page gets the same dead end and no hint that the cause is their
+  // own availability settings.
+  //
+  // Same distinction as the list side: an empty result and an unconfigured coach
+  // are different facts and must not share a message. coach_not_bookable matches
+  // the code the no-meeting-room branch below already returns.
+  if (!settings.configured) return res.status(503).json({ error: 'coach_not_bookable' })
 
   // Parity: the slot must be genuinely open per the same engine the page showed.
+  // Reaching here, false means exactly one thing again.
   if (!(await isSlotOpen(owner, startIso))) return res.status(409).json({ error: 'slot_taken' })
 
   // Reserve first (per-coach unique index is the concurrency backstop), then
@@ -198,9 +251,13 @@ async function bookGooglePath(
     .from('bookings')
     .insert({
       user_id: userId,
+      // Set on BOTH kinds of coach booking. It is null on every row in the
+      // database today, which is what made the manage link dead for all of them
+      // — a booking through a coach's own page has an unambiguous owner.
       coach_user_id: owner,
-      // Which funnel this call came from — the Upcoming Calls panel filters on it.
-      funnel_id: funnelRow.id as string,
+      // Which funnel this call came from — the Upcoming Calls panel filters on
+      // it. Absent for a coach-page booking, which came from no funnel.
+      ...(funnelRow ? { funnel_id: funnelRow.id as string } : {}),
       name,
       email,
       start_time: startIso,
@@ -218,12 +275,27 @@ async function bookGooglePath(
   }
 
   // Meeting room: the coach's configured zoom_link, else an auto-created Meet.
+  // Never MTM's shared Zoom account — that belongs to the MTM discovery page.
   const biz = await loadBusinessSettings(owner)
   const zoomLink = biz.zoom_link
 
-  let event: { eventId: string; htmlLink: string | null; meetUrl: string | null } | null
+  // NO GOOGLE CONNECTION is a supported state for a coach-page booking, not a
+  // failure. A coach with their own zoom_link is bookable: there is simply no
+  // calendar event to create, and no Meet to fall back on. A coach with neither
+  // has nowhere for the call to happen, so the booking is refused before it can
+  // become a confirmation with an empty join link.
+  if (!conn) {
+    if (!zoomLink) {
+      await supabase.from('bookings').delete().eq('id', reserved.id)
+      console.error('[calendar/book] coach has neither a Google connection nor a meeting room', owner)
+      return res.status(503).json({ error: 'coach_not_bookable' })
+    }
+    await supabase.from('bookings').update({ meeting_url: zoomLink }).eq('id', reserved.id)
+  }
+
+  let event: { eventId: string; htmlLink: string | null; meetUrl: string | null } | null = null
   try {
-    event = await createCalendarEvent(owner, {
+    if (conn) event = await createCalendarEvent(owner, {
       summary: `MTM call with ${name}`,
       description: eventDescription(name, email, av.answers),
       startIso,
@@ -238,7 +310,7 @@ async function bookGooglePath(
     console.error('[calendar/book] google event create failed — reservation released', evErr)
     return res.status(502).json({ error: 'Failed to create calendar event' })
   }
-  if (!event) {
+  if (conn && !event) {
     await supabase.from('bookings').delete().eq('id', reserved.id)
     return res.status(502).json({ error: 'Failed to create calendar event' })
   }
@@ -246,21 +318,24 @@ async function bookGooglePath(
   // A Meet was requested (no zoom_link) but Google returned no conference link —
   // don't save a booking with an empty confirmation link. Treat it like an
   // event-create failure: delete the orphan event and release the reservation.
-  const meetingUrl = zoomLink || event.meetUrl || ''
+  const meetingUrl = zoomLink || event?.meetUrl || ''
   if (!meetingUrl) {
-    await deleteCalendarEvent(owner, event.eventId).catch(() => {})
+    if (event) await deleteCalendarEvent(owner, event.eventId).catch(() => {})
     await supabase.from('bookings').delete().eq('id', reserved.id)
     console.error('[calendar/book] google event created without a meeting link — released')
     return res.status(502).json({ error: 'Failed to create meeting link' })
   }
-  await supabase.from('bookings').update({ google_event_id: event.eventId, meeting_url: meetingUrl }).eq('id', reserved.id)
+  if (event) {
+    await supabase.from('bookings').update({ google_event_id: event.eventId, meeting_url: meetingUrl }).eq('id', reserved.id)
+  }
 
-  const leadId = await logFunnelBooked(funnelRow.id as string, email)
+  // Funnel attribution only exists when a funnel does.
+  const leadId = funnelRow ? await logFunnelBooked(funnelRow.id as string, email) : null
 
   // Confirmation + .ics to the lead (organizer = the coach's connected calendar),
   // and a best-effort notification to the coach. Never fail the booking on email.
   const startLabel = bookingTimeLabel(startIso, timezone)
-  const organizerEmail = conn.calendar_email || process.env.ZOOM_HOST_EMAIL || 'noreply@mail.microtrainingmethod.com'
+  const organizerEmail = conn?.calendar_email || process.env.ZOOM_HOST_EMAIL || 'noreply@mail.microtrainingmethod.com'
   const ics = buildBookingIcs({
     uid: `booking-${reserved.id}@microtrainingmethod.com`,
     startUtcISO: startIso,
@@ -273,10 +348,24 @@ async function bookGooglePath(
   })
   // Lead-side manage link (Phase 3b follow-up): reschedule/cancel, on the funnel
   // domain so /api/ reaches the real function rather than the renderer.
-  const manageUrl = buildBookingManageUrl(reserved.id as string, (funnelRow.subdomain as string) || null)
+  const manageUrl = buildBookingManageUrl(reserved.id as string, (funnelRow?.subdomain as string) || null)
 
-  await sendBookingConfirmationEmail({ email, name, startLabel, joinUrl: meetingUrl, icsContent: ics, funnelId: funnelRow.id as string, leadId, coachUserId: owner, manageUrl, bookingId: reserved.id as string })
+  await sendBookingConfirmationEmail({
+    email,
+    name,
+    startLabel,
+    joinUrl: meetingUrl,
+    icsContent: ics,
+    coachUserId: owner,
+    manageUrl,
+    bookingId: reserved.id as string,
+    ...(funnelRow ? { funnelId: funnelRow.id as string, leadId } : {}),
+  })
+  // Sent for a coach-page booking too. The preference is keyed by USER, not by
+  // funnel — a coach who gets a booking on their own page and is never told is
+  // worse off than one who gets a plainer email.
   await sendCoachBookingNotification({
+    coachUserId: owner,
     funnel: funnelRow,
     bookingId: reserved.id as string,
     leadId,
@@ -293,7 +382,7 @@ async function bookGooglePath(
   // property of the call, not of whether we matched a funnel lead to it.
   await scheduleBookingReminders({
     brand: await resolveBookingBrand(owner),
-    funnelId: funnelRow.id as string,
+    funnelId: funnelRow ? (funnelRow.id as string) : null,
     leadId,
     email,
     startIso,
@@ -354,7 +443,7 @@ async function bookLegacyPath(
   // and why falling back to the global question set hard-blocked bookings on
   // charge-demo. Letting a global type list attach itself to a funnel booking
   // would reintroduce exactly that shape. So a funnel booking carries no type,
-  // on EITHER path: bookGooglePath always has a funnel, and this path skips it
+  // on EITHER path: bookCoachPath always has a funnel when it is reached from one, and this path skips it
   // whenever one is in play. A stray value on a funnel booking is ignored, not
   // rejected, for the same reason an unconfigured list ignores one.
   //
@@ -458,6 +547,7 @@ async function bookLegacyPath(
   // the same notice, gated on the same per-coach pref.
   if (funnelRow) {
     await sendCoachBookingNotification({
+      coachUserId: funnelRow.user_id as string,
       funnel: funnelRow,
       bookingId: reserved.id as string,
       leadId,

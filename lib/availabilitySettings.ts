@@ -5,6 +5,19 @@ import { WorkingHours, DayWindow, DEFAULT_WORKING_HOURS } from './availability'
 
 export type AvailabilitySettings = {
   working_hours: WorkingHours
+  /**
+   * Has this coach actually set their hours, or are these the defaults?
+   *
+   * loadUserAvailability falls back to DEFAULT_WORKING_HOURS when no row
+   * exists — 9 to 5 weekdays in UTC. That is not a neutral fallback: it is a
+   * bookable calendar nobody chose, in a timezone that is almost certainly not
+   * theirs. Measured on production: a live funnel whose coach has no row served
+   * 110 anonymous bookable slots at 09:00-16:30 UTC, which is 4am in Chicago.
+   *
+   * Callers that PUBLISH or ACCEPT bookings must consult this. Callers that
+   * merely need slot_minutes for arithmetic do not.
+   */
+  configured: boolean
   slot_minutes: number
   buffer_minutes: number
   booking_window_days: number
@@ -12,6 +25,7 @@ export type AvailabilitySettings = {
 
 export const DEFAULT_SETTINGS: AvailabilitySettings = {
   working_hours: DEFAULT_WORKING_HOURS,
+  configured: false,
   slot_minutes: 30,
   buffer_minutes: 15,
   booking_window_days: 14,
@@ -132,8 +146,13 @@ export async function loadUserAvailability(userId: string): Promise<Availability
     .maybeSingle()
 
   if (!data) return DEFAULT_SETTINGS
+  const working_hours = coerceWorkingHours(data.working_hours)
   return {
-    working_hours: coerceWorkingHours(data.working_hours),
+    working_hours,
+    // A row exists AND at least one day has a window. A coach who turned every
+    // day off is as unbookable as one who never configured anything, and both
+    // must read the same way to whoever is looking at the page.
+    configured: (['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const).some((d) => !!working_hours[d]),
     slot_minutes: intInRange(data.slot_minutes, 5, 240) ?? DEFAULT_SETTINGS.slot_minutes,
     buffer_minutes: intInRange(data.buffer_minutes, 0, 120) ?? DEFAULT_SETTINGS.buffer_minutes,
     booking_window_days: intInRange(data.booking_window_days, 1, 90) ?? DEFAULT_SETTINGS.booking_window_days,
