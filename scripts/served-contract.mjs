@@ -11,7 +11,7 @@
 // synthetic probe — key names and types are properties of the CODE, not of
 // anyone's content. The Transform/Monetize key lists were read from production
 // saved_outputs KEY NAMES only (jsonb_object_keys), never values, and are pinned
-// in TOOL_KEYS below because those tool_types have no deriver to introspect.
+// in TOOL_SHAPES below because those tool_types have no deriver to introspect.
 //
 // Usage:  node scripts/served-contract.mjs           # write docs/served-contract.md
 //         node scripts/served-contract.mjs --check   # exit 1 if the file is stale
@@ -81,6 +81,31 @@ for (const [typeName, make] of Object.entries(shapes)) {
     if (looksReal && !served.has(key)) served.set(key, { type: typeName })
   }
 }
+// INNER SHAPES OF ARRAY-OF-OBJECT OUTPUTS, from the same probe run.
+//
+// Names-only at one level is what left the frontend rendering otherAngles with
+// Object.values().filter(hasText) and printing whatever came back in key order —
+// no idea which value is the reframe and which is the monetization hint. §19 of
+// the redesign spec says the raw entries are reframe + monetization_hint, but
+// six OUTER keys were renamed by the deriver in ways nobody would guess, so
+// inner pass-through cannot be assumed either. Read from the actual output.
+const innerShapes = new Map() // servedName -> [{ key, type }]
+{
+  const probe = Object.fromEntries(rawKeys.map((k) => [k, shapes['object[]']()]))
+  const out = deriveAudienceDisplayFields(probe)
+  for (const [key, value] of Object.entries(out)) {
+    if (Array.isArray(value) && value.length > 0 && value[0] && typeof value[0] === 'object') {
+      innerShapes.set(
+        key,
+        Object.entries(value[0]).map(([k, v]) => ({
+          key: k,
+          type: Array.isArray(v) ? 'string[]' : typeof v,
+        }))
+      )
+    }
+  }
+}
+
 // avatar_gender is set unconditionally to an enum, so no probe shape "matches"
 // it — record it from the actual output.
 {
@@ -150,13 +175,92 @@ const surprises = [...served.keys()]
 //    display set to discover. The trap is different and is spelled out below.
 //    Key names read from production saved_outputs via jsonb_object_keys.
 // ---------------------------------------------------------------------------
-const TOOL_KEYS = {
-  transformation: 'after_internal_talk, after_results, after_state, before_internal_talk, before_results, before_state, client_language_after, client_language_before, completed, proof_point, session_history, the_bridge',
-  transformation_analysis: 'afterState, beforeState, confirmed, intersection, selected_id, selectedProblems, sync_snapshot, uniquelyEquipped, zoneOfImpact',
-  matcher_intake: 'completed, delivery, format, has_existing_offer, price, session_history',
-  matcher_analysis: 'insights, recommended_ids, selected_ids, suggested_offers, top_10, why_recommended',
-  program: 'confirmed, deliverables, program_name, session_length_minutes, session_type, suggested_capacity_per_month, suggested_starting_price, sync_snapshot, timeline_reasoning, total_sessions, total_weeks, weekly_breakdown',
-  core_offers: 'confirmed, high_ticket, low_ticket, mid_ticket, next_step_bridge, sync_snapshot',
+// PATHS, NOT NAMES. Names-only at one level is what left the frontend with no
+// shape for selectedProblems[n] and no framework entry at all — the gap this
+// depth pass closes.
+//
+// Every path is PATH-QUALIFIED for a reason: beforeState and afterState exist at
+// TWO levels with TWO different types — plain strings at the top of
+// transformation_analysis, objects with beliefs/internalTalk/results inside a
+// selected problem. Listing the bare name twice would read as a duplicate rather
+// than as a collision, so the path is the name here.
+//
+// Read from production via jsonb_object_keys + jsonb_typeof — names and types
+// only, never values.
+const TOOL_SHAPES = {
+  transformation: [
+    ['before_state / after_state', 'string', ''],
+    ['before_results / after_results', 'string', ''],
+    ['before_internal_talk / after_internal_talk', 'string', ''],
+    ['client_language_before / client_language_after', 'string', ''],
+    ['the_bridge', 'string', ''],
+    ['proof_point', 'string', ''],
+    ['completed', 'boolean', 'bookkeeping'],
+    ['session_history', 'array', 'bookkeeping — stripped on read'],
+  ],
+  transformation_analysis: [
+    ['zoneOfImpact', 'string', ''],
+    ['beforeState', 'string', 'TOP-LEVEL — a plain string. NOT the object of the same name below.'],
+    ['afterState', 'string', 'TOP-LEVEL — a plain string. NOT the object of the same name below.'],
+    ['intersection[n]', 'string', ''],
+    ['uniquelyEquipped[n]', 'string', ''],
+    ['selectedProblems[n].id', 'string', ''],
+    ['selectedProblems[n].problem', 'string', ''],
+    ['selectedProblems[n].outcome', 'string', ''],
+    ['selectedProblems[n].whySelected', 'string', ''],
+    ['selectedProblems[n].beforeState', 'object', 'NESTED — an OBJECT, unlike the top-level string of the same name'],
+    ['selectedProblems[n].beforeState.beliefs / .internalTalk / .results', 'string', ''],
+    ['selectedProblems[n].afterState', 'object', 'NESTED — an OBJECT, unlike the top-level string of the same name'],
+    ['selectedProblems[n].afterState.beliefs / .internalTalk / .results', 'string', ''],
+    ['selectedProblems[n].rootCause', 'object', ''],
+    ['selectedProblems[n].rootCause.corePattern / .emotionalProtection / .skillVsIdentity / .sustainingBelief', 'string', ''],
+    ['selectedProblems[n].rootDesire', 'object', ''],
+    ['selectedProblems[n].rootDesire.emotionalDesire / .identityShift / .lifestyleShift / .surfaceDesire', 'string', ''],
+    ['selectedProblems[n].costOfInaction', 'object', ''],
+    ['selectedProblems[n].costOfInaction.action / .inaction', 'string', ''],
+    ['selectedProblems[n].objectionReframe', 'object', ''],
+    ['selectedProblems[n].objectionReframe.objection / .reframe', 'string', ''],
+    ['selectedProblems[n].marketingTranslation', 'object', ''],
+    ['selectedProblems[n].marketingTranslation.startSaying / .stopSaying', 'string', ''],
+    ['confirmed / selected_id / sync_snapshot', 'mixed', 'bookkeeping'],
+  ],
+  framework: [
+    ['frameworkName', 'string', ''],
+    ['frameworkTagline', 'string', ''],
+    ['descriptiveCopy', 'string', ''],
+    ['audienceLanguage', 'string', ''],
+    ['useCases[n]', 'string', ''],
+    ['name_options[n].id / .name / .tagline / .rationale', 'string', 'snake_case key, camelCase children'],
+    ['selected_name_id', 'string', 'points at a name_options[n].id'],
+    ['phases[n].id / .name / .tagline / .color', 'string', ''],
+    ['phases[n].steps[n].id / .name / .description / .outcome', 'string', 'DEPTH 3 — steps live inside phases'],
+    ['confirmed / sync_snapshot', 'mixed', 'bookkeeping'],
+  ],
+  matcher_intake: [
+    ['has_existing_offer', 'boolean', ''],
+    ['format / delivery / price', 'string', ''],
+    ['completed / session_history', 'mixed', 'bookkeeping'],
+  ],
+  matcher_analysis: [
+    ['top_10[n]', 'object', ''],
+    ['recommended_ids[n]', 'string', ''],
+    ['why_recommended', 'string', ''],
+    ['suggested_offers', 'object', ''],
+    ['insights', 'mixed', ''],
+    ['selected_ids', 'array', 'bookkeeping'],
+  ],
+  program: [
+    ['program_name / session_type / timeline_reasoning', 'string', ''],
+    ['session_length_minutes / total_weeks / total_sessions', 'number', ''],
+    ['suggested_starting_price / suggested_capacity_per_month', 'mixed', ''],
+    ['weekly_breakdown[n] / deliverables[n]', 'mixed', ''],
+    ['confirmed / sync_snapshot', 'mixed', 'bookkeeping'],
+  ],
+  core_offers: [
+    ['low_ticket / mid_ticket / high_ticket', 'object', ''],
+    ['next_step_bridge', 'string', ''],
+    ['confirmed / sync_snapshot', 'mixed', 'bookkeeping'],
+  ],
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +344,23 @@ for (const section of SECTION_ORDER) {
   md += `### ${section}\n\n| served name | type | derived from |\n|---|---|---|\n`
   for (const r of rows) md += `| \`${r.name}\` | ${r.type} | \`${r.rawKey}\` |\n`
   md += '\n'
+  // An object[] entry needs its INNER keys too, or a renderer has no way to know
+  // which value is which and falls back to printing them in key order.
+  for (const r of rows) {
+    const inner = innerShapes.get(r.name)
+    if (!inner) continue
+    md += `Each \`${r.name}[n]\` entry:\n\n| inner key | type | notes |\n|---|---|---|\n`
+    for (const f of inner) {
+      const note =
+        f.key === 'monetizationHint'
+          ? 'camelCase alias of `monetization_hint` — both are served'
+          : f.key === 'monetization_hint'
+            ? 'snake_case, as the model emits it'
+            : ''
+      md += `| \`${f.key}\` | ${f.type} | ${note} |\n`
+    }
+    md += `\nRead them BY NAME. Rendering \`Object.values(entry)\` prints them in key\norder with no idea which is which — and the hint is served under two spellings,\nso a values-based render shows it twice.\n\n`
+  }
 }
 
 md += `> Every key above is **omitted when it has no content** (the one exception is
@@ -269,12 +390,22 @@ are different keys in different tool_types**, both feeding the Transform panel.
 Reading the camelCase pair from \`transformation\`, or the snake_case pair from
 \`transformation_analysis\`, returns \`undefined\` in both directions.
 
+And a second collision, one level down: **\`beforeState\` and \`afterState\` exist at
+TWO DEPTHS in \`transformation_analysis\` with TWO DIFFERENT TYPES.** At the top
+they are plain strings; inside \`selectedProblems[n]\` they are objects carrying
+\`beliefs\`, \`internalTalk\` and \`results\`. A renderer written for one and handed
+the other prints \`[object Object]\` or nothing. Every row below is
+PATH-QUALIFIED for that reason — the path is the name, so a collision reads as a
+collision rather than as a duplicate line.
+
 Key names below are read from production \`saved_outputs\` via
 \`jsonb_object_keys\` — names only, never values.
 
 `
-for (const [tool, keys] of Object.entries(TOOL_KEYS)) {
-  md += `**\`${tool}\`**\n\n${keys.split(', ').map((k) => `\`${k}\``).join(' · ')}\n\n`
+for (const [tool, rows] of Object.entries(TOOL_SHAPES)) {
+  md += `### \`${tool}\`\n\n| path | type | notes |\n|---|---|---|\n`
+  for (const [pathName, type, note] of rows) md += `| \`${pathName}\` | ${type} | ${note} |\n`
+  md += '\n'
 }
 
 md += `\`completed\`, \`confirmed\`, \`session_history\`, \`sync_snapshot\`, \`selected_id\`

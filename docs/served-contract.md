@@ -139,6 +139,18 @@ Read these. 26 keys, across the twelve sections of §14.
 |---|---|---|
 | `otherAngles` | object[] | `other_angles` |
 
+Each `otherAngles[n]` entry:
+
+| inner key | type | notes |
+|---|---|---|
+| `reframe` | string |  |
+| `monetization_hint` | string | snake_case, as the model emits it |
+| `monetizationHint` | string | camelCase alias of `monetization_hint` — both are served |
+
+Read them BY NAME. Rendering `Object.values(entry)` prints them in key
+order with no idea which is which — and the hint is served under two spellings,
+so a values-based render shows it twice.
+
 ### Monetize bridge
 
 | served name | type | derived from |
@@ -172,32 +184,110 @@ are different keys in different tool_types**, both feeding the Transform panel.
 Reading the camelCase pair from `transformation`, or the snake_case pair from
 `transformation_analysis`, returns `undefined` in both directions.
 
+And a second collision, one level down: **`beforeState` and `afterState` exist at
+TWO DEPTHS in `transformation_analysis` with TWO DIFFERENT TYPES.** At the top
+they are plain strings; inside `selectedProblems[n]` they are objects carrying
+`beliefs`, `internalTalk` and `results`. A renderer written for one and handed
+the other prints `[object Object]` or nothing. Every row below is
+PATH-QUALIFIED for that reason — the path is the name, so a collision reads as a
+collision rather than as a duplicate line.
+
 Key names below are read from production `saved_outputs` via
 `jsonb_object_keys` — names only, never values.
 
-**`transformation`**
+### `transformation`
 
-`after_internal_talk` · `after_results` · `after_state` · `before_internal_talk` · `before_results` · `before_state` · `client_language_after` · `client_language_before` · `completed` · `proof_point` · `session_history` · `the_bridge`
+| path | type | notes |
+|---|---|---|
+| `before_state / after_state` | string |  |
+| `before_results / after_results` | string |  |
+| `before_internal_talk / after_internal_talk` | string |  |
+| `client_language_before / client_language_after` | string |  |
+| `the_bridge` | string |  |
+| `proof_point` | string |  |
+| `completed` | boolean | bookkeeping |
+| `session_history` | array | bookkeeping — stripped on read |
 
-**`transformation_analysis`**
+### `transformation_analysis`
 
-`afterState` · `beforeState` · `confirmed` · `intersection` · `selected_id` · `selectedProblems` · `sync_snapshot` · `uniquelyEquipped` · `zoneOfImpact`
+| path | type | notes |
+|---|---|---|
+| `zoneOfImpact` | string |  |
+| `beforeState` | string | TOP-LEVEL — a plain string. NOT the object of the same name below. |
+| `afterState` | string | TOP-LEVEL — a plain string. NOT the object of the same name below. |
+| `intersection[n]` | string |  |
+| `uniquelyEquipped[n]` | string |  |
+| `selectedProblems[n].id` | string |  |
+| `selectedProblems[n].problem` | string |  |
+| `selectedProblems[n].outcome` | string |  |
+| `selectedProblems[n].whySelected` | string |  |
+| `selectedProblems[n].beforeState` | object | NESTED — an OBJECT, unlike the top-level string of the same name |
+| `selectedProblems[n].beforeState.beliefs / .internalTalk / .results` | string |  |
+| `selectedProblems[n].afterState` | object | NESTED — an OBJECT, unlike the top-level string of the same name |
+| `selectedProblems[n].afterState.beliefs / .internalTalk / .results` | string |  |
+| `selectedProblems[n].rootCause` | object |  |
+| `selectedProblems[n].rootCause.corePattern / .emotionalProtection / .skillVsIdentity / .sustainingBelief` | string |  |
+| `selectedProblems[n].rootDesire` | object |  |
+| `selectedProblems[n].rootDesire.emotionalDesire / .identityShift / .lifestyleShift / .surfaceDesire` | string |  |
+| `selectedProblems[n].costOfInaction` | object |  |
+| `selectedProblems[n].costOfInaction.action / .inaction` | string |  |
+| `selectedProblems[n].objectionReframe` | object |  |
+| `selectedProblems[n].objectionReframe.objection / .reframe` | string |  |
+| `selectedProblems[n].marketingTranslation` | object |  |
+| `selectedProblems[n].marketingTranslation.startSaying / .stopSaying` | string |  |
+| `confirmed / selected_id / sync_snapshot` | mixed | bookkeeping |
 
-**`matcher_intake`**
+### `framework`
 
-`completed` · `delivery` · `format` · `has_existing_offer` · `price` · `session_history`
+| path | type | notes |
+|---|---|---|
+| `frameworkName` | string |  |
+| `frameworkTagline` | string |  |
+| `descriptiveCopy` | string |  |
+| `audienceLanguage` | string |  |
+| `useCases[n]` | string |  |
+| `name_options[n].id / .name / .tagline / .rationale` | string | snake_case key, camelCase children |
+| `selected_name_id` | string | points at a name_options[n].id |
+| `phases[n].id / .name / .tagline / .color` | string |  |
+| `phases[n].steps[n].id / .name / .description / .outcome` | string | DEPTH 3 — steps live inside phases |
+| `confirmed / sync_snapshot` | mixed | bookkeeping |
 
-**`matcher_analysis`**
+### `matcher_intake`
 
-`insights` · `recommended_ids` · `selected_ids` · `suggested_offers` · `top_10` · `why_recommended`
+| path | type | notes |
+|---|---|---|
+| `has_existing_offer` | boolean |  |
+| `format / delivery / price` | string |  |
+| `completed / session_history` | mixed | bookkeeping |
 
-**`program`**
+### `matcher_analysis`
 
-`confirmed` · `deliverables` · `program_name` · `session_length_minutes` · `session_type` · `suggested_capacity_per_month` · `suggested_starting_price` · `sync_snapshot` · `timeline_reasoning` · `total_sessions` · `total_weeks` · `weekly_breakdown`
+| path | type | notes |
+|---|---|---|
+| `top_10[n]` | object |  |
+| `recommended_ids[n]` | string |  |
+| `why_recommended` | string |  |
+| `suggested_offers` | object |  |
+| `insights` | mixed |  |
+| `selected_ids` | array | bookkeeping |
 
-**`core_offers`**
+### `program`
 
-`confirmed` · `high_ticket` · `low_ticket` · `mid_ticket` · `next_step_bridge` · `sync_snapshot`
+| path | type | notes |
+|---|---|---|
+| `program_name / session_type / timeline_reasoning` | string |  |
+| `session_length_minutes / total_weeks / total_sessions` | number |  |
+| `suggested_starting_price / suggested_capacity_per_month` | mixed |  |
+| `weekly_breakdown[n] / deliverables[n]` | mixed |  |
+| `confirmed / sync_snapshot` | mixed | bookkeeping |
+
+### `core_offers`
+
+| path | type | notes |
+|---|---|---|
+| `low_ticket / mid_ticket / high_ticket` | object |  |
+| `next_step_bridge` | string |  |
+| `confirmed / sync_snapshot` | mixed | bookkeeping |
 
 `completed`, `confirmed`, `session_history`, `sync_snapshot`, `selected_id`
 and `selected_ids` are bookkeeping the panel does not render.
