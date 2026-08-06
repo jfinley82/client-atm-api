@@ -292,6 +292,56 @@ const freshCount = (postId: string) => comments.filter((c) => c.post_id === post
     ok('editing a tombstone is refused', r.status === 409 && r.body?.error === 'comment_deleted', `${r.status} ${JSON.stringify(r.body)}`)
   }
 
+  console.log('\n-- an oversized upload gets a READABLE 413, not a dead socket --')
+  // Found on production: req.destroy() tears down the RESPONSE along with the
+  // request stream, so the 413 the handler writes never reaches the client —
+  // fetch rejects with a network error and the member sees a generic failure on
+  // exactly the case that needs explaining. The reader now stops accumulating
+  // and keeps draining instead.
+  {
+    const { Readable } = await import('stream')
+    const uploadHandler: Handler = (await import('../api/forum/upload-image')).default
+
+    async function upload(totalBytes: number, contentType = 'image/png') {
+      // 1MB chunks, so an oversized body arrives across many 'data' events —
+      // the shape that triggered the destroy.
+      const chunk = Buffer.alloc(1024 * 1024, 1)
+      const chunks: Buffer[] = []
+      for (let sent = 0; sent < totalBytes; sent += chunk.length) {
+        chunks.push(chunk.subarray(0, Math.min(chunk.length, totalBytes - sent)))
+      }
+      const req: any = Readable.from(chunks)
+      req.method = 'POST'
+      req.headers = { 'content-type': contentType, authorization: `Bearer ${await createSessionToken(AUTHOR)}` }
+      req.query = {}
+      // Node's Readable auto-destroys once it completes, so "was destroy called"
+      // says nothing. readableEnded is the property that matters: true only when
+      // the stream reached 'end' naturally rather than being torn down
+      // mid-flight, which is exactly what req.destroy() used to do.
+      let status = 0, body: any = null, ended = false
+      const res: any = {
+        setHeader() {},
+        status(c: number) { status = c; return res },
+        json(v: unknown) { body = v; ended = true; return res },
+        end() { ended = true; return res },
+      }
+      await uploadHandler(req, res)
+      return { status, body, ended, drained: req.readableEnded === true }
+    }
+
+    const over = await upload(11 * 1024 * 1024)
+    ok('an 11MB upload is refused with 413', over.status === 413, `${over.status}`)
+    ok('and carries the readable message', over.body?.error === 'Image must be 10MB or smaller', JSON.stringify(over.body))
+    ok('the response was actually sent', over.ended === true)
+    ok('the stream drained to end rather than being torn down', over.drained === true, 'aborted mid-stream — destroy() kills the response with it, so the client sees a network error instead of this 413')
+
+    const wrongType = await upload(1024, 'application/pdf')
+    ok('a wrong type is still 415 with its own message', wrongType.status === 415 && /Unsupported image type/.test(wrongType.body?.error || ''), JSON.stringify(wrongType.body))
+
+    const empty = await upload(0)
+    ok('an empty body is 400', empty.status === 400 && /No image data/.test(empty.body?.error || ''), JSON.stringify(empty.body))
+  }
+
   console.log('\n-- method guards --')
   {
     reset()

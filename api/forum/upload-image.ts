@@ -27,22 +27,35 @@ const EXT_BY_TYPE: Record<string, string> = {
   'image/gif': 'gif',
 }
 
-// Reads the request body into a Buffer, aborting once MAX_BYTES is exceeded so an
-// oversized upload can't be accumulated into memory unbounded.
+// Reads the request body into a Buffer, bounded at MAX_BYTES.
+//
+// Once over the limit it STOPS ACCUMULATING but keeps draining, rather than
+// calling req.destroy(). Destroying tears down the response along with the
+// request stream, so the 413 the handler writes never reaches the client —
+// fetch rejects with a network error instead, and the member gets a generic
+// failure on precisely the case that needs explaining.
+//
+// The trade is bandwidth, not memory: the buffer is released the moment the
+// limit is passed and nothing further is retained, so an oversized upload still
+// cannot be accumulated unbounded. It just finishes transferring before being
+// told no.
 function readBoundedBody(req: VercelRequest): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
+    let chunks: Buffer[] = []
     let total = 0
+    let tooLarge = false
     req.on('data', (chunk: Buffer) => {
       total += chunk.length
       if (total > MAX_BYTES) {
-        req.destroy()
-        reject(new Error('file_too_large'))
+        if (!tooLarge) {
+          tooLarge = true
+          chunks = [] // drop what we have; memory stays bounded at MAX_BYTES
+        }
         return
       }
       chunks.push(chunk)
     })
-    req.on('end', () => resolve(Buffer.concat(chunks)))
+    req.on('end', () => (tooLarge ? reject(new Error('file_too_large')) : resolve(Buffer.concat(chunks))))
     req.on('error', reject)
   })
 }
