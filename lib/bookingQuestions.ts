@@ -61,6 +61,61 @@ export function normalizeBookingQuestions(raw: unknown): BookingQuestion[] {
     .sort((a, b) => a.order - b.order)
 }
 
+// ── Booking types ────────────────────────────────────────────────────────────
+// Admin-defined labels for the booking-type dropdown on the public /book page,
+// stored as a JSON string in app_settings under 'booking_types' — the same
+// convention as booking_questions above, because app_settings.value is a text
+// column and both write paths reject a value that is not a string. A sibling key
+// with a second convention would be a trap for whoever touches it next.
+
+/**
+ * Tolerant normalizer: anything that is not an array of non-empty strings
+ * becomes an empty list, and a malformed entry inside an otherwise good array is
+ * skipped rather than throwing.
+ *
+ * Same stance as normalizeBookingQuestions, for the same reason. These labels
+ * render on a public, unauthenticated page, so a fat-fingered admin save has to
+ * degrade to "no type dropdown" — a visitor can still book. Throwing here would
+ * turn one bad character in a settings field into a broken booking form for
+ * every visitor, and nobody would connect the two.
+ *
+ * Accepts either a parsed array or the raw JSON string, so callers reading
+ * straight from app_settings.value do not each need their own try/catch.
+ */
+export function normalizeBookingTypes(raw: unknown): string[] {
+  let value = raw
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      return []
+    }
+  }
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
+    .map((t) => t.trim())
+}
+
+/**
+ * Load the booking-type labels. Returns [] when unset or malformed, never throws.
+ *
+ * Note the public /book page does NOT go through here — it reads the flat
+ * unauthenticated GET /api/settings, which returns every stored row untouched.
+ * That means the page normalizes the raw string itself, and the key is absent
+ * from that response entirely until something has written it once. This exists
+ * for server-side callers that need the parsed list.
+ */
+export async function loadBookingTypes(): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('app_settings')
+    .select('value')
+    .eq('key', 'booking_types')
+    .maybeSingle()
+  if (error || !data?.value) return []
+  return normalizeBookingTypes(data.value)
+}
+
 // Loads the GLOBAL active question definitions (legacy shared booking path).
 // Returns [] when unset or malformed, never throws.
 export async function loadBookingQuestions(): Promise<BookingQuestion[]> {

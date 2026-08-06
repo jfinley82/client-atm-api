@@ -15,7 +15,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
-import { ALLOWED_SETTING_KEYS } from '../../lib/appSettings'
+import { ALLOWED_SETTING_KEYS, normalizeSettingValue } from '../../lib/appSettings'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
@@ -69,12 +69,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (typeof value !== 'string') {
       return res.status(400).json({ error: 'value must be a string' })
     }
+    // Same per-key canonicalisation as PATCH /api/admin/settings, so the legacy
+    // write path cannot store a shape the other one would reject.
+    const normalized = normalizeSettingValue(key, value)
+    if (!normalized.ok) {
+      return res.status(400).json({ error: normalized.error })
+    }
 
     try {
       const { error } = await supabase
         .from('app_settings')
         .upsert(
-          { key, value, updated_at: new Date().toISOString() },
+          { key, value: normalized.value, updated_at: new Date().toISOString() },
           { onConflict: 'key' }
         )
 
