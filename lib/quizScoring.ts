@@ -230,9 +230,48 @@ export const FOCUS_QUESTION = QUIZ_QUESTIONS.find((q): q is FocusQuestion => q.k
  * answer back to the coach as their own words, so the question that produced
  * those words is part of the contract, not frontend copy.
  */
-export const QUIZ_PROBLEM_PROMPT = 'In your own words, what problem do you help people solve?'
+// THE PIVOT, served as its own field so the page can render it as a visible
+// break rather than as more question text.
+//
+// WHY THIS EXISTS. On the first real run the open question was answered with the
+// COACH's own problem — "I have a problem asking people for money and closing
+// the deal" — by the person who specified the feature. That is the strongest
+// evidence available that coaches will read it the same way.
+//
+// The cause is momentum, not wording alone. Seven questions in a row ask about
+// YOU: your client flow, your biggest challenge, your pricing confidence, your
+// ninety-day goal. Question eight silently switches subject to your clients with
+// nothing marking the switch, and it is read with seven questions of momentum
+// behind it. Clearer words on question eight alone would not have fixed that,
+// because the reader is not being careless — they are being consistent.
+//
+// A SEPARATE FIELD rather than a lead-in clause on the prompt, because the
+// switch has to be VISIBLE. A frontend can give this its own band, rule or
+// spacing; folded into the question it would be one more sentence to skim past
+// at the exact moment skimming is the failure.
+//
+// Cost of getting this wrong, for whoever edits it next: the answer is carried
+// into Step 1 VERBATIM as the problem this coach solves, and the audience
+// conversation builds a whole client avatar around it. A coach who answers about
+// themselves spends Step 1 constructing a persona of someone who cannot ask for
+// money, Step 2 building that persona a transformation, and Step 3 pricing them
+// an offer. Three steps before it feels wrong.
+export const QUIZ_PROBLEM_PIVOT =
+  'One last question, and it changes subject. Everything so far has been about you and your business. This one is about the people you help.'
+
+// Reworded from "In your own words, what problem do you help people solve?",
+// which can be read as "what problem are you working on" — the subject of the
+// sentence is "you", and after seven questions about the coach that reading wins.
+// This puts "the people you help" in the subject position and "come to you with"
+// makes the problem theirs before the sentence ends. It also works for a coach
+// with no clients yet, which "your clients" would not.
+export const QUIZ_PROBLEM_PROMPT = 'What problem do the people you help come to you with?'
+
+// The help text names WHOSE problem, not just how to phrase it. The negative
+// half is deliberate and earned: the misread happened, so the contrast is worth
+// more than the extra sentence.
 export const QUIZ_PROBLEM_HELP =
-  'However you would say it to someone at a dinner party. This is carried into Step 1 exactly as you write it.'
+  'Their problem, in the words they would use — not the problem you are working on in your own business. However you would say it to someone at a dinner party; it carries into Step 1 exactly as you write it.'
 
 // Human-readable pillar names, here rather than in the frontend so the results
 // screen, the gap line and any future email all say the same word.

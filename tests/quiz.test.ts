@@ -324,6 +324,44 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
     ok('no option carries its points on the wire', !questions.some((q) => q.options.some((o) => 'points' in o)), wire)
     ok('and no pillar is disclosed either', !/"pillar"/.test(wire), wire)
 
+    // THE PIVOT. Seven questions ask about the coach and this one asks about
+    // their clients. On the first real run the person who SPECIFIED the feature
+    // answered it with his own problem — "I have a problem asking people for
+    // money and closing the deal" — which is the strongest evidence available
+    // that coaches will. The cause is momentum, not wording: the switch of
+    // subject was unmarked.
+    ok('the subject change is served as its own field', typeof served.body?.problem_question?.pivot === 'string' && served.body.problem_question.pivot.length > 0, JSON.stringify(served.body?.problem_question))
+    ok('and it says the subject is changing', /changes subject/i.test(served.body?.problem_question?.pivot || ''), served.body?.problem_question?.pivot)
+    ok('naming what came before as being about them', /about you and your business/i.test(served.body?.problem_question?.pivot || ''))
+    ok('and this one as being about the people they help', /about the people you help/i.test(served.body?.problem_question?.pivot || ''))
+    ok('it is NOT folded into the prompt', !/changes subject/i.test(served.body?.problem_question?.prompt || ''), 'the pivot was merged into the question, which is the thing being skimmed past')
+
+    // The prompt itself must not read as "what problem are you working on".
+    // "you" as the grammatical subject is what the old wording had, and after
+    // seven questions about the coach that reading wins.
+    const prompt = served.body?.problem_question?.prompt || ''
+    ok('the question puts the people they help in the subject position', /^What problem do the people you help/.test(prompt), prompt)
+    ok('and the old wording is gone', !/what problem do you help people solve/i.test(prompt), prompt)
+
+    const help = served.body?.problem_question?.help || ''
+    ok('the help text says WHOSE problem it is', /their problem/i.test(help), help)
+    ok('and names the misreading explicitly', /not the problem you are working on/i.test(help), help)
+    ok('while keeping the verbatim promise', /exactly as you write it/i.test(help), help)
+
+    // EVERY HUMAN-READABLE STRING IN THE PAYLOAD, counted. Pinned so the
+    // frontend's grep total moves deliberately rather than silently — adding
+    // copy here is a number that changes in one place on purpose.
+    const copyStrings = [
+      ...questions.map((q) => q.prompt),
+      ...questions.flatMap((q) => q.options.map((o) => o.label)),
+      served.body?.problem_question?.pivot,
+      served.body?.problem_question?.prompt,
+      served.body?.problem_question?.help,
+    ].filter((x) => typeof x === 'string' && x.length > 0)
+    console.log(`      served copy strings: ${copyStrings.length}`)
+    ok(`the payload serves 43 copy strings (8 prompts + 32 options + pivot/prompt/help)`, copyStrings.length === 43, `${copyStrings.length}`)
+    ok('and none of them is blank', copyStrings.every((x) => String(x).trim().length > 0))
+
     // The open question travels with them, separately, because it is not scored
     // and must not be rendered into the scored loop.
     ok('the open question is served', served.body?.problem_question?.prompt === QUIZ_PROBLEM_PROMPT, JSON.stringify(served.body?.problem_question))
