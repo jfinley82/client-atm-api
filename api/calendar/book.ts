@@ -275,7 +275,7 @@ async function bookGooglePath(
   // domain so /api/ reaches the real function rather than the renderer.
   const manageUrl = buildBookingManageUrl(reserved.id as string, (funnelRow.subdomain as string) || null)
 
-  await sendBookingConfirmationEmail({ email, name, startLabel, joinUrl: meetingUrl, icsContent: ics, funnelId: funnelRow.id as string, leadId, coachUserId: owner, manageUrl })
+  await sendBookingConfirmationEmail({ email, name, startLabel, joinUrl: meetingUrl, icsContent: ics, funnelId: funnelRow.id as string, leadId, coachUserId: owner, manageUrl, bookingId: reserved.id as string })
   await sendCoachBookingNotification({
     funnel: funnelRow,
     bookingId: reserved.id as string,
@@ -448,6 +448,7 @@ async function bookLegacyPath(
     // Five reminders with no way out is how a cancellation becomes a no-show, so
     // the manage link rides on the confirmation for public bookings too.
     manageUrl: buildBookingManageUrl(reserved.id as string, (funnelRow?.subdomain as string) || null),
+    bookingId: reserved.id as string,
     ...(funnelRow ? { funnelId: funnelRow.id as string, leadId, coachUserId: funnelRow.user_id as string } : {}),
   })
 

@@ -162,6 +162,45 @@ async function schedule(startOffsetMs: number, over: Record<string, unknown> = {
     ok('five minutes more and the 1h reminder is scheduled', JSON.stringify(r2.kinds) === JSON.stringify(['reminder_1h']), JSON.stringify(r2.kinds))
   }
 
+  console.log('\n-- no reminder lands within a day of the booking --')
+  // A booking 7.5 days out would otherwise get "your call is next week" twelve
+  // hours after its confirmation, which reads like a system with no memory of
+  // the email it just sent.
+  {
+    const r = await schedule(7.5 * DAY)
+    ok('the 1-week reminder is dropped', !r.kinds.includes('reminder_1w'), JSON.stringify(r.kinds))
+    ok('the rest survive', JSON.stringify(r.kinds) === JSON.stringify(['reminder_3d', 'reminder_24h', 'reminder_1h']), JSON.stringify(r.kinds))
+
+    // Exactly 8 days: the 1-week lands at +24h, which is the boundary and is kept.
+    const eight = await schedule(8 * DAY)
+    ok('at 8 days out all four are kept', eight.rows.length === 4, JSON.stringify(eight.kinds))
+
+    // The gap is scoped to the HORIZON reminders. A blanket rule would have
+    // dropped the 1-hour reminder for any booking made under 25 hours ahead —
+    // the most valuable email here, killed for exactly the people most likely to
+    // forget. Proximity reminders stay.
+    const thirty = await schedule(30 * HOUR)
+    ok('a 30-hour booking keeps both proximity reminders', JSON.stringify(thirty.kinds) === JSON.stringify(['reminder_24h', 'reminder_1h']), JSON.stringify(thirty.kinds))
+
+    const dayAhead = await schedule(24 * HOUR)
+    ok('a call booked for tomorrow still gets its 1-hour nudge', dayAhead.kinds.includes('reminder_1h'), JSON.stringify(dayAhead.kinds))
+
+    const sameDay = await schedule(6 * HOUR)
+    ok('and so does one booked six hours ahead', JSON.stringify(sameDay.kinds) === JSON.stringify(['reminder_1h']), JSON.stringify(sameDay.kinds))
+
+    // The rule only ever removes touches — it never moves one.
+    const ten = await schedule(10 * DAY)
+    ok('a 10-day booking is untouched by the gap', ten.rows.length === 4, JSON.stringify(ten.kinds))
+    ok(
+      'and every scheduled time is still exactly its offset before the call',
+      ten.rows.every((x) => {
+        const before = NOW + 10 * DAY - Date.parse(x.scheduled_at)
+        return [7 * DAY, 3 * DAY, 24 * HOUR, 1 * HOUR].includes(before)
+      }),
+      JSON.stringify(ten.rows.map((x) => x.scheduled_at))
+    )
+  }
+
   console.log('\n-- acceptance 6: a funnel booking gets the same five, and keeps its ids --')
   {
     const r = await schedule(10 * DAY, { funnelId: 'funnel-1', leadId: 'lead-1' })
@@ -225,6 +264,62 @@ async function schedule(startOffsetMs: number, over: Record<string, unknown> = {
     await scheduleBookingReminders({ ...base(), startIso: 'not-a-date' } as any)
     ok('an unparseable start is a no-op too', sendRows.length === 0)
     void bad
+  }
+
+  console.log('\n-- the confirmation: manage link present, send row recorded --')
+  // Both were computed, passed, and dropped. sendBookingConfirmationEmail has
+  // TWO templates and only the coach-branded one rendered the manage sentence;
+  // the plain MTM one — which is the entire public path — did not. And the send
+  // row was gated on funnelId, so a public confirmation was sent and never
+  // tracked, which is what makes a BOUNCED confirmation invisible.
+  {
+    const { sendBookingConfirmationEmail } = await import('../lib/email')
+
+    sendRows = []
+    resendCalls = []
+    await sendBookingConfirmationEmail({
+      email: 'visitor@example.com',
+      name: 'Visitor',
+      startLabel: 'Tuesday, September 8, 2026 at 6:30 PM America/Chicago',
+      joinUrl: 'https://zoom.us/j/1',
+      icsContent: 'BEGIN:VCALENDAR',
+      manageUrl: 'https://api.example.com/api/funnel/booking?token=t',
+      bookingId: 'booking-1',
+    })
+
+    ok('the public confirmation was sent', resendCalls.length === 1, String(resendCalls.length))
+    ok(
+      'and carries the reschedule/cancel link',
+      String(resendCalls[0]?.html).includes('reschedule or cancel'),
+      'manage link dropped — the plain MTM template never rendered it'
+    )
+    ok('pointing at the real manage URL', String(resendCalls[0]?.html).includes('api/funnel/booking?token=t'))
+    ok('a send row is recorded with no funnel', sendRows.length === 1 && sendRows[0].funnel_id === null, JSON.stringify(sendRows))
+    ok('of kind booking_confirmation', sendRows[0]?.kind === 'booking_confirmation', JSON.stringify(sendRows[0]?.kind))
+    ok('carrying the booking_id, so one booking is one group', sendRows[0]?.booking_id === 'booking-1', JSON.stringify(sendRows[0]?.booking_id))
+    ok(
+      "status 'sent', which cancelBookingReminders never touches",
+      sendRows[0]?.status === 'sent',
+      JSON.stringify(sendRows[0]?.status)
+    )
+
+    // Acceptance 1 counts FIVE rows for a booking 10 days out: the confirmation
+    // plus four reminders. Assert the total the way the acceptance reads it.
+    sendRows = []
+    resendCalls = []
+    await sendBookingConfirmationEmail({
+      email: 'visitor@example.com',
+      name: 'Visitor',
+      startLabel: 'x',
+      joinUrl: 'https://zoom.us/j/1',
+      icsContent: 'BEGIN:VCALENDAR',
+      manageUrl: 'https://api.example.com/api/funnel/booking?token=t',
+      bookingId: 'booking-1',
+    })
+    const confirmationRows = sendRows.length
+    await scheduleBookingReminders({ ...base(), startIso: new Date(NOW + 10 * DAY).toISOString() } as any)
+    ok('five rows in total for a 10-day public booking', confirmationRows + 4 === 5 && sendRows.length === 5, `${sendRows.length}`)
+    ok('all five carry the same booking_id', sendRows.every((r) => r.booking_id === 'booking-1'), JSON.stringify(sendRows.map((r) => r.booking_id)))
   }
 
   globalThis.fetch = realFetch

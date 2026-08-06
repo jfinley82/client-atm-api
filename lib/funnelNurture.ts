@@ -260,11 +260,28 @@ export async function pivotToBookACall(funnel: Funnel, leadId: string, email: st
 // There is no cron. scheduleFunnelEmail hands scheduledAt to Resend, which does
 // the scheduling, and records a queued row carrying the Resend message id so
 // cancelBookingReminders can stop it later.
-const BOOKING_REMINDERS: { kind: string; before: number; heading: string }[] = [
-  { kind: 'reminder_1w', before: 7 * DAY, heading: 'Your call is next week' },
-  { kind: 'reminder_3d', before: 3 * DAY, heading: 'Your call is in 3 days' },
-  { kind: 'reminder_24h', before: 24 * HOUR, heading: 'Your call is tomorrow' },
-  { kind: 'reminder_1h', before: 1 * HOUR, heading: 'Your call is in 1 hour' },
+// The minimum gap between the confirmation and a HORIZON reminder.
+//
+// A booking made 7.5 days out would otherwise get "your call is next week" about
+// twelve hours after its confirmation — a system with no memory of the email it
+// just sent. These two reminders say nothing except "this is still a while
+// away", which is exactly the claim a fresh confirmation has already made.
+//
+// APPLIED PER REMINDER, not to the set, because a blanket gap does real damage.
+// At 24 hours it would drop the 1-hour reminder for any booking made less than
+// 25 hours ahead — someone booking a call for tomorrow morning would get no
+// nudge before it. That is the single most valuable email here for preventing a
+// no-show, and its worth comes from being close to the CALL, not from being far
+// from the booking. The same argument covers the 24-hour reminder: "your call is
+// tomorrow" is a proximity alert, and it is still true and still useful six
+// hours after someone books.
+const MIN_GAP_AFTER_BOOKING_MS = 24 * HOUR
+
+const BOOKING_REMINDERS: { kind: string; before: number; heading: string; horizon: boolean }[] = [
+  { kind: 'reminder_1w', before: 7 * DAY, heading: 'Your call is next week', horizon: true },
+  { kind: 'reminder_3d', before: 3 * DAY, heading: 'Your call is in 3 days', horizon: true },
+  { kind: 'reminder_24h', before: 24 * HOUR, heading: 'Your call is tomorrow', horizon: false },
+  { kind: 'reminder_1h', before: 1 * HOUR, heading: 'Your call is in 1 hour', horizon: false },
 ]
 
 export type BookingReminderContext = {
@@ -329,6 +346,7 @@ export async function scheduleBookingReminders(ctx: BookingReminderContext): Pro
     for (const r of BOOKING_REMINDERS) {
       const at = startMs - r.before
       if (at <= nowMs + 60_000) continue // in the past / too soon to schedule
+      if (r.horizon && at - nowMs < MIN_GAP_AFTER_BOOKING_MS) continue // reads as redundant next to the confirmation
       const bodyHtml = `
           <p style="margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;">A quick reminder about your call:</p>
           <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#0B1120;font-weight:bold;">${escapeHtml(label)}</p>${manageLine}`

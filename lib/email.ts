@@ -855,6 +855,7 @@ export async function sendBookingConfirmationEmail(opts: {
   leadId?: string | null
   coachUserId?: string
   manageUrl?: string
+  bookingId?: string
 }): Promise<void> {
   try {
     const kind = 'booking_confirmation'
@@ -899,7 +900,7 @@ export async function sendBookingConfirmationEmail(opts: {
           </tr></table>
           <p style="margin:26px 0 6px; font-family:Arial,Helvetica,sans-serif; font-size:13px; line-height:20px; color:#8A94A6;">Or paste this link into your browser:</p>
           <p style="margin:0; font-family:Arial,Helvetica,sans-serif; font-size:13px; line-height:20px; word-break:break-all;"><a href="${escapeHtml(opts.joinUrl)}" target="_blank" style="color:#3B7A16; text-decoration:none;">${escapeHtml(opts.joinUrl)}</a></p>
-          <p style="margin:24px 0 0; font-family:Arial,Helvetica,sans-serif; font-size:13px; line-height:20px; color:#8A94A6;">The attached calendar file will add this to your calendar.</p>
+          <p style="margin:24px 0 0; font-family:Arial,Helvetica,sans-serif; font-size:13px; line-height:20px; color:#8A94A6;">The attached calendar file will add this to your calendar.</p>${manageSentence(opts.manageUrl)}
         </td></tr>
         <tr><td style="padding-top:24px; padding-left:8px;">
           <p style="margin:0; font-family:Arial,Helvetica,sans-serif; font-size:12px; line-height:20px; color:#98A2B3;">Micro-Training Method</p>
@@ -916,18 +917,28 @@ export async function sendBookingConfirmationEmail(opts: {
       ...(replyTo ? { replyTo } : {}),
       subject: 'Your call is booked',
       attachments: [{ filename: 'invite.ics', content: Buffer.from(opts.icsContent) }],
-      ...(opts.funnelId ? { tags: funnelTags(opts.funnelId, opts.leadId, kind) } : {}),
+      tags: funnelTags(opts.funnelId, opts.leadId, kind),
       html,
     })
-    if (opts.funnelId) {
-      await recordFunnelEmailSend({
-        funnelId: opts.funnelId,
-        leadId: opts.leadId ?? null,
-        kind,
-        messageId: data?.id ?? null,
-        status: error ? 'failed' : 'sent',
-      })
-    }
+    // RECORDED WHETHER OR NOT THERE IS A FUNNEL. This used to be gated on
+    // opts.funnelId, so a public booking's confirmation was sent and never
+    // tracked — the send row is what api/webhooks/resend.ts matches delivery,
+    // bounce and open events against, so an untracked confirmation means a
+    // BOUNCED confirmation is invisible. That is the one email whose failure
+    // means the visitor never received their join link.
+    //
+    // It carries booking_id like the reminders, so one booking's mail is one
+    // group. cancelBookingReminders only touches status 'queued', and a
+    // confirmation is 'sent' the moment it goes, so recording it here cannot put
+    // it in the path of a cancel.
+    await recordFunnelEmailSend({
+      funnelId: opts.funnelId ?? null,
+      leadId: opts.leadId ?? null,
+      kind,
+      messageId: data?.id ?? null,
+      status: error ? 'failed' : 'sent',
+      bookingId: opts.bookingId ?? null,
+    })
     if (error) throw new Error(error.message)
   } catch (err) {
     console.error(`[email] booking confirmation send failed (to=${opts.email})`, err)

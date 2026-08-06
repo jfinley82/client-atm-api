@@ -154,6 +154,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       joinUrl: meetingUrl,
       icsContent: ics,
       manageUrl,
+      bookingId: booking.id,
       ...(ctx.funnel ? { funnelId: String(ctx.funnel.id), leadId: ctx.leadId } : {}),
       ...(coach ? { coachUserId: coach } : {}),
     })
