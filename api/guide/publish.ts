@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { storeGuidePdf } from '../../lib/guideStorage'
+import { DIRECT_UPLOAD_MAX_BYTES, DIRECT_UPLOAD_MAX_LABEL, readBoundedBody, respondTooLarge, tooLargeMessage } from '../../lib/rawBody'
 
 // POST /api/guide/publish?card_id=... — body is the raw PDF bytes, Content-Type
 // application/pdf. Vercel's default JSON body parser can't handle that, so
@@ -13,27 +14,11 @@ export const config = {
   api: { bodyParser: false },
 }
 
-const MAX_BYTES = 10 * 1024 * 1024 // 10MB
-
-// Reads the request body into a Buffer, aborting once MAX_BYTES is exceeded so an
-// oversized upload can't be accumulated into memory unbounded.
-function readBoundedBody(req: VercelRequest): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let total = 0
-    req.on('data', (chunk: Buffer) => {
-      total += chunk.length
-      if (total > MAX_BYTES) {
-        req.destroy()
-        reject(new Error('file_too_large'))
-        return
-      }
-      chunks.push(chunk)
-    })
-    req.on('end', () => resolve(Buffer.concat(chunks)))
-    req.on('error', reject)
-  })
-}
+// 4MB, not the 10MB this once claimed — see lib/rawBody.ts. Vercel's ~4.5MB
+// edge cap made the old limit unreachable, so a large Guide PDF failed as an
+// unexplained network error rather than the 400 below. A PDF that genuinely
+// exceeds this needs the signed-URL treatment lib/uploadUrl.ts gives images.
+const MAX_BYTES = DIRECT_UPLOAD_MAX_BYTES
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
@@ -56,10 +41,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     let buffer: Buffer
     try {
-      buffer = await readBoundedBody(req)
+      buffer = await readBoundedBody(req, MAX_BYTES)
     } catch (readErr) {
       if (readErr instanceof Error && readErr.message === 'file_too_large') {
-        return res.status(400).json({ error: 'PDF must be 10MB or smaller' })
+        return respondTooLarge(res, tooLargeMessage('PDF'))
       }
       throw readErr
     }

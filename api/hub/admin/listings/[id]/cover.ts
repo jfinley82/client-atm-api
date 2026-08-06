@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../../../lib/supabase'
 import { requireAdmin } from '../../../../../lib/auth'
 import { setCors } from '../../../../../lib/cors'
+import { DIRECT_UPLOAD_MAX_BYTES, DIRECT_UPLOAD_MAX_LABEL, readBoundedBody, respondTooLarge, tooLargeMessage } from '../../../../../lib/rawBody'
 
 // POST /api/hub/admin/listings/[id]/cover — raw image bytes (Content-Type =
 // image/jpeg|png|webp). Mirrors api/auth/upload-avatar.ts: bodyParser off, 5MB
@@ -10,26 +11,10 @@ export const config = {
   api: { bodyParser: false },
 }
 
-const MAX_BYTES = 5 * 1024 * 1024 // 5MB
+// 4MB, not the 5MB this once claimed — see lib/rawBody.ts. Vercel's ~4.5MB
+// edge cap made the old limit unreachable.
+const MAX_BYTES = DIRECT_UPLOAD_MAX_BYTES
 const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-
-function readBoundedBody(req: VercelRequest): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let total = 0
-    req.on('data', (chunk: Buffer) => {
-      total += chunk.length
-      if (total > MAX_BYTES) {
-        req.destroy()
-        reject(new Error('file_too_large'))
-        return
-      }
-      chunks.push(chunk)
-    })
-    req.on('end', () => resolve(Buffer.concat(chunks)))
-    req.on('error', reject)
-  })
-}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
@@ -53,10 +38,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     let buffer: Buffer
     try {
-      buffer = await readBoundedBody(req)
+      buffer = await readBoundedBody(req, MAX_BYTES)
     } catch (readErr) {
       if (readErr instanceof Error && readErr.message === 'file_too_large') {
-        return res.status(400).json({ error: 'Image must be 5MB or smaller' })
+        return respondTooLarge(res, tooLargeMessage('Image'))
       }
       throw readErr
     }

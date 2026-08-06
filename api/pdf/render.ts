@@ -3,6 +3,7 @@ import chromium from '@sparticuz/chromium'
 import puppeteer from 'puppeteer-core'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
+import { DIRECT_UPLOAD_MAX_BYTES, DIRECT_UPLOAD_MAX_LABEL, readBoundedBody, respondTooLarge, tooLargeMessage } from '../../lib/rawBody'
 
 // @sparticuz/chromium is pinned to 133.0.0 — the last CommonJS release (137+ is
 // ESM-only) — with its matching puppeteer-core (Chrome 133). Both are CJS, so
@@ -28,36 +29,19 @@ import { setCors } from '../../lib/cors'
 // for this chromium function are set in vercel.json.
 export const config = { api: { bodyParser: false } }
 
-// Hard cap on the HTML document. Note Vercel's own request-body ceiling (~4.5MB)
-// applies first; this is the app-level guard and a clean 400.
-const MAX_HTML_BYTES = 6 * 1024 * 1024
+// Hard cap on the HTML document. This used to be 6MB "with Vercel's ~4.5MB
+// ceiling applying first" — which meant the app-level guard could never fire and
+// the only thing a member ever saw above 4.5MB was an unexplained network error.
+// The cap now sits UNDER the platform ceiling so the clean 400 below is reachable.
+// See lib/rawBody.ts.
+const MAX_HTML_BYTES = DIRECT_UPLOAD_MAX_BYTES
+const MAX_HTML_LABEL = DIRECT_UPLOAD_MAX_LABEL
 
 // Settle window after `load` so inlined data: URL webfonts finish decoding and
 // applying before page.pdf() captures. Inlined fonts decode in well under this;
 // generous enough to cover a cold, CPU-throttled lambda without meaningfully
 // affecting the (60s) budget.
 const FONT_SETTLE_MS = 800
-
-// Read the request body into a Buffer, aborting once the cap is exceeded so an
-// oversized payload can't be accumulated into memory unbounded. Mirrors the
-// bounded-read pattern in api/guide/publish.ts.
-function readBoundedBody(req: VercelRequest): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let total = 0
-    req.on('data', (chunk: Buffer) => {
-      total += chunk.length
-      if (total > MAX_HTML_BYTES) {
-        req.destroy()
-        reject(new Error('too_large'))
-        return
-      }
-      chunks.push(chunk)
-    })
-    req.on('end', () => resolve(Buffer.concat(chunks)))
-    req.on('error', reject)
-  })
-}
 
 // Remove <script> tags. Script execution is already disabled on the page, so this
 // is defense in depth — the document should be pure markup + CSS + data: URLs.
@@ -90,11 +74,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Read + parse the JSON body under the size cap.
   let body: Record<string, unknown>
   try {
-    const raw = await readBoundedBody(req)
+    const raw = await readBoundedBody(req, MAX_HTML_BYTES)
     body = JSON.parse(raw.toString('utf8') || '{}') as Record<string, unknown>
   } catch (err) {
-    if (err instanceof Error && err.message === 'too_large') {
-      return res.status(400).json({ error: 'html too large (max 6MB)' })
+    if (err instanceof Error && err.message === 'file_too_large') {
+      return respondTooLarge(res, `html too large (max ${MAX_HTML_LABEL})`)
     }
     return res.status(400).json({ error: 'Invalid JSON body' })
   }
@@ -104,7 +88,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'html required' })
   }
   if (Buffer.byteLength(html, 'utf8') > MAX_HTML_BYTES) {
-    return res.status(400).json({ error: 'html too large (max 6MB)' })
+    return respondTooLarge(res, `html too large (max ${MAX_HTML_LABEL})`)
   }
 
   const format: 'Letter' | 'A4' = body.format === 'A4' ? 'A4' : 'Letter'

@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { requireActiveUser } from '../lib/auth'
 import { setCors } from '../lib/cors'
 import { logAudioCost } from '../lib/apiCostLog'
+import { DIRECT_UPLOAD_MAX_BYTES, readBoundedBody, respondTooLarge, tooLargeMessage } from '../lib/rawBody'
 
 // POST /api/transcribe — a pure "audio in, text out" service shared by every
 // voice-input surface (Voice & Style Guide, the Step 1-3 tool chats, MTM
@@ -25,11 +26,22 @@ export const config = {
   api: { bodyParser: false },
 }
 
-// Comfortably below Groq's own 25MB hard limit. Not a real constraint on
-// legitimate use — even low-bitrate opus (~24kbps) is roughly 1.5MB/minute,
-// so 20MB covers well over 3 hours of a single spoken answer. This is a
-// safety cap against a runaway or corrupt upload, not a UX limit.
-const MAX_BYTES = 20 * 1024 * 1024
+// THIS IS A REAL UX LIMIT NOW, AND THE OLD COMMENT WAS WRONG.
+//
+// It used to read: "Comfortably below Groq's own 25MB hard limit. Not a real
+// constraint on legitimate use — even low-bitrate opus (~24kbps) is roughly
+// 1.5MB/minute, so 20MB covers well over 3 hours of a single spoken answer."
+// Groq's limit was never the binding one. Vercel refuses a serverless request
+// body over roughly 4.5MB at the edge (see lib/rawBody.ts), so 20MB was
+// unreachable code and the true ceiling has always been ~4.5MB — about three
+// minutes of opus, not three hours.
+//
+// Capping at 4MB removes nothing that worked; it makes the refusal reachable, so
+// a member who talks past the limit gets audio_too_large instead of a silent
+// network failure. Lifting it for real means getting this function out of the
+// transfer path — the audio would have to go to storage via a signed URL (see
+// lib/uploadUrl.ts) and be fetched server-side, or be chunked client-side.
+const MAX_BYTES = DIRECT_UPLOAD_MAX_BYTES
 
 // Every content-type MediaRecorder actually emits across browsers (Chrome/
 // Edge/Firefox default to webm/opus, Firefox can also emit ogg, Safari emits
@@ -48,27 +60,6 @@ const CONTENT_TYPE_EXT: Record<string, string> = {
 }
 
 const GROQ_MODEL = 'whisper-large-v3'
-
-// Reads the request body into a Buffer, aborting once MAX_BYTES is exceeded
-// so an oversized upload can't be accumulated into memory unbounded — same
-// idiom as api/auth/upload-avatar.ts's readBoundedBody.
-function readBoundedBody(req: VercelRequest): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let total = 0
-    req.on('data', (chunk: Buffer) => {
-      total += chunk.length
-      if (total > MAX_BYTES) {
-        req.destroy()
-        reject(new Error('file_too_large'))
-        return
-      }
-      chunks.push(chunk)
-    })
-    req.on('end', () => resolve(Buffer.concat(chunks)))
-    req.on('error', reject)
-  })
-}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
@@ -90,10 +81,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   let buffer: Buffer
   try {
-    buffer = await readBoundedBody(req)
+    buffer = await readBoundedBody(req, MAX_BYTES)
   } catch (readErr) {
     if (readErr instanceof Error && readErr.message === 'file_too_large') {
-      return res.status(400).json({ error: 'audio_too_large' })
+      return respondTooLarge(res, 'audio_too_large')
     }
     console.error('[transcribe] body read failed', readErr)
     return res.status(500).json({ error: 'transcription_failed' })

@@ -161,6 +161,35 @@ read-path transforms need the same care as write-path ones, and `original` is
 excluded from `sanitizePhrasingDeep`'s walk so a read→save cycle can't launder
 mangled copy into the baseline that detects coach edits.
 
+**A size refusal that can't be detected by status code.** Supabase answers an
+oversize signed-URL PUT with **HTTP 400 carrying `"statusCode":"413"` in the
+body**, so `res.status === 413` is false on exactly the case that needs
+handling. The signing endpoints therefore require `size`, so a legitimate
+oversize file is refused by *us* with a real 413 before any transfer; storage's
+own refusal is then only reachable by a client that declared one size and sent
+another. Related: seven endpoints shared the too-large condition and disagreed
+about its status (two 413, five 400) — invisible while every message was
+readable, live the moment a frontend keys on the status. `lib/rawBody.ts` owns
+the number, the message **and** the status; collapsing duplicates in one
+dimension just moves the drift into the next one.
+
+**An upload fails as a network error with no status, and the handler's own limit
+never fires.** Vercel refuses a serverless request body over ~4.5MB **at the
+edge** — the function is never invoked, so no handler code runs and nothing it
+would have written is sent. Any `MAX_BYTES` above that is unreachable code
+pretending to be a limit; six endpoints here had one (5MB, 10MB, 20MB, and a
+6MB whose comment even acknowledged the ceiling). `lib/rawBody.ts` owns the
+number now and `tests/uploadLimits.test.ts` fails on any new literal cap.
+The tell in timing: an oversized request fails **faster** than a smaller one
+succeeds, because it dies before the transfer completes. Bracket one size above
+and one below before theorising about the handler — a mechanism that fits the
+symptom is not evidence the request ever arrived. Past the cap the frontend's
+size check is the only thing that can produce a readable error, because the
+server never gets to speak. To actually carry more, the function has to leave
+the transfer path: `lib/uploadUrl.ts` mints a signed URL the browser PUTs to
+directly. That moves size/mime enforcement onto the bucket, which is why
+migration 087 exists — signed URLs without it are an unbounded write endpoint.
+
 **Two renderings of the same thing drift apart, and it looks fine wherever you
 test.** The email CTA button is emitted twice — a VML branch only Outlook draws,
 an anchor branch everyone else draws — and the VML shipped 44px tall against the
