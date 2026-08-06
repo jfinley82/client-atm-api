@@ -64,6 +64,8 @@ const rawKeys = [...new Set([...fnSrc.matchAll(/\braw\.([a-z_][a-z0-9_]*)/gi)].m
 //    its served type — so the type comes from behaviour, not from a guess.
 // ---------------------------------------------------------------------------
 const PROBE_STRING = '~probe~'
+// personaAvatarUrl is COMPUTED, not passed through, so no probe value "matches"
+// it — it is recorded from the actual output below alongside avatar_gender.
 const shapes = {
   string: () => PROBE_STRING,
   'string[]': () => [PROBE_STRING],
@@ -106,12 +108,21 @@ const innerShapes = new Map() // servedName -> [{ key, type }]
   }
 }
 
-// avatar_gender is set unconditionally to an enum, so no probe shape "matches"
-// it — record it from the actual output.
+// COMPUTED OUTPUTS, recorded from the actual output rather than by matching a
+// probe value. avatar_gender is an enum and personaAvatarUrl is a URL built from
+// the seed — neither echoes what was fed in, so neither is captured by the
+// shape-matching loop above. Probed WITH the raw fields present, because
+// personaAvatarUrl only exists once there is a seed to build it from.
 {
-  const out = deriveAudienceDisplayFields({})
-  for (const [key, value] of Object.entries(out)) {
-    if (!served.has(key)) served.set(key, { type: typeof value === 'string' ? 'string (enum)' : typeof value })
+  const withFields = Object.fromEntries(rawKeys.map((k) => [k, PROBE_STRING]))
+  for (const probe of [withFields, {}]) {
+    const out = deriveAudienceDisplayFields(probe)
+    for (const [key, value] of Object.entries(out)) {
+      if (served.has(key)) continue
+      const type =
+        key === 'avatar_gender' ? 'string (enum)' : typeof value === 'string' ? 'string (url)' : typeof value
+      served.set(key, { type })
+    }
   }
 }
 
@@ -128,6 +139,7 @@ const SECTIONS = {
   avatar_gender: ['Avatar hero', 'avatar_gender (or inferred from avatarName)'],
   problemStatement: ['Avatar hero', 'problem_statement'],
   connectionSummary: ['Avatar hero', 'connection_summary'],
+  personaAvatarUrl: ['Avatar hero', '(computed) avatar_name + avatar_gender, or the coach id'],
   whoTheyAre: ['Avatar hero', 'who_they_are'],
   theirWorld: ['Avatar hero', 'their_world'],
   emotionalState: ['Avatar hero', 'emotional_state'],
@@ -166,6 +178,11 @@ if (unmapped.length || unserved.length) {
 const camelise = (s) => s.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
 const surprises = [...served.keys()]
   .filter((k) => SECTIONS[k])
+  // A COMPUTED key has no raw source to be a camelisation OF, so it cannot be a
+  // surprise in this sense and must not swell the list — the guesses-wrong table
+  // is specifically about names a reader would derive from a raw key and get
+  // wrong. personaAvatarUrl is documented in its own right instead.
+  .filter((k) => !SECTIONS[k][1].startsWith('(computed)'))
   .map((k) => ({ servedName: k, rawKey: SECTIONS[k][1].split(' ')[0] }))
   .filter(({ servedName, rawKey }) => camelise(rawKey) !== servedName && servedName !== rawKey)
 

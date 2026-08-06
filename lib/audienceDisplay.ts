@@ -1,4 +1,4 @@
-import { genderFromName, AvatarGender } from './avatars'
+import { genderFromName, AvatarGender, avatarUrlForSeed, personaSeedFromAudience } from './avatars'
 
 // The audience profile's DISPLAY subset, and the read-time application of it.
 //
@@ -22,7 +22,10 @@ import { genderFromName, AvatarGender } from './avatars'
 // (painPoints/fearsAndDoubts/objections/... camelCase aliases) on the finalized
 // audience profile that the incremental chat derives on each turn — one source
 // of truth for the report panel's shape. Additive export only.
-export function deriveAudienceDisplayFields(raw: Record<string, unknown>): Record<string, unknown> {
+export function deriveAudienceDisplayFields(
+  raw: Record<string, unknown>,
+  userId?: string
+): Record<string, unknown> {
   const asString = (v: unknown): string | null => (typeof v === 'string' && v.trim().length > 0 ? v : null)
   const asStringArray = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
@@ -199,6 +202,28 @@ export function deriveAudienceDisplayFields(raw: Record<string, unknown>): Recor
   if (languageSolution.length > 0) derived.languageSolution = languageSolution
   if (otherAngles.length > 0) derived.otherAngles = otherAngles
   if (monetizeBridge !== null) derived.monetizeBridge = monetizeBridge
+
+  // THE PERSONA'S FACE, resolved server-side.
+  //
+  // NAMED personaAvatarUrl, NOT avatarUrl. `users.avatar_url` is the COACH's own
+  // account photo — the private field this repo spent a day keeping off public
+  // surfaces — and a key called `avatarUrl` sitting on a profile payload is one
+  // careless read away from somebody wiring the wrong one. This is the invented
+  // PERSONA's face, and the name says so. It also matches the helper it comes
+  // from, personaSeedFromAudience.
+  //
+  // Derived here rather than chosen client-side because the seed IS the identity:
+  // the same persona must resolve to the same face on the Audience band, the
+  // Launch persona tile and every Launch library card. A client-side pick would
+  // give one coach's single persona a different face per surface, which is the
+  // exact thing the seed exists to prevent.
+  //
+  // Seeded from avatar_name when there is one, falling back to the coach's id so
+  // the face is stable even before a persona has been named — personaSeedFromAudience
+  // owns that rule, and it is not restated here.
+  const personaSeed = personaSeedFromAudience(raw, userId ?? '')
+  if (personaSeed) derived.personaAvatarUrl = avatarUrlForSeed(personaSeed, avatarGender)
+
   return derived
 }
 
@@ -229,8 +254,8 @@ export function deriveAudienceDisplayFields(raw: Record<string, unknown>): Recor
  * becoming an empty profile, which is how callers tell "no conversation yet"
  * from "a conversation with nothing in it".
  */
-export function audienceForDisplay<T>(content: T): T {
+export function audienceForDisplay<T>(content: T, userId?: string): T {
   if (!content || typeof content !== 'object' || Array.isArray(content)) return content
   const raw = content as Record<string, unknown>
-  return { ...raw, ...deriveAudienceDisplayFields(raw) } as T
+  return { ...raw, ...deriveAudienceDisplayFields(raw, userId) } as T
 }

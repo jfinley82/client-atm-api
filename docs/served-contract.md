@@ -57,7 +57,7 @@ a surprise.
 
 ## Step 1 Attract — `saved_outputs.content` where `tool_type = 'audience'`
 
-Read these. 26 keys, across the twelve sections of §14.
+Read these. 27 keys, across the twelve sections of §14.
 
 ### Avatar hero
 
@@ -68,6 +68,7 @@ Read these. 26 keys, across the twelve sections of §14.
 | `connectionSummary` | string | `connection_summary` |
 | `emotionalState` | string | `emotional_state` |
 | `internalDialogue` | string | `internal_dialogue` |
+| `personaAvatarUrl` | string (url) | `(computed) avatar_name + avatar_gender, or the coach id` |
 | `problemStatement` | string | `problem_statement` |
 | `theirWorld` | string | `their_world` |
 | `triggeringMoment` | string | `triggering_moment` |
