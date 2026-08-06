@@ -4,8 +4,9 @@ import { requireActiveUser } from '../../lib/auth'
 import { setCors, noStore } from '../../lib/cors'
 import { normalizeProblemStatement, scoreQuiz, validateQuizAnswers } from '../../lib/quizScoring'
 
-// POST /api/quiz/analyze — authenticated. The whole quiz submission: seven
-// letters plus the open problem question.
+// POST /api/quiz/analyze — authenticated. The whole quiz submission: one
+// letter per multiple-choice question plus the open problem question. The set of
+// questions is lib/quizScoring.ts's, never a count written down here.
 //
 // Body: { answers: { client_flow: 'a', … }, problem_statement?: string }
 //

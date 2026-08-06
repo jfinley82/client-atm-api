@@ -6,11 +6,20 @@ import { createSessionToken } from '../lib/auth'
 import {
   MONIKER_BANDS,
   QUIZ_PILLARS,
+  QUIZ_PROBLEM_PROMPT,
   QUIZ_QUESTIONS,
   QUIZ_QUESTION_IDS,
+  assertGapFloorMatchesTopBand,
   assertMonikerBandsCoverEveryScore,
-  lowestPillar,
+  assertPointsTablesAreWellFormed,
+  FOCUS_QUESTION,
+  GAP_FLOOR,
+  CAPACITY_EVIDENCE_FLOOR,
+  MATERIAL_MARGIN,
+  SCORED_QUESTIONS,
+  focusStanding,
   normalizeProblemStatement,
+  pointsFor,
   scoreQuiz,
   validateQuizAnswers,
 } from '../lib/quizScoring'
@@ -172,6 +181,7 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
 ;(async () => {
   const analyze: Handler = (await import('../api/quiz/analyze')).default
   const getQuiz: Handler = (await import('../api/quiz/index')).default
+  const getQuestions: Handler = (await import('../api/quiz/questions')).default
 
   async function post(userId: string, body: unknown) {
     const r = makeRes()
@@ -189,14 +199,16 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
 
   console.log('\n-- the scoring table is complete and self-consistent --')
   {
-    ok('seven scored questions', QUIZ_QUESTIONS.length === 7, `${QUIZ_QUESTIONS.length}`)
-    ok('every question belongs to a pillar', QUIZ_QUESTIONS.every((q) => QUIZ_PILLARS.includes(q.pillar)))
-    ok('every pillar has at least one question', QUIZ_PILLARS.every((p) => QUIZ_QUESTIONS.some((q) => q.pillar === p)))
-    ok('no duplicate question ids', new Set(QUIZ_QUESTION_IDS).size === 7)
-    ok(
-      'every question scores all four letters within 1-4',
-      QUIZ_QUESTIONS.every((q) => (['a', 'b', 'c', 'd'] as const).every((l) => q.points[l] >= 1 && q.points[l] <= 4))
-    )
+    // The intended SHAPE, spelled out — these are the spec, not incidentals.
+    // Everything else below derives its count so a question added or removed
+    // moves one number here and nothing else.
+    ok('eight questions are asked', QUIZ_QUESTIONS.length === 8, `${QUIZ_QUESTIONS.length}`)
+    ok('seven of them are scored', SCORED_QUESTIONS.length === 7, `${SCORED_QUESTIONS.length}`)
+    ok('Attract 3, Transform 2, Monetize 2', JSON.stringify(QUIZ_PILLARS.map((p) => SCORED_QUESTIONS.filter((q) => q.pillar === p).length)) === '[3,2,2]', JSON.stringify(QUIZ_PILLARS.map((p) => SCORED_QUESTIONS.filter((q) => q.pillar === p).length)))
+    ok('and exactly one names the gap', QUIZ_QUESTIONS.filter((q) => q.kind === 'focus').length === 1)
+    ok('every scored question belongs to a pillar', SCORED_QUESTIONS.every((q) => QUIZ_PILLARS.includes(q.pillar)))
+    ok('every pillar has at least one scored question', QUIZ_PILLARS.every((p) => SCORED_QUESTIONS.some((q) => q.pillar === p)))
+    ok('no duplicate question ids', new Set(QUIZ_QUESTION_IDS).size === QUIZ_QUESTIONS.length)
 
     // A composite with no moniker is a results screen with an empty headline.
     // Checked across all 101 values rather than by reading the bands.
@@ -204,6 +216,125 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
     ok('every composite 0-100 maps to exactly one moniker', gaps.length === 0, gaps.slice(0, 5).join('; '))
     ok('the bands are ordered and start at 0', MONIKER_BANDS[0].min === 0)
     ok('and end at 100', MONIKER_BANDS[MONIKER_BANDS.length - 1].max === 100)
+
+    // The band check's sibling. normalise derives a pillar's range from the
+    // QUESTION COUNT (n*1 to n*4), not from the points actually present, so a
+    // table that drifts out of 1-4 does not fail — it makes a pillar's floor
+    // unreachable, or pushes a composite past 100 into no band at all, throwing
+    // from monikerFor a long way from the edit that caused it.
+    const malformed = assertPointsTablesAreWellFormed()
+    ok('every question offers a 1 and a 4, all within 1-4', malformed.length === 0, malformed.join('; '))
+  }
+
+  console.log('\n-- the assumptions those two guards protect are real --')
+  {
+    // Mutating the real table would leak into every later block, so the failure
+    // modes are demonstrated on copies shaped like it. The point is to show the
+    // guards catch what they claim, not to trust the wording.
+    const noOne = { ...QUIZ_QUESTIONS[0], options: QUIZ_QUESTIONS[0].options.map((o) => ({ ...o, points: Math.max(o.points, 2) })) }
+    ok(
+      'a question with no 1 makes its floor unreachable',
+      !noOne.options.some((o) => o.points === 1),
+      'fixture no longer demonstrates the case'
+    )
+
+    const overFour = { ...QUIZ_QUESTIONS[0], options: QUIZ_QUESTIONS[0].options.map((o) => ({ ...o, points: o.points + 3 })) }
+    ok('and points above 4 are what would exceed 100', overFour.options.some((o) => o.points > 4))
+
+    // The band check would then be the thing that fires, which is the pairing:
+    // a composite outside 0-100 matches no band and monikerFor throws rather
+    // than returning a wrong headline.
+    let threw = false
+    try {
+      const { monikerFor } = await import('../lib/quizScoring')
+      monikerFor(140)
+    } catch {
+      threw = true
+    }
+    ok('an out-of-range composite throws rather than picking a band', threw)
+  }
+
+  console.log('\n-- ACCEPTANCE: the served questions and the scoring table are ONE source --')
+  // Asserted against each other, never separately. Two lists that agree today
+  // are two lists, and the failure this pins is silent: if the frontend owned
+  // the option text and wrote (a) as the strongest answer on any question, every
+  // score for that question would invert with no error anywhere.
+  {
+    const servedRes = makeRes()
+    await getQuestions(
+      { method: 'GET', headers: { authorization: `Bearer ${await createSessionToken(COACH)}` }, query: {} },
+      servedRes.res
+    )
+    const served = servedRes.out
+    ok('the question set is served', served.status === 200, `${served.status} ${JSON.stringify(served.body)}`)
+
+    const questions = (served.body?.questions || []) as Array<{ id: string; prompt: string; options: Array<{ letter: string; label: string }> }>
+    ok('all of them come back', questions.length === QUIZ_QUESTIONS.length, `${questions.length}`)
+    // The progress counter reads from this. A literal anywhere downstream would
+    // have gone stale when the scored set grew from six to seven.
+    ok('the total is echoed from the served set, not a literal', served.body?.total === QUIZ_QUESTIONS.length, `${served.body?.total} vs ${QUIZ_QUESTIONS.length}`)
+    ok('and it equals what was actually served', served.body?.total === questions.length, `${served.body?.total} vs ${questions.length}`)
+
+    // ONE: every served option maps to a points entry.
+    const unscored: string[] = []
+    for (const q of questions) {
+      const table = QUIZ_QUESTIONS.find((t) => t.id === q.id)
+      if (!table) {
+        unscored.push(`${q.id}: served but not in the scoring table`)
+        continue
+      }
+      for (const o of q.options) {
+        try {
+          pointsFor(table, o.letter as any)
+        } catch {
+          unscored.push(`${q.id}.${o.letter}: served but worth nothing`)
+        }
+      }
+    }
+    ok('every served option maps to a points entry', unscored.length === 0, unscored.join('; '))
+
+    // TWO: every points entry has served text.
+    const unrendered: string[] = []
+    for (const table of QUIZ_QUESTIONS) {
+      const q = questions.find((s) => s.id === table.id)
+      if (!q) {
+        unrendered.push(`${table.id}: scored but never served`)
+        continue
+      }
+      if (q.prompt !== table.prompt) unrendered.push(`${table.id}: served prompt differs from the table's`)
+      for (const o of table.options) {
+        const shown = q.options.find((s) => s.letter === o.letter)
+        if (!shown) unrendered.push(`${table.id}.${o.letter}: scored but not offered`)
+        else if (shown.label !== o.label) unrendered.push(`${table.id}.${o.letter}: served label differs from the table's`)
+      }
+    }
+    ok('every points entry has served text', unrendered.length === 0, unrendered.join('; '))
+
+    // Order is presentation only — the served sequence matches the table's, and
+    // scoring is keyed by id and letter so resequencing moves no score.
+    ok(
+      'served order matches the table order',
+      questions.map((q) => q.id).join(',') === QUIZ_QUESTION_IDS.join(','),
+      questions.map((q) => q.id).join(',')
+    )
+
+    // THE RUBRIC IS NOT PUBLISHED. Serving points would put the answer key on
+    // the page of a self-assessment.
+    const wire = JSON.stringify(served.body)
+    ok('no option carries its points on the wire', !questions.some((q) => q.options.some((o) => 'points' in o)), wire)
+    ok('and no pillar is disclosed either', !/"pillar"/.test(wire), wire)
+
+    // The open question travels with them, separately, because it is not scored
+    // and must not be rendered into the scored loop.
+    ok('the open question is served', served.body?.problem_question?.prompt === QUIZ_PROBLEM_PROMPT, JSON.stringify(served.body?.problem_question))
+    ok('and is not one of the multiple-choice set', !questions.some((q) => q.prompt === QUIZ_PROBLEM_PROMPT))
+    ok('and names the field it posts to', served.body?.problem_question?.field === 'problem_statement')
+
+    // Answering with what was served is accepted end to end — the loop closed.
+    const fromServed = Object.fromEntries(questions.map((q) => [q.id, q.options[q.options.length - 1].letter]))
+    const submitted = await post(COACH, { answers: fromServed })
+    ok('answers built from the served set score cleanly', submitted.status === 200, `${submitted.status} ${JSON.stringify(submitted.body)}`)
+    resetDb()
   }
 
   console.log('\n-- ACCEPTANCE 4: scoring is deterministic --')
@@ -234,9 +365,266 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
       `attract ${attractOnly.composite} vs monetize ${monetizeOnly.composite}`
     )
 
-    // A tie must resolve the same way every time, not by object key order.
-    const tied = { attract: 50, transform: 50, monetize: 50 } as Record<any, number>
-    ok('a three-way tie resolves stably', new Set(Array.from({ length: 10 }, () => lowestPillar(tied as any))).size === 1)
+    // The unscored question moves NO number. Same scored answers, four
+    // different stated challenges, identical scores — which is the property
+    // that broke before: it summed into Transform and dragged it around.
+    const acrossChallenges = FOCUS_QUESTION.options.map((o) =>
+      JSON.stringify(scoreQuiz({ ...ANSWERS_C, biggest_challenge: o.letter } as any).scores)
+    )
+    ok(
+      'the stated challenge changes no score',
+      new Set(acrossChallenges).size === 1,
+      acrossChallenges.join(' | ')
+    )
+  }
+
+  console.log('\n-- ACCEPTANCE: the gap comes from what the coach SAID --')
+  // Asserted against the stated challenge, never against the derived minimum.
+  // The defect this replaces was measured, not theorised: all-best scored
+  // answers plus "not enough people know I exist" produced Attract 100,
+  // Transform 50, and the line "Your biggest gap is Transform — what you deliver
+  // is clearer in your head than it is out loud", contradicting the offer-clarity
+  // answer the coach had given two questions earlier.
+  {
+    const BEST = Object.fromEntries(SCORED_QUESTIONS.map((q) => [q.id, 'd']))
+    const WORST = Object.fromEntries(SCORED_QUESTIONS.map((q) => [q.id, 'a']))
+
+    // Mid scores, so nothing is suppressed by the floor and the stated challenge
+    // is visibly the thing choosing the advice.
+    for (const o of FOCUS_QUESTION.options) {
+      const r = scoreQuiz({ ...ANSWERS_C, biggest_challenge: o.letter } as any)
+      ok(
+        `challenge '${o.letter}' (${o.focus}) -> the gap is about ${o.focus}`,
+        r.gap.focus === o.focus,
+        `${r.gap.focus} — "${r.gap.title}"`
+      )
+      ok(`and the quick win is the ${o.focus} one`, r.quick_win.title.length > 0)
+      ok(`and the stated challenge travels for Step 1`, r.stated_challenge.focus === o.focus && r.stated_challenge.letter === o.letter, JSON.stringify(r.stated_challenge))
+      ok(`with the label, not just the letter`, r.stated_challenge.label === o.label)
+    }
+
+    console.log('\n-- ACCEPTANCE: the all-perfect case, stated explicitly --')
+    // The loud defect: composite 100, moniker "The Full Engine", and directly
+    // beneath it "Your biggest gap is Attract". lowestPillar had no floor, so
+    // three pillars tied at 100 resolved by tiebreak order and printed a gap
+    // that did not exist.
+    for (const o of FOCUS_QUESTION.options) {
+      const r = scoreQuiz({ ...BEST, biggest_challenge: o.letter } as any)
+      ok(`all-perfect + '${o.letter}': composite is 100`, r.composite === 100, `${r.composite}`)
+      ok(`all-perfect + '${o.letter}': moniker is The Full Engine`, r.moniker === 'The Full Engine', r.moniker)
+
+      if (o.focus === 'capacity') {
+        // Not suppressed, and correctly so: no pillar measures delivery
+        // capacity, so no score contradicts it. "The Full Engine" and "you
+        // cannot deliver more" are a coherent pair.
+        ok('capacity survives a perfect score', r.gap.focus === 'capacity', `${r.gap.focus}`)
+        ok('and it is not a pillar', !QUIZ_PILLARS.includes(r.gap.focus as any))
+      } else {
+        // THE ASSERTION THAT WOULD HAVE CAUGHT THE DEFECT.
+        ok(`all-perfect + '${o.letter}': NO gap pillar is named`, r.gap.focus === null, `named ${r.gap.focus}: "${r.gap.title}"`)
+        ok('and the copy says so rather than being blank', r.gap.body.length > 20 && r.gap.title.length > 0, r.gap.title)
+        ok('the quick win is the no-gap one, not a pillar fix', r.quick_win.title === 'Do more of what already worked', r.quick_win.title)
+        ok('the answer is still carried even though the advice is withheld', r.stated_challenge.focus === o.focus)
+      }
+    }
+
+    console.log('\n-- ACCEPTANCE: the all-worst case, stated explicitly --')
+    for (const o of FOCUS_QUESTION.options) {
+      const r = scoreQuiz({ ...WORST, biggest_challenge: o.letter } as any)
+      ok(`all-worst + '${o.letter}': composite is 0`, r.composite === 0, `${r.composite}`)
+      ok(`all-worst + '${o.letter}': moniker is The Well-Kept Secret`, r.moniker === 'The Well-Kept Secret', r.moniker)
+
+      if (o.focus === 'capacity') {
+        // THE SECOND REPORTED DEFECT. At 0/0/0 the capacity body asserted "the
+        // offer sells and the constraint is delivery" directly under a moniker
+        // whose own summary says almost nobody knows they exist. Capacity makes
+        // a factual claim about the business, so it needs evidence.
+        ok('all-worst + capacity: capacity is NOT named', r.gap.focus !== 'capacity', `${r.gap.focus}`)
+        ok('the disagreement is resolved rather than hidden', r.gap.resolution === 'conflict', r.gap.resolution)
+        ok('and what the coach said is still reported', r.gap.disputed === 'capacity', `${r.gap.disputed}`)
+        ok('the body does not claim the offer sells', !r.gap.body.includes('The offer sells'), r.gap.body)
+      } else {
+        // A stated pillar at rock bottom is not contradicted by anything — every
+        // pillar is 0, so nothing is strictly highest. The statement stands.
+        ok(`all-worst + '${o.letter}': the stated gap IS named`, r.gap.focus === o.focus, `${r.gap.focus}`)
+        ok('and it is reported as the coach own statement', r.gap.resolution === 'stated', r.gap.resolution)
+      }
+    }
+
+    console.log('\n-- ACCEPTANCE: the reported case, by value --')
+    // Attract 0, Transform 0, Monetize 17, challenge (c). The page said "Your
+    // biggest gap is Monetize" — the only pillar with any score at all.
+    {
+      // Built from WORST so a question added later cannot silently drop out of
+      // this fixture — the first version listed the ids by hand and stopped
+      // covering delivery_repeatability the moment it was added, throwing rather
+      // than quietly scoring a partial answer set.
+      const r = scoreQuiz({ ...WORST, ninety_day_goal: 'b', biggest_challenge: 'c' } as any)
+      ok('the scores reproduce', JSON.stringify(r.scores) === JSON.stringify({ attract: 0, transform: 0, monetize: 17 }), JSON.stringify(r.scores))
+      ok('the gap is no longer Monetize', r.gap.focus !== 'monetize', `${r.gap.focus} — "${r.gap.title}"`)
+      ok('it names a pillar the scores actually put lowest', r.gap.focus !== null && r.scores[r.gap.focus as 'attract' | 'transform' | 'monetize'] === 0)
+      ok('and the coach is told what they said, not overruled in silence', r.gap.disputed === 'monetize' && r.gap.body.includes('Monetize'), r.gap.body)
+    }
+
+    console.log('\n-- ACCEPTANCE: exhaustive — the page never asserts what the scores deny --')
+    // Every combination of every scored question against every challenge.
+    //
+    // THE FIRST VERSION OF THIS SWEEP LOOKED FOR THE OLD DEFECT AND FOUND
+    // NOTHING, which is how it passed while two new ones shipped. It asked "does
+    // the page name a pillar that is in the top band" — the exact inverse of the
+    // bug that had just been fixed — instead of asking the general question the
+    // rule is actually about. Written the general way now: whatever the page
+    // names, the scores have to support it.
+    {
+      const ids = SCORED_QUESTIONS.map((q) => q.id)
+      let total = 0
+      const census = { none: 0, stated: 0, conflict: 0 }
+      const namesStrongest: string[] = []
+      const capacityUnevidenced: string[] = []
+      const namesTopBand: string[] = []
+      const outOfRange: string[] = []
+      const noCopy: string[] = []
+      const anyFocusViolation: string[] = []
+      const standingMismatch: string[] = []
+      let tiedHighest = 0
+      let capacityNamed = 0
+
+      const walk = (i: number, acc: Record<string, string>) => {
+        if (i === ids.length) {
+          for (const o of FOCUS_QUESTION.options) {
+            const r = scoreQuiz({ ...acc, biggest_challenge: o.letter } as any)
+            total++
+            census[r.gap.resolution]++
+            const where = `${JSON.stringify(acc)}+${o.letter} scores=${JSON.stringify(r.scores)}`
+
+            if (r.composite < 0 || r.composite > 100) outOfRange.push(`${r.composite}`)
+            if (!r.gap.title.trim() || !r.gap.body.trim() || !r.quick_win.title.trim()) noCopy.push(where)
+
+            // THE PREDICATE, EVERY FOCUS — and spelled out HERE rather than via
+            // lib's focusStanding.
+            //
+            // The first version of this assertion called focusStanding, which
+            // made it self-referential: mutating that function moved the rule
+            // AND the test together, so swapping capacity's standing from the
+            // highest pillar to the lowest passed cleanly while capacity was
+            // named 8612 times again. A test that reuses the thing it is
+            // checking is checking nothing. Found by mutation, not by reading.
+            if (r.gap.focus) {
+              const vals = QUIZ_PILLARS.map((p) => r.scores[p])
+              const lo = Math.min(...vals)
+              const hi = Math.max(...vals)
+              // A pillar is measured from its own score; capacity claims the
+              // business is working, so it is measured from the top.
+              const standing = r.gap.focus === 'capacity' ? hi : r.scores[r.gap.focus as 'attract' | 'transform' | 'monetize']
+              if (standing - lo >= MATERIAL_MARGIN && anyFocusViolation.length < 3) {
+                anyFocusViolation.push(`${where} -> named ${r.gap.focus}, standing ${standing}, lowest ${lo}`)
+              }
+              if (r.gap.focus === 'capacity') capacityNamed++
+              // And the lib agrees with the predicate written out here — kept as
+              // a separate check so the two can disagree loudly instead of the
+              // assertion silently inheriting whatever the lib decides.
+              if (focusStanding(r.scores, r.gap.focus) !== standing && standingMismatch.length < 3) {
+                standingMismatch.push(`${where}: lib says ${focusStanding(r.scores, r.gap.focus)}, predicate says ${standing}`)
+              }
+            }
+
+            const pillar = r.gap.focus && r.gap.focus !== 'capacity' ? (r.gap.focus as 'attract' | 'transform' | 'monetize') : null
+            if (pillar) {
+              const values = QUIZ_PILLARS.map((p) => r.scores[p])
+              const lowest = Math.min(...values)
+              // THE PREDICATE, stated once and with no companion test: a named
+              // pillar may not sit MATERIAL_MARGIN or more above the LOWEST,
+              // whether or not it is tied with another.
+              //
+              // The previous version of this assertion carried an extra
+              // `isStrictlyHighest` term, which let 3288 tied cases through —
+              // the check returned on a fact about the TOP before the margin,
+              // a question about the BOTTOM, was ever applied. Worst measured:
+              // Attract 0, Transform 83, Monetize 83, printing "your biggest
+              // gap is Transform" with Attract at zero and unmentioned.
+              const spread = r.scores[pillar] - lowest
+              if (spread >= MATERIAL_MARGIN) {
+                if (namesStrongest.length < 3) namesStrongest.push(`${where} -> named ${pillar}, ${spread} above the lowest`)
+              }
+              // Counted separately so the TIE case is visibly covered by the
+              // predicate rather than exempted from it. This must now be 0.
+              const isStrictlyHighest = values.filter((v) => v === r.scores[pillar]).length === 1 && values.every((v) => v <= r.scores[pillar])
+              const isHighestOrTied = values.every((v) => v <= r.scores[pillar])
+              if (isHighestOrTied && !isStrictlyHighest && spread >= MATERIAL_MARGIN) tiedHighest++
+              // And the original defect stays ruled out.
+              if (r.scores[pillar] >= GAP_FLOOR && namesTopBand.length < 3) namesTopBand.push(`${where} -> ${pillar}`)
+            }
+
+            // Capacity asserts a selling business. It needs evidence.
+            if (r.gap.focus === 'capacity' && r.composite < CAPACITY_EVIDENCE_FLOOR) {
+              if (capacityUnevidenced.length < 3) capacityUnevidenced.push(`${where} composite=${r.composite}`)
+            }
+          }
+          return
+        }
+        for (const l of ['a', 'b', 'c', 'd']) walk(i + 1, { ...acc, [ids[i]]: l })
+      }
+      walk(0, {})
+
+      ok(`swept every combination (${total} results)`, total === Math.pow(4, ids.length) * FOCUS_QUESTION.options.length, `${total}`)
+
+      // THE TWO REPORTED DEFECTS, as general assertions.
+      // ONE ASSERTION, EVERY FOCUS — pillar and capacity alike. The pillar-only
+      // version below is kept as the narrower restatement, but this is the one
+      // that would have caught the capacity leak.
+      ok('no focus of ANY kind is named while standing MATERIAL_MARGIN or more above the lowest pillar', anyFocusViolation.length === 0, anyFocusViolation.join(' ; '))
+      ok('no result names a pillar sitting MATERIAL_MARGIN or more above the lowest', namesStrongest.length === 0, namesStrongest.join(' ; '))
+      ok("lib's focusStanding agrees with the predicate written out independently", standingMismatch.length === 0, standingMismatch.join(' ; '))
+      ok('capacity is never named without supporting evidence in the scores', capacityUnevidenced.length === 0, capacityUnevidenced.join(' ; '))
+
+      // The original one, still ruled out.
+      ok('no result names a pillar gap that is already in the top band', namesTopBand.length === 0, namesTopBand.join(' ; '))
+      ok('no composite falls outside 0-100', outOfRange.length === 0, outOfRange.slice(0, 3).join(', '))
+      ok('every result renders copy in both cards', noCopy.length === 0, noCopy.slice(0, 2).join(' ; '))
+
+      // THE CENSUS. Reported so a guard that silently swallows everything is
+      // visible as one: if `none` or `conflict` were most of the sweep, the page
+      // would be refusing to diagnose almost anybody and every assertion above
+      // would still pass.
+      console.log(`      census of ${total}: stated ${census.stated}, conflict ${census.conflict}, none ${census.none}`)
+      console.log(`      names a TIED-highest pillar with a material spread: ${tiedHighest} (must be 0 — the tie is not an exemption)`)
+      console.log(`      capacity named: ${capacityNamed} of ${total}`)
+      // WHAT THESE ASSERT, AND WHAT THEY DELIBERATELY DO NOT.
+      //
+      // An earlier version required `stated` to be the majority and `conflict`
+      // to be under half. Those failed the moment the predicate was corrected —
+      // correctly, because they were never properties of the RULE. They were
+      // properties of the sweep's distribution, frozen from a run where the tie
+      // branch was silently letting 3288 results through. An assertion that
+      // fails when a bug is fixed is an assertion pinning the bug.
+      //
+      // The real risk the census guards is a fix that "passes" by sending
+      // everything to one state, so that is what is asserted: every state stays
+      // reachable, and no state swallows the sweep. The exact split is REPORTED
+      // rather than constrained.
+      //
+      // On the split itself: conflict is now the larger share and that is
+      // arithmetic, not alarm. This sweep is uniform over the answer space, and
+      // a uniformly-random stated challenge matches the weakest pillar about a
+      // third of the time. Real coaches are not uniform — somebody who says
+      // nobody can find them tends to answer the Attract questions poorly too.
+      // The sweep measures reachability, never expected frequency.
+      for (const [state, n] of Object.entries(census)) {
+        ok(`'${state}' is reachable (${n})`, (n as number) > 0, `${n} of ${total}`)
+        ok(`'${state}' does not swallow the sweep`, (n as number) < total * 0.9, `${n} of ${total}`)
+      }
+      ok('the three states account for everything', census.none + census.stated + census.conflict === total)
+      // NOT bounded — zero. This was 3288 and was logged as "allowed
+      // deliberately", which is how an exemption reads as a decision. Being tied
+      // at the top is not evidence about the bottom.
+      ok('the tie case is covered by the predicate, not exempted from it', tiedHighest === 0, `${tiedHighest} of ${total}`)
+    }
+
+    // The floor and the top band are one number by construction. Replacing the
+    // derivation with a literal fails here rather than letting "The Full Engine"
+    // sit above a named gap again.
+    ok('the gap floor matches the top moniker band', assertGapFloorMatchesTopBand().length === 0, assertGapFloorMatchesTopBand().join('; '))
+    ok(`and that number is ${GAP_FLOOR}`, GAP_FLOOR === 90, `${GAP_FLOOR}`)
   }
 
   console.log('\n-- a missing or bogus answer is refused, never defaulted --')
@@ -271,8 +659,8 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
     // Asserted against the ROW, not the response body — the brief is explicit,
     // and a handler that returned a correct-looking payload while storing
     // something else is exactly the failure this catches.
-    ok('the row holds all seven letters', QUIZ_QUESTION_IDS.every((id) => row.answers[id] === 'c'), JSON.stringify(row.answers))
-    ok('and only those seven', Object.keys(row.answers).length === 7, JSON.stringify(Object.keys(row.answers)))
+    ok('the row holds every letter', QUIZ_QUESTION_IDS.every((id) => row.answers[id] === 'c'), JSON.stringify(row.answers))
+    ok('and only those', Object.keys(row.answers).length === QUIZ_QUESTION_IDS.length, JSON.stringify(Object.keys(row.answers)))
     ok('the row holds the composite', typeof row.score === 'number' && row.score === (res.body as any).score, `${row.score}`)
     ok('the row holds the analysis object', !!row.analysis && typeof (row.analysis as any).moniker === 'string', JSON.stringify(row.analysis))
     ok(
@@ -439,13 +827,21 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
     const r4 = makeRes()
     await getQuiz({ method: 'GET', headers: {}, query: {} }, r4.res)
     ok('an unauthenticated read is refused', r4.out.status === 401 || r4.out.status === 403, `${r4.out.status}`)
+
+    const r5 = makeRes()
+    await getQuestions({ method: 'POST', headers: {}, query: {} }, r5.res)
+    ok('POST /api/quiz/questions is 405', r5.out.status === 405, `${r5.out.status}`)
+
+    const r6 = makeRes()
+    await getQuestions({ method: 'GET', headers: {}, query: {} }, r6.res)
+    ok('the question set is not public', r6.out.status === 401 || r6.out.status === 403, `${r6.out.status}`)
   }
 
   console.log('\n-- validateQuizAnswers drops unknown keys rather than storing them --')
   {
     const checked = validateQuizAnswers({ ...ANSWERS_C, sneaky: 'd', quiz_score: '999' })
     ok('it accepts the submission', checked.ok)
-    ok('and keeps only the known ids', checked.ok && Object.keys(checked.answers).length === 7, JSON.stringify(checked.ok && checked.answers))
+    ok('and keeps only the known ids', checked.ok && Object.keys(checked.answers).length === QUIZ_QUESTION_IDS.length, JSON.stringify(checked.ok && checked.answers))
     ok('uppercase letters are accepted and folded', (() => { const c = validateQuizAnswers({ ...ANSWERS_C, client_flow: 'D' }); return c.ok && c.answers.client_flow === 'd' })())
   }
 
