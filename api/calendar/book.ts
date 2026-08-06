@@ -6,7 +6,8 @@ import { isZoomConfigured, createZoomMeeting, slotMinutes } from '../../lib/zoom
 import { isSchedulerSlotOpen } from '../../lib/schedulerSlots'
 import { buildBookingIcs } from '../../lib/ics'
 import { sendBookingConfirmationEmail, sendCoachBookingNotification } from '../../lib/email'
-import { funnelBookingQuestions, loadBookingQuestions, validateBookingAnswers, bookingQuestionErrorMessage, ValidatedAnswer } from '../../lib/bookingQuestions'
+import { funnelBookingQuestions, loadBookingQuestions, validateBookingAnswers, bookingQuestionErrorMessage, resolveBookingType, ValidatedAnswer } from '../../lib/bookingQuestions'
+import { bookingTimeLabel, normalizeTimeZone } from '../../lib/bookingTimezone'
 import { checkGate } from '../../lib/applicationGate'
 import { resolveLiveFunnel } from '../../lib/funnels'
 import { loadUserAvailability } from '../../lib/availabilitySettings'
@@ -58,6 +59,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ? body.answers
     : {}) as Record<string, unknown>
 
+  // TOP-LEVEL, not an answers-map key. The answers map is validated against
+  // admin-defined questions and neither of these is one — a type sent inside
+  // `answers` is never read (see BOOKING_TYPE_ANSWER_ID), and a timezone has no
+  // business being an answer at all.
+  const bookingTypeRaw = body.booking_type
+  // Optional. Absent or invalid falls back to the UTC rendering that shipped
+  // before, so nothing regresses for a caller that does not send it.
+  const timezone = normalizeTimeZone(body.timezone)
+
   const startMs = new Date(slotStart).getTime()
   if (startMs <= Date.now()) return res.status(400).json({ error: 'slot_start must be in the future' })
   const startIso = new Date(startMs).toISOString()
@@ -80,9 +90,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     if (funnelRow && conn) {
-      return await bookGooglePath(res, { funnelRow, owner: funnelRow.user_id as string, conn, startMs, startIso, name, email, answersMap, userId })
+      return await bookGooglePath(res, { funnelRow, owner: funnelRow.user_id as string, conn, startMs, startIso, name, email, answersMap, userId, timezone })
     }
-    return await bookLegacyPath(res, { funnelRow, startMs, startIso, name, email, answersMap, userId })
+    return await bookLegacyPath(res, { funnelRow, startMs, startIso, name, email, answersMap, userId, timezone, bookingTypeRaw })
   } catch (err) {
     console.error('[calendar/book] POST', err)
     return res.status(500).json({ error: 'Failed to book' })
@@ -90,12 +100,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 }
 
 // ---- helpers ----------------------------------------------------------------
-
-function utcLabel(startIso: string): string {
-  return (
-    new Date(startIso).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short', timeZone: 'UTC' }) + ' (UTC)'
-  )
-}
 
 // Log the server-side 'booked' funnel event, attributing to the lead by matching
 // email on that funnel (a client-supplied lead_id is never trusted). Best-effort.
@@ -162,9 +166,10 @@ async function bookGooglePath(
     email: string
     answersMap: Record<string, unknown>
     userId: string | null
+    timezone: string | null
   }
 ): Promise<VercelResponse> {
-  const { funnelRow, owner, conn, startMs, startIso, name, email, answersMap, userId } = ctx
+  const { funnelRow, owner, conn, startMs, startIso, name, email, answersMap, userId, timezone } = ctx
 
   const settings = await loadUserAvailability(owner)
   const endIso = new Date(startMs + settings.slot_minutes * 60_000).toISOString()
@@ -202,6 +207,7 @@ async function bookGooglePath(
       end_time: endIso,
       status: 'active',
       custom_answers: av.answers,
+      timezone,
     })
     .select('id')
     .single()
@@ -253,7 +259,7 @@ async function bookGooglePath(
 
   // Confirmation + .ics to the lead (organizer = the coach's connected calendar),
   // and a best-effort notification to the coach. Never fail the booking on email.
-  const startLabel = utcLabel(startIso)
+  const startLabel = bookingTimeLabel(startIso, timezone)
   const organizerEmail = conn.calendar_email || process.env.ZOOM_HOST_EMAIL || 'noreply@mail.microtrainingmethod.com'
   const ics = buildBookingIcs({
     uid: `booking-${reserved.id}@microtrainingmethod.com`,
@@ -284,7 +290,7 @@ async function bookGooglePath(
   // still-scheduled nurture/book-a-call sends — and gets 24h/1h call reminders.
   if (leadId) {
     await cancelLeadOutreach(leadId)
-    await scheduleBookingReminders(funnelRow, leadId, email, startIso, meetingUrl, reserved.id as string, manageUrl)
+    await scheduleBookingReminders(funnelRow, leadId, email, startIso, meetingUrl, reserved.id as string, manageUrl, undefined, timezone)
   }
 
   return res.status(200).json({ booking_id: reserved.id, join_url: meetingUrl, meeting_url: meetingUrl, start_time: startIso })
@@ -302,9 +308,11 @@ async function bookLegacyPath(
     email: string
     answersMap: Record<string, unknown>
     userId: string | null
+    timezone: string | null
+    bookingTypeRaw: unknown
   }
 ): Promise<VercelResponse> {
-  const { funnelRow, startMs, startIso, name, email, answersMap, userId } = ctx
+  const { funnelRow, startMs, startIso, name, email, answersMap, userId, timezone, bookingTypeRaw } = ctx
 
   if (!isZoomConfigured()) return res.status(503).json({ error: 'calendar_unavailable' })
 
@@ -326,6 +334,31 @@ async function bookLegacyPath(
   if (funnelRow) {
     const gate = checkGate(funnelRow, questions, answersMap)
     if (!gate.qualified) return disqualified(res, gate)
+  }
+
+  // BOOKING TYPE APPLIES ONLY TO A FUNNEL-LESS BOOKING, and that is a decision
+  // rather than a consequence of where the code sits.
+  //
+  // booking_types is a GLOBAL app_settings key. A funnel answers from its own
+  // settings and nothing else — that rule is why funnelBookingQuestions exists
+  // and why falling back to the global question set hard-blocked bookings on
+  // charge-demo. Letting a global type list attach itself to a funnel booking
+  // would reintroduce exactly that shape. So a funnel booking carries no type,
+  // on EITHER path: bookGooglePath always has a funnel, and this path skips it
+  // whenever one is in play. A stray value on a funnel booking is ignored, not
+  // rejected, for the same reason an unconfigured list ignores one.
+  //
+  // Consequence worth stating: eventDescription builds the Google invite body
+  // from these answers, so the concern about the type appearing there does not
+  // arise — that path never has a type to show. If funnel-level types are wanted
+  // later they belong on the funnel row, beside its own booking_questions.
+  let answers = av.answers
+  if (!funnelRow) {
+    const typed = await resolveBookingType(bookingTypeRaw)
+    if (!typed.ok) return res.status(400).json({ error: typed.error, message: typed.message })
+    // FIRST in the list. It is the framing question and reads wrong underneath
+    // "what's your current monthly revenue".
+    if (typed.entry) answers = [typed.entry, ...answers]
   }
 
   // 1) Confirm the slot is genuinely still open — against the SAME computation
@@ -353,7 +386,8 @@ async function bookLegacyPath(
       start_time: startIso,
       end_time: endIso,
       status: 'active',
-      custom_answers: av.answers,
+      custom_answers: answers,
+      timezone,
       // funnel_id only. coach_user_id stays NULL on purpose: this path books the
       // ONE shared Zoom host, so the NULLS NOT DISTINCT uniqueness backstop must
       // keep these globally unique per start_time. Scoping them per coach (tried
@@ -384,7 +418,7 @@ async function bookLegacyPath(
   // not Google-connected).
   const leadId = funnelRow ? await logFunnelBooked(funnelRow.id as string, email) : null
 
-  const startLabel = utcLabel(startIso)
+  const startLabel = bookingTimeLabel(startIso, timezone)
   const ics = buildBookingIcs({
     uid: `booking-${reserved.id}@microtrainingmethod.com`,
     startUtcISO: startIso,
@@ -416,7 +450,7 @@ async function bookLegacyPath(
       leadName: name,
       leadEmail: email,
       startIso,
-      answers: av.answers,
+      answers,
     })
   }
 
@@ -435,7 +469,9 @@ async function bookLegacyPath(
       startIso,
       meeting.join_url,
       reserved.id as string,
-      legacyManageUrl
+      legacyManageUrl,
+      undefined,
+      timezone
     )
   }
 
