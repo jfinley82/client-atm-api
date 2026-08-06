@@ -136,6 +136,66 @@ function ok(label: string, cond: boolean, extra?: string) {
     )
   }
 
+  console.log('\n-- nested shapes: names-only at one level is what left the gaps --')
+  {
+    const doc = readFileSync(docPath, 'utf8')
+
+    // OTHER ANGLES' INNER KEYS. The frontend renders these with
+    // Object.values(entry).filter(hasText) and prints the result with the first
+    // line bold — so without the inner names it has no idea which value is the
+    // reframe and which is the hint, and renders them in key order.
+    ok('the otherAngles entry shape is documented', /Each `otherAngles\[n\]` entry/.test(doc))
+    for (const inner of ['reframe', 'monetization_hint', 'monetizationHint']) {
+      ok(`  inner key ${inner} is named`, doc.includes('`' + inner + '`'))
+    }
+    // The hint is served under BOTH spellings, so a values-based render prints
+    // it twice. That has to be stated, not left to be discovered.
+    ok('the double-spelling of the hint is called out', /served under two spellings/i.test(doc))
+    ok('and reading by name is the stated instruction', /Read them BY NAME/.test(doc))
+
+    // The inner shape must be GENERATED, not typed in — it comes from running
+    // the deriver, so renaming an inner key updates the document.
+    const probe: Record<string, unknown> = { other_angles: [{ reframe: 'r', monetization_hint: 'h' }] }
+    const derivedAngles = (deriveAudienceDisplayFields(probe) as any).otherAngles?.[0] || {}
+    for (const k of Object.keys(derivedAngles)) {
+      ok(`  ${k} comes from the real deriver and is in the doc`, doc.includes('`' + k + '`'))
+    }
+
+    // FRAMEWORK, which had no entry at all.
+    ok('framework is a documented tool_type', /### `framework`/.test(doc))
+    for (const p of ['frameworkName', 'phases[n].steps[n]', 'name_options[n]']) {
+      ok(`  ${p} is present`, doc.includes(p), 'the depth pass missed it')
+    }
+    ok('and depth 3 is flagged as such', /DEPTH 3/.test(doc))
+
+    // SELECTED PROBLEMS — seven of eleven fields are objects.
+    for (const p of [
+      'selectedProblems[n].rootCause.corePattern',
+      'selectedProblems[n].rootDesire.emotionalDesire',
+      'selectedProblems[n].costOfInaction.action',
+      'selectedProblems[n].objectionReframe.objection',
+      'selectedProblems[n].marketingTranslation.startSaying',
+    ]) {
+      ok(`  ${p} is documented`, doc.includes(p), 'a nested object stopped at its outer key')
+    }
+
+    // THE TWO-DEPTH, TWO-TYPE COLLISION. Made visible by path-qualifying rather
+    // than by listing the bare name twice, which would read as a duplicate.
+    ok('the two-depth beforeState collision is called out', /TWO DEPTHS/.test(doc) && /TWO DIFFERENT TYPES/.test(doc))
+    ok(
+      'the top-level one is marked as a string',
+      /\| `beforeState` \| string \| TOP-LEVEL/.test(doc),
+      'the top-level beforeState is not marked as the string it is'
+    )
+    ok(
+      'the nested one is marked as an object',
+      /\| `selectedProblems\[n\]\.beforeState` \| object \| NESTED/.test(doc),
+      'the nested beforeState is not marked as the object it is'
+    )
+    ok('and the nested children are named', doc.includes('beliefs') && doc.includes('internalTalk') && doc.includes('results'))
+    ok('with the reason paths are used at all', /the path is the name/i.test(doc))
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`)
   if (fail) process.exit(1)
 })()
