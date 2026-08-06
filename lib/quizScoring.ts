@@ -524,22 +524,25 @@ export function resolveGap(scores: Record<QuizPillar, number>, stated: GapFocus)
     return { kind: 'stated', focus: stated }
   }
 
-  // THE HARM IS NAMING THE BEST THING AS THE GAP, and the condition is written
-  // as that harm rather than as a proxy for it.
+  // THE PROPERTY: a named pillar may not sit MATERIAL_MARGIN or more above the
+  // lowest pillar. Distance to the bottom, and nothing else.
   //
-  // An earlier attempt fired whenever the stated pillar sat materially above the
-  // WEAKEST, which put 8682 of 16384 results into conflict — the page arguing
-  // with the coach in more than half of all cases. That is over-firing, not
-  // safety: a coach who names a pillar scoring 67 while another scores 33 is not
-  // being contradicted, because 67 is not good. There is real room at 67 and
-  // three questions cannot see their business better than they can.
+  // This is the whole condition, deliberately with no companion test. A previous
+  // version also required the named pillar to be the STRICTLY highest, on the
+  // reasoning that a pillar at 67 is not contradicted by another at 33 because
+  // 67 is not good. That reasoning was wrong, and wrong in a way worth keeping
+  // written down: the page does not print "X is bad", it prints "your biggest
+  // gap is X". BIGGEST is a superlative — a claim about ORDERING, not about
+  // whether the score is poor. A pillar materially above the lowest is not the
+  // biggest gap whatever its absolute value.
   //
-  // The scores only contradict the statement when the named pillar is the single
-  // BEST of the three and something else is materially below it. Then "your
-  // biggest gap is X" is false on its face.
-  const values = QUIZ_PILLARS.map((p) => scores[p])
-  const isStrictlyHighest = values.filter((v) => v === scores[stated]).length === 1 && values.every((v) => v <= scores[stated])
-  if (isStrictlyHighest && scores[stated] - scores[weakest] >= MATERIAL_MARGIN) {
+  // The strictly-highest test also returned before the margin was ever applied,
+  // so a tie at the TOP granted permission on a question about the BOTTOM. Being
+  // tied with another pillar is not evidence about the lowest one. Measured at
+  // the seven-question set: 12086 of 65536 results named a pillar sitting a
+  // material distance above the lowest, worst case Attract 89 / Transform 100 /
+  // Monetize 0 printing "your biggest gap is Attract" with Monetize at zero.
+  if (scores[stated] - scores[weakest] >= MATERIAL_MARGIN) {
     return { kind: 'conflict', stated, evidenced: weakest }
   }
 
@@ -600,7 +603,13 @@ export function scoreQuiz(answers: QuizAnswers): QuizAnalysis {
       body:
         stated === 'capacity'
           ? `You named delivery capacity, and that may well be what it feels like. Your answers do not yet show an offer that is selling, though, and they put ${FOCUS_LABEL[resolved.evidenced]} lowest. ${FOCUS_ADVICE[resolved.evidenced].gap}`
-          : `You named ${FOCUS_LABEL[stated]}, and it is the strongest of the three on your answers rather than the weakest. ${FOCUS_LABEL[resolved.evidenced]} is what they put lowest. ${FOCUS_ADVICE[resolved.evidenced].gap}`,
+          // Says only what is true in EVERY conflict: the named pillar scored
+          // above the lowest by a clear margin. The previous wording claimed it
+          // was "the strongest of the three", which was false whenever it was
+          // merely higher or tied — copy asserting more than the condition
+          // guarantees, which is the same fault as the page asserting more than
+          // the scores support.
+          : `You named ${FOCUS_LABEL[stated]}, and your answers put it clearly above ${FOCUS_LABEL[resolved.evidenced]}, which came out lowest. ${FOCUS_ADVICE[resolved.evidenced].gap}`,
     }
     win = { title: FOCUS_ADVICE[resolved.evidenced].winTitle, body: FOCUS_ADVICE[resolved.evidenced].winBody }
   } else {

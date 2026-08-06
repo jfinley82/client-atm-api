@@ -500,20 +500,25 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
             if (pillar) {
               const values = QUIZ_PILLARS.map((p) => r.scores[p])
               const lowest = Math.min(...values)
-              // THE GENERAL RULE: a named pillar may not be the strictly highest
-              // of the three while another sits materially below it.
-              const isStrictlyHighest = values.every((v) => v === r.scores[pillar] || v < r.scores[pillar])
-                && values.filter((v) => v === r.scores[pillar]).length === 1
-              if (isStrictlyHighest && r.scores[pillar] - lowest >= MATERIAL_MARGIN) {
-                if (namesStrongest.length < 3) namesStrongest.push(`${where} -> named ${pillar}`)
+              // THE PREDICATE, stated once and with no companion test: a named
+              // pillar may not sit MATERIAL_MARGIN or more above the LOWEST,
+              // whether or not it is tied with another.
+              //
+              // The previous version of this assertion carried an extra
+              // `isStrictlyHighest` term, which let 3288 tied cases through —
+              // the check returned on a fact about the TOP before the margin,
+              // a question about the BOTTOM, was ever applied. Worst measured:
+              // Attract 0, Transform 83, Monetize 83, printing "your biggest
+              // gap is Transform" with Attract at zero and unmentioned.
+              const spread = r.scores[pillar] - lowest
+              if (spread >= MATERIAL_MARGIN) {
+                if (namesStrongest.length < 3) namesStrongest.push(`${where} -> named ${pillar}, ${spread} above the lowest`)
               }
-              // The TIED-highest case, counted rather than asserted away. The
-              // rule allows it on purpose: a pillar tied at the top is not the
-              // single best, and at a middling score there is real room in it.
-              // Counted here so the allowance is a visible number in gate output
-              // instead of an unstated consequence of the word "strictly".
-              const isHighestOrTied = QUIZ_PILLARS.every((p) => r.scores[p] <= r.scores[pillar])
-              if (isHighestOrTied && !isStrictlyHighest && r.scores[pillar] - lowest >= MATERIAL_MARGIN) tiedHighest++
+              // Counted separately so the TIE case is visibly covered by the
+              // predicate rather than exempted from it. This must now be 0.
+              const isStrictlyHighest = values.filter((v) => v === r.scores[pillar]).length === 1 && values.every((v) => v <= r.scores[pillar])
+              const isHighestOrTied = values.every((v) => v <= r.scores[pillar])
+              if (isHighestOrTied && !isStrictlyHighest && spread >= MATERIAL_MARGIN) tiedHighest++
               // And the original defect stays ruled out.
               if (r.scores[pillar] >= GAP_FLOOR && namesTopBand.length < 3) namesTopBand.push(`${where} -> ${pillar}`)
             }
@@ -532,7 +537,7 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
       ok(`swept every combination (${total} results)`, total === Math.pow(4, ids.length) * FOCUS_QUESTION.options.length, `${total}`)
 
       // THE TWO REPORTED DEFECTS, as general assertions.
-      ok('no result names a pillar that is the strictly highest while another is materially lower', namesStrongest.length === 0, namesStrongest.join(' ; '))
+      ok('no result names a pillar sitting MATERIAL_MARGIN or more above the lowest', namesStrongest.length === 0, namesStrongest.join(' ; '))
       ok('capacity is never named without supporting evidence in the scores', capacityUnevidenced.length === 0, capacityUnevidenced.join(' ; '))
 
       // The original one, still ruled out.
@@ -545,15 +550,36 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
       // would be refusing to diagnose almost anybody and every assertion above
       // would still pass.
       console.log(`      census of ${total}: stated ${census.stated}, conflict ${census.conflict}, none ${census.none}`)
-      console.log(`      names a TIED-highest pillar with a material spread: ${tiedHighest} (allowed deliberately — see below)`)
-      ok(`the stated challenge stands in most results (${census.stated})`, census.stated > total / 2, `${census.stated} of ${total}`)
-      ok(`disagreement is resolved, not swallowed (${census.conflict})`, census.conflict > 0 && census.conflict < total / 2, `${census.conflict} of ${total}`)
-      ok(`no-gap stays a narrow state (${census.none})`, census.none > 0 && census.none < total / 4, `${census.none} of ${total}`)
+      console.log(`      names a TIED-highest pillar with a material spread: ${tiedHighest} (must be 0 — the tie is not an exemption)`)
+      // WHAT THESE ASSERT, AND WHAT THEY DELIBERATELY DO NOT.
+      //
+      // An earlier version required `stated` to be the majority and `conflict`
+      // to be under half. Those failed the moment the predicate was corrected —
+      // correctly, because they were never properties of the RULE. They were
+      // properties of the sweep's distribution, frozen from a run where the tie
+      // branch was silently letting 3288 results through. An assertion that
+      // fails when a bug is fixed is an assertion pinning the bug.
+      //
+      // The real risk the census guards is a fix that "passes" by sending
+      // everything to one state, so that is what is asserted: every state stays
+      // reachable, and no state swallows the sweep. The exact split is REPORTED
+      // rather than constrained.
+      //
+      // On the split itself: conflict is now the larger share and that is
+      // arithmetic, not alarm. This sweep is uniform over the answer space, and
+      // a uniformly-random stated challenge matches the weakest pillar about a
+      // third of the time. Real coaches are not uniform — somebody who says
+      // nobody can find them tends to answer the Attract questions poorly too.
+      // The sweep measures reachability, never expected frequency.
+      for (const [state, n] of Object.entries(census)) {
+        ok(`'${state}' is reachable (${n})`, (n as number) > 0, `${n} of ${total}`)
+        ok(`'${state}' does not swallow the sweep`, (n as number) < total * 0.9, `${n} of ${total}`)
+      }
       ok('the three states account for everything', census.none + census.stated + census.conflict === total)
-      // Pinned so the deliberate allowance cannot grow unnoticed. If a future
-      // change makes this much larger, the tie rule needs revisiting rather
-      // than the number needing raising.
-      ok(`tied-highest naming stays bounded (${tiedHighest})`, tiedHighest < total / 10, `${tiedHighest} of ${total}`)
+      // NOT bounded — zero. This was 3288 and was logged as "allowed
+      // deliberately", which is how an exemption reads as a decision. Being tied
+      // at the top is not evidence about the bottom.
+      ok('the tie case is covered by the predicate, not exempted from it', tiedHighest === 0, `${tiedHighest} of ${total}`)
     }
 
     // The floor and the top band are one number by construction. Replacing the
