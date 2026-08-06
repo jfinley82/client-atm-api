@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { setCors, noStore } from '../../lib/cors'
 import { resolveLiveFunnel } from '../../lib/funnels'
 import { computeOpenSlots } from '../../lib/funnelAvailability'
+import { loadUserAvailability } from '../../lib/availabilitySettings'
 import { rateLimit, clientIp } from '../../lib/rateLimit'
 
 // GET /api/funnel/availability?subdomain=…&from=…&to=… — PUBLIC. Open booking
@@ -33,7 +34,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Same builder the booking's isSlotOpen uses — page and booking never drift.
     const { slots, connected } = await computeOpenSlots(funnel.user_id as string, from, to)
-    return res.status(200).json({ slots, connected })
+    // accepting_bookings distinguishes "nothing free this fortnight" from "this
+    // coach never set any hours". Without it the page cannot tell them apart and
+    // shows an empty calendar for both — which is how a coach with no
+    // user_availability row ended up publishing default UTC office hours instead
+    // of saying they were not taking bookings.
+    const { configured } = await loadUserAvailability(funnel.user_id as string)
+    return res.status(200).json({ slots, connected, accepting_bookings: configured })
   } catch (err) {
     console.error('[funnel/availability] GET', err)
     return res.status(500).json({ error: 'Failed to load availability' })

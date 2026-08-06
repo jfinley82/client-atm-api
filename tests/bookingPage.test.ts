@@ -289,6 +289,43 @@ function deepKeys(v: unknown, acc: string[] = []): string[] {
     ok('POST is 405', post.out.status === 405, `${post.out.status}`)
   }
 
+  console.log('\n-- the live defect: an unconfigured coach is not bookable ANYWHERE --')
+  // Measured on production before this fix: a live funnel whose coach had no
+  // user_availability row served 110 anonymous bookable slots at 09:00-16:30
+  // UTC — weekday hours nobody chose, in a timezone that was not theirs, with
+  // nothing subtracting real commitments. 09:00 UTC is 4am in Chicago.
+  //
+  // Gated inside computeOpenSlots and isSlotOpen rather than at each call site,
+  // so the funnel page, the funnel booking submit, the reschedule check and the
+  // coach page cannot disagree.
+  {
+    const { computeOpenSlots, isSlotOpen } = await import('../lib/funnelAvailability')
+
+    workingHoursRow = null
+    const slots = await computeOpenSlots(COACH, undefined, undefined)
+    ok('no row means no slots, not default office hours', slots.slots.length === 0, JSON.stringify(slots.slots.slice(0, 3)))
+
+    // The ACCEPT side matters as much as the list: without it a stranger could
+    // POST a slot the page never offered.
+    const soon = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
+    soon.setUTCHours(10, 0, 0, 0)
+    ok('and no slot validates for booking either', (await isSlotOpen(COACH, soon.toISOString())) === false)
+
+    workingHoursRow = { working_hours: { timezone: 'America/Chicago' }, slot_minutes: 30, buffer_minutes: 15, booking_window_days: 14 }
+    ok('every day off is the same answer', (await computeOpenSlots(COACH, undefined, undefined)).slots.length === 0)
+
+    const { loadUserAvailability } = await import('../lib/availabilitySettings')
+    workingHoursRow = null
+    ok('an absent row reports configured:false', (await loadUserAvailability(COACH)).configured === false)
+    workingHoursRow = {
+      working_hours: { timezone: 'America/Chicago', tue: { start: '09:00', end: '17:00' } },
+      slot_minutes: 30,
+      buffer_minutes: 15,
+      booking_window_days: 14,
+    }
+    ok('one configured day is enough', (await loadUserAvailability(COACH)).configured === true)
+  }
+
   globalThis.fetch = realFetch
   console.log(`\n${pass} passed, ${fail} failed`)
   if (fail) process.exit(1)

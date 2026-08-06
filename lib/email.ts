@@ -1022,8 +1022,24 @@ async function coachTimeLabel(coachUserId: string, startIso: string): Promise<st
 // lead engagement, so it must never post an email_opened onto the lead's feed.
 // coachUserId (Phase 5b): the notice wears the coach's brand (it's their
 // business); it stays MTM-branded only if the coach can't be resolved.
+/**
+ * Tell the coach a call was booked.
+ *
+ * TAKES A COACH, NOT A FUNNEL. The preference it gates on —
+ * notification_prefs.new_booking — lives on funnel_business_settings, which is
+ * keyed by USER id; so are the brand and the timezone label. The funnel was only
+ * ever supplying user_id plus a display name and a lead link. Requiring it meant
+ * a booking made through the coach's own page could not notify anyone, which is
+ * a worse outcome than an unbranded email: a coach gets a call on their own page
+ * and is not told.
+ *
+ * Same shape scheduleBookingReminders had before its refactor, and the same fix.
+ * `funnel` stays optional, purely for the "From <funnel>" line and the lead link
+ * — a coach-page booking has neither, and says so rather than inventing one.
+ */
 export async function sendCoachBookingNotification(opts: {
-  funnel: NotifyFunnel
+  coachUserId: string
+  funnel?: NotifyFunnel | null
   bookingId: string
   leadId: string | null
   leadName: string
@@ -1032,17 +1048,19 @@ export async function sendCoachBookingNotification(opts: {
   answers: Array<{ label: string; answer: string }>
 }): Promise<void> {
   try {
-    const settings = await loadBusinessSettings(opts.funnel.user_id)
+    const settings = await loadBusinessSettings(opts.coachUserId)
     if (!settings.notification_prefs.new_booking) return
     if (!(await claimCoachNotification('bookings', opts.bookingId, 'coach_notified_at'))) return
 
-    const brand = await loadCoachBrand(opts.funnel.user_id)
+    const brand = await loadCoachBrand(opts.coachUserId)
     if (!brand.replyTo) return // no resolvable coach email — skip silently, never error the booking
 
     const kind = 'coach_booking_notification'
-    const startLabel = await coachTimeLabel(opts.funnel.user_id, opts.startIso)
-    const funnelName = funnelDisplayName(opts.funnel)
-    const leadUrl = coachLeadUrl(opts.funnel.id, opts.leadId)
+    const startLabel = await coachTimeLabel(opts.coachUserId, opts.startIso)
+    // Where the booking came from. A coach-page booking came from the coach's own
+    // page, which is worth saying plainly rather than leaving blank.
+    const funnelName = opts.funnel ? funnelDisplayName(opts.funnel) : 'your booking page'
+    const leadUrl = opts.funnel ? coachLeadUrl(opts.funnel.id, opts.leadId) : null
     const answerRows = opts.answers
       .filter((a) => a.answer)
       .map(
@@ -1068,19 +1086,22 @@ export async function sendCoachBookingNotification(opts: {
       from,
       to: brand.replyTo,
       subject: `New call booked — ${opts.leadName || opts.leadEmail}`,
-      tags: funnelTags(opts.funnel.id, null, kind),
+      tags: funnelTags(opts.funnel?.id, null, kind),
       html,
     })
     await recordFunnelEmailSend({
-      funnelId: opts.funnel.id,
+      // Null for a coach-page booking, like every other send with no funnel
+      // behind it — migration 089.
+      funnelId: opts.funnel?.id ?? null,
       leadId: null,
       kind,
       messageId: data?.id ?? null,
       status: error ? 'failed' : 'sent',
+      bookingId: opts.bookingId,
     })
     if (error) throw new Error(error.message)
   } catch (err) {
-    console.error(`[email] coach booking notification failed (funnel=${opts.funnel.id})`, err)
+    console.error(`[email] coach booking notification failed (coach=${opts.coachUserId})`, err)
   }
 }
 

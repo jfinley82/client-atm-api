@@ -343,20 +343,19 @@ async function bookCoachPath(
     bookingId: reserved.id as string,
     ...(funnelRow ? { funnelId: funnelRow.id as string, leadId } : {}),
   })
-  // The coach notification is gated on a per-FUNNEL preference, so there is no
-  // preference to consult for a coach-page booking. Left out rather than
-  // invented — see the open item in the brief.
-  if (funnelRow) {
-    await sendCoachBookingNotification({
-      funnel: funnelRow,
-      bookingId: reserved.id as string,
-      leadId,
-      leadName: name,
-      leadEmail: email,
-      startIso,
-      answers: av.answers,
-    })
-  }
+  // Sent for a coach-page booking too. The preference is keyed by USER, not by
+  // funnel — a coach who gets a booking on their own page and is never told is
+  // worse off than one who gets a plainer email.
+  await sendCoachBookingNotification({
+    coachUserId: owner,
+    funnel: funnelRow,
+    bookingId: reserved.id as string,
+    leadId,
+    leadName: name,
+    leadEmail: email,
+    startIso,
+    answers: av.answers,
+  })
 
   // Nurture suppression (Phase 5b): a booked lead exits the sequence — cancel any
   // still-scheduled nurture/book-a-call sends — and gets 24h/1h call reminders.
@@ -530,6 +529,7 @@ async function bookLegacyPath(
   // the same notice, gated on the same per-coach pref.
   if (funnelRow) {
     await sendCoachBookingNotification({
+      coachUserId: funnelRow.user_id as string,
       funnel: funnelRow,
       bookingId: reserved.id as string,
       leadId,

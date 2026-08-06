@@ -161,19 +161,7 @@ export function initialsFrom(name: string | null): string {
  * Configured means: a row exists AND at least one day has a window.
  */
 export async function hasConfiguredAvailability(userId: string): Promise<boolean> {
-  const { data } = await supabase
-    .from('user_availability')
-    .select('working_hours')
-    .eq('user_id', userId)
-    .maybeSingle()
-  if (!data) return false
-  const wh = (data as { working_hours: unknown }).working_hours
-  if (!wh || typeof wh !== 'object') return false
-  const days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const
-  return days.some((d) => {
-    const w = (wh as Record<string, unknown>)[d]
-    return !!w && typeof w === 'object'
-  })
+  return (await loadUserAvailability(userId)).configured
 }
 
 export type PublicBookingPage = {
