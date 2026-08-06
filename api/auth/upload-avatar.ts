@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
+import { DIRECT_UPLOAD_MAX_BYTES, DIRECT_UPLOAD_MAX_LABEL, readBoundedBody } from '../../lib/rawBody'
 
 // POST /api/auth/upload-avatar — body is the raw image bytes, Content-Type
 // set to the image's real mime type (image/jpeg, image/png, or image/webp).
@@ -12,28 +13,11 @@ export const config = {
   api: { bodyParser: false },
 }
 
-const MAX_BYTES = 5 * 1024 * 1024 // 5MB
+// 4MB, not the 5MB this once claimed: Vercel refuses a serverless request
+// body over roughly 4.5MB at the edge, so the old cap was unreachable and an
+// oversized avatar died as an unexplained network error. See lib/rawBody.ts.
+const MAX_BYTES = DIRECT_UPLOAD_MAX_BYTES
 const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-
-// Reads the request body into a Buffer, aborting once MAX_BYTES is exceeded
-// so an oversized upload can't be accumulated into memory unbounded.
-function readBoundedBody(req: VercelRequest): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let total = 0
-    req.on('data', (chunk: Buffer) => {
-      total += chunk.length
-      if (total > MAX_BYTES) {
-        req.destroy()
-        reject(new Error('file_too_large'))
-        return
-      }
-      chunks.push(chunk)
-    })
-    req.on('end', () => resolve(Buffer.concat(chunks)))
-    req.on('error', reject)
-  })
-}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
@@ -50,10 +34,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     let buffer: Buffer
     try {
-      buffer = await readBoundedBody(req)
+      buffer = await readBoundedBody(req, MAX_BYTES)
     } catch (readErr) {
       if (readErr instanceof Error && readErr.message === 'file_too_large') {
-        return res.status(400).json({ error: 'Image must be 5MB or smaller' })
+        return res.status(400).json({ error: `Image must be ${DIRECT_UPLOAD_MAX_LABEL} or smaller` })
       }
       throw readErr
     }

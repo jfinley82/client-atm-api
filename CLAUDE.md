@@ -161,6 +161,23 @@ read-path transforms need the same care as write-path ones, and `original` is
 excluded from `sanitizePhrasingDeep`'s walk so a read→save cycle can't launder
 mangled copy into the baseline that detects coach edits.
 
+**An upload fails as a network error with no status, and the handler's own limit
+never fires.** Vercel refuses a serverless request body over ~4.5MB **at the
+edge** — the function is never invoked, so no handler code runs and nothing it
+would have written is sent. Any `MAX_BYTES` above that is unreachable code
+pretending to be a limit; six endpoints here had one (5MB, 10MB, 20MB, and a
+6MB whose comment even acknowledged the ceiling). `lib/rawBody.ts` owns the
+number now and `tests/uploadLimits.test.ts` fails on any new literal cap.
+The tell in timing: an oversized request fails **faster** than a smaller one
+succeeds, because it dies before the transfer completes. Bracket one size above
+and one below before theorising about the handler — a mechanism that fits the
+symptom is not evidence the request ever arrived. Past the cap the frontend's
+size check is the only thing that can produce a readable error, because the
+server never gets to speak. To actually carry more, the function has to leave
+the transfer path: `lib/uploadUrl.ts` mints a signed URL the browser PUTs to
+directly. That moves size/mime enforcement onto the bucket, which is why
+migration 087 exists — signed URLs without it are an unbounded write endpoint.
+
 **Two renderings of the same thing drift apart, and it looks fine wherever you
 test.** The email CTA button is emitted twice — a VML branch only Outlook draws,
 an anchor branch everyone else draws — and the VML shipped 44px tall against the

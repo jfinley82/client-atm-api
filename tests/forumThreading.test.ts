@@ -3,6 +3,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'stub-key'
 process.env.JWT_SECRET = 'stub-secret'
 
 import { createSessionToken } from '../lib/auth'
+import { DIRECT_UPLOAD_MAX_BYTES, DIRECT_UPLOAD_MAX_LABEL } from '../lib/rawBody'
 
 type Handler = (req: any, res: any) => Promise<void>
 
@@ -329,9 +330,14 @@ const freshCount = (postId: string) => comments.filter((c) => c.post_id === post
       return { status, body, ended, drained: req.readableEnded === true }
     }
 
-    const over = await upload(11 * 1024 * 1024)
-    ok('an 11MB upload is refused with 413', over.status === 413, `${over.status}`)
-    ok('and carries the readable message', over.body?.error === 'Image must be 10MB or smaller', JSON.stringify(over.body))
+    // Derived from the constant, never a literal. The message and the limit
+    // disagreed for as long as MAX_BYTES sat above Vercel's ~4.5MB edge cap:
+    // members were told 10MB by a handler that could never receive more than
+    // 4.5MB, and above that the refusal was a network error with no body at all.
+    // tests/uploadLimits.test.ts holds the ceiling itself.
+    const over = await upload(DIRECT_UPLOAD_MAX_BYTES + 512 * 1024)
+    ok('an oversized upload is refused with 413', over.status === 413, `${over.status}`)
+    ok('and carries the readable message', over.body?.error === `Image must be ${DIRECT_UPLOAD_MAX_LABEL} or smaller`, JSON.stringify(over.body))
     ok('the response was actually sent', over.ended === true)
     ok('the stream drained to end rather than being torn down', over.drained === true, 'aborted mid-stream — destroy() kills the response with it, so the client sees a network error instead of this 413')
 

@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
+import { DIRECT_UPLOAD_MAX_BYTES, DIRECT_UPLOAD_MAX_LABEL, readBoundedBody } from '../../lib/rawBody'
 
 // POST /api/forum/upload-image — body is the raw image bytes, Content-Type set
 // to the image's real mime type. Vercel's default JSON body parser can't handle
@@ -12,11 +13,18 @@ import { setCors } from '../../lib/cors'
 // public `forum-media` bucket. Unlike the slide uploader this is NOT scoped to
 // a card: a forum image belongs to the member, not to a blueprint, so the path
 // is keyed by user id alone.
+//
+// CAPPED AT 4MB, NOT THE 10MB THIS ONCE CLAIMED. Vercel refuses a serverless
+// request body over roughly 4.5MB at the edge, so a 10MB limit here was
+// unreachable code and an oversized upload died as an unexplained network error
+// rather than the 413 below. lib/rawBody.ts has the measurement. Members who
+// need the full 10MB go through POST /api/forum/upload-url, which takes this
+// function out of the transfer path entirely.
 export const config = {
   api: { bodyParser: false },
 }
 
-const MAX_BYTES = 10 * 1024 * 1024 // 10MB
+const MAX_BYTES = DIRECT_UPLOAD_MAX_BYTES
 
 // Allowed image types → file extension. An allowlist, so an upload can only
 // ever become one of these regardless of what the client claims.
@@ -25,39 +33,6 @@ const EXT_BY_TYPE: Record<string, string> = {
   'image/jpeg': 'jpg',
   'image/webp': 'webp',
   'image/gif': 'gif',
-}
-
-// Reads the request body into a Buffer, bounded at MAX_BYTES.
-//
-// Once over the limit it STOPS ACCUMULATING but keeps draining, rather than
-// calling req.destroy(). Destroying tears down the response along with the
-// request stream, so the 413 the handler writes never reaches the client —
-// fetch rejects with a network error instead, and the member gets a generic
-// failure on precisely the case that needs explaining.
-//
-// The trade is bandwidth, not memory: the buffer is released the moment the
-// limit is passed and nothing further is retained, so an oversized upload still
-// cannot be accumulated unbounded. It just finishes transferring before being
-// told no.
-function readBoundedBody(req: VercelRequest): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    let chunks: Buffer[] = []
-    let total = 0
-    let tooLarge = false
-    req.on('data', (chunk: Buffer) => {
-      total += chunk.length
-      if (total > MAX_BYTES) {
-        if (!tooLarge) {
-          tooLarge = true
-          chunks = [] // drop what we have; memory stays bounded at MAX_BYTES
-        }
-        return
-      }
-      chunks.push(chunk)
-    })
-    req.on('end', () => (tooLarge ? reject(new Error('file_too_large')) : resolve(Buffer.concat(chunks))))
-    req.on('error', reject)
-  })
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -76,10 +51,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     let buffer: Buffer
     try {
-      buffer = await readBoundedBody(req)
+      buffer = await readBoundedBody(req, MAX_BYTES)
     } catch (readErr) {
       if (readErr instanceof Error && readErr.message === 'file_too_large') {
-        return res.status(413).json({ error: 'Image must be 10MB or smaller' })
+        return res.status(413).json({ error: `Image must be ${DIRECT_UPLOAD_MAX_LABEL} or smaller` })
       }
       throw readErr
     }
