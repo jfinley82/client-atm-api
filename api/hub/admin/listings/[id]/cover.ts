@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../../../lib/supabase'
 import { requireAdmin } from '../../../../../lib/auth'
 import { setCors } from '../../../../../lib/cors'
-import { DIRECT_UPLOAD_MAX_BYTES, DIRECT_UPLOAD_MAX_LABEL, readBoundedBody } from '../../../../../lib/rawBody'
+import { DIRECT_UPLOAD_MAX_BYTES, DIRECT_UPLOAD_MAX_LABEL, readBoundedBody, respondTooLarge, tooLargeMessage } from '../../../../../lib/rawBody'
 
 // POST /api/hub/admin/listings/[id]/cover — raw image bytes (Content-Type =
 // image/jpeg|png|webp). Mirrors api/auth/upload-avatar.ts: bodyParser off, 5MB
@@ -41,7 +41,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       buffer = await readBoundedBody(req, MAX_BYTES)
     } catch (readErr) {
       if (readErr instanceof Error && readErr.message === 'file_too_large') {
-        return res.status(400).json({ error: `Image must be ${DIRECT_UPLOAD_MAX_LABEL} or smaller` })
+        return respondTooLarge(res, tooLargeMessage('Image'))
       }
       throw readErr
     }

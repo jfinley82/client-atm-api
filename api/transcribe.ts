@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { requireActiveUser } from '../lib/auth'
 import { setCors } from '../lib/cors'
 import { logAudioCost } from '../lib/apiCostLog'
-import { DIRECT_UPLOAD_MAX_BYTES, readBoundedBody } from '../lib/rawBody'
+import { DIRECT_UPLOAD_MAX_BYTES, readBoundedBody, respondTooLarge, tooLargeMessage } from '../lib/rawBody'
 
 // POST /api/transcribe — a pure "audio in, text out" service shared by every
 // voice-input surface (Voice & Style Guide, the Step 1-3 tool chats, MTM
@@ -84,7 +84,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     buffer = await readBoundedBody(req, MAX_BYTES)
   } catch (readErr) {
     if (readErr instanceof Error && readErr.message === 'file_too_large') {
-      return res.status(400).json({ error: 'audio_too_large' })
+      return respondTooLarge(res, 'audio_too_large')
     }
     console.error('[transcribe] body read failed', readErr)
     return res.status(500).json({ error: 'transcription_failed' })

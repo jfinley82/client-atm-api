@@ -6,6 +6,7 @@ import { createSessionToken } from '../lib/auth'
 import {
   DIRECT_UPLOAD_MAX_BYTES,
   PLATFORM_BODY_LIMIT_BYTES,
+  UPLOAD_TOO_LARGE_STATUS,
   readBoundedBody,
 } from '../lib/rawBody'
 import { SIGNED_UPLOAD_MAX_BYTES } from '../lib/uploadUrl'
@@ -25,6 +26,13 @@ function ok(label: string, cond: boolean, extra?: string) {
 }
 
 const USER = 'user-1'
+// Admin so the same session satisfies requireAdmin on the hub cover endpoint.
+// These assertions are about size, not authorization.
+const ADMIN = USER
+
+// Filled in by the sweep below and asserted against the endpoint table, so a
+// new raw-body endpoint cannot be added without being checked for agreement.
+let rawBodyEndpointCount = 0
 
 const realFetch = globalThis.fetch
 globalThis.fetch = (async (input: any, init?: any) => {
@@ -33,8 +41,10 @@ globalThis.fetch = (async (input: any, init?: any) => {
     new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('/rest/v1/users')) {
-    return json({ id: USER, status: 'active', role: 'user', membership_tier: 'full' })
+    return json({ id: USER, status: 'active', role: 'admin', membership_tier: 'full' })
   }
+  // the hub cover endpoint checks the listing exists before reading the body
+  if (url.includes('/rest/v1/hub_listings')) return json({ id: 'listing-1' })
   // storage: POST /object/upload/sign/<bucket>/<path> mints the credential
   if (url.includes('/storage/v1/object/upload/sign/')) {
     const path = url.split('/storage/v1/object/upload/sign/')[1].split('?')[0]
@@ -75,6 +85,9 @@ globalThis.fetch = (async (input: any, init?: any) => {
     for (const file of walk(join(repoRoot, 'api'))) {
       const src = readFileSync(file, 'utf8')
       if (!/bodyParser:\s*false/.test(src)) continue
+      // Webhooks (stripe, resend, zoom) also read raw bodies, but for signature
+      // verification rather than an upload — no cap, nothing to agree about.
+      if (/from '(\.\.\/)+lib\/rawBody'/.test(src)) rawBodyEndpointCount++
       // A literal byte arithmetic cap, e.g. `10 * 1024 * 1024`.
       const literal = /const\s+MAX_\w*BYTES\s*=\s*\d+\s*\*/.exec(src)
       if (literal) offenders.push(`${file.split('/api/')[1]}: ${literal[0]}`)
@@ -175,6 +188,93 @@ globalThis.fetch = (async (input: any, init?: any) => {
     ok('slides: same message from the template it was copied from', slides.body?.error === 'Image must be 4MB or smaller', JSON.stringify(slides.body))
   }
 
+  console.log('\n-- every raw-body endpoint answers the same condition the same way --')
+  // Assert the endpoints against EACH OTHER, not against a constant. They share
+  // one condition and used to disagree about it: forum and slides said 413,
+  // avatar, guide, hub cover, transcribe and pdf/render said 400. Every message
+  // was correct and readable, so nothing was member-facing — it bites the first
+  // time a frontend writes `if (res.status === 413)` and gets it right on two
+  // endpoints out of seven.
+  //
+  // Comparing each to UPLOAD_TOO_LARGE_STATUS alone would not catch the failure
+  // that matters, which is two endpoints differing. So collect them all and
+  // check the SET has one member.
+  {
+    const { Readable } = await import('stream')
+
+    const avatar: Handler = (await import('../api/auth/upload-avatar')).default
+    const cover: Handler = (await import('../api/hub/admin/listings/[id]/cover')).default
+    const guide: Handler = (await import('../api/guide/publish')).default
+    const transcribe: Handler = (await import('../api/transcribe')).default
+    const render: Handler = (await import('../api/pdf/render')).default
+    const forumUpload: Handler = (await import('../api/forum/upload-image')).default
+    const slidesUpload: Handler = (await import('../api/slides/upload-image')).default
+
+    process.env.GROQ_API_KEY = 'stub-groq-key'
+
+    // Every endpoint that reads a raw body under a cap. If one is added without
+    // a row here the count assertion below fails, so the table cannot quietly
+    // fall behind the api/ directory.
+    const endpoints: Array<{ name: string; handler: Handler; contentType: string; query?: any }> = [
+      { name: 'forum/upload-image', handler: forumUpload, contentType: 'image/png' },
+      { name: 'slides/upload-image', handler: slidesUpload, contentType: 'image/png', query: { card_id: 'card-1' } },
+      { name: 'auth/upload-avatar', handler: avatar, contentType: 'image/png' },
+      { name: 'hub/listings/[id]/cover', handler: cover, contentType: 'image/png', query: { id: 'listing-1' } },
+      { name: 'guide/publish', handler: guide, contentType: 'application/pdf', query: { card_id: 'card-1' } },
+      { name: 'transcribe', handler: transcribe, contentType: 'audio/webm' },
+      { name: 'pdf/render', handler: render, contentType: 'application/json' },
+    ]
+
+    const statuses = new Map<string, number>()
+    for (const ep of endpoints) {
+      const chunk = Buffer.alloc(512 * 1024, 1)
+      const total = DIRECT_UPLOAD_MAX_BYTES + 256 * 1024
+      const chunks: Buffer[] = []
+      for (let sent = 0; sent < total; sent += chunk.length) {
+        chunks.push(chunk.subarray(0, Math.min(chunk.length, total - sent)))
+      }
+      const req: any = Readable.from(chunks)
+      req.method = 'POST'
+      req.headers = { 'content-type': ep.contentType, authorization: `Bearer ${await createSessionToken(ADMIN)}` }
+      req.query = ep.query || {}
+      let status = 0
+      let body: any = null
+      const res: any = {
+        setHeader() {},
+        status(c: number) {
+          status = c
+          return res
+        },
+        json(v: unknown) {
+          body = v
+          return res
+        },
+        send() {
+          return res
+        },
+        end() {
+          return res
+        },
+      }
+      await ep.handler(req, res)
+      statuses.set(ep.name, status)
+      ok(`${ep.name}: refuses an oversized body with a message`, typeof body?.error === 'string' && status !== 0, `${status} ${JSON.stringify(body)}`)
+    }
+
+    const distinct = new Set(statuses.values())
+    ok(
+      'all seven agree on ONE status for too-large',
+      distinct.size === 1,
+      [...statuses].map(([k, v]) => `${k}=${v}`).join('  ')
+    )
+    ok(
+      'and it is the status lib/rawBody.ts declares',
+      distinct.size === 1 && [...distinct][0] === UPLOAD_TOO_LARGE_STATUS,
+      `${[...distinct]} vs ${UPLOAD_TOO_LARGE_STATUS}`
+    )
+    ok('the table covers every raw-body endpoint in api/', statuses.size === rawBodyEndpointCount, `${statuses.size} tested vs ${rawBodyEndpointCount} found`)
+  }
+
   console.log('\n-- signed upload URLs: the path is ours, the ceiling is not the platform’s --')
   {
     const forumSign: Handler = (await import('../api/forum/upload-url')).default
@@ -217,19 +317,32 @@ globalThis.fetch = (async (input: any, init?: any) => {
     const tooBig = await sign(forumSign, { content_type: 'image/png', size: SIGNED_UPLOAD_MAX_BYTES + 1 })
     ok('a declared size over the signed limit is refused up front', tooBig.status === 413, `${tooBig.status}`)
 
-    const badType = await sign(forumSign, { content_type: 'application/pdf' })
+    const badType = await sign(forumSign, { content_type: 'application/pdf', size: 2048 })
     ok('a non-image type is 415 before any credential is minted', badType.status === 415, `${badType.status}`)
 
-    const slidesOk = await sign(slidesSign, { content_type: 'image/webp' }, { card_id: 'card-1' })
+    // size is REQUIRED, and this is why: storage answers an oversize PUT with
+    // HTTP 400 carrying "statusCode":"413" in the body, so a refusal that
+    // happens there cannot be detected by status. Declaring the size keeps the
+    // only member-facing case on our side of the wire, where it is a real 413.
+    const noSize = await sign(forumSign, { content_type: 'image/png' })
+    ok('a signing request without a size is refused', noSize.status === 400 && noSize.body?.error === 'size required', `${noSize.status} ${JSON.stringify(noSize.body)}`)
+
+    ok(
+      'the signed oversize refusal uses the same status as the direct endpoints',
+      tooBig.status === UPLOAD_TOO_LARGE_STATUS,
+      `${tooBig.status} vs ${UPLOAD_TOO_LARGE_STATUS}`
+    )
+
+    const slidesOk = await sign(slidesSign, { content_type: 'image/webp', size: 2048 }, { card_id: 'card-1' })
     ok('slides: the path nests the card under the user', slidesOk.body?.path?.startsWith(`${USER}/card-1/`), slidesOk.body?.path)
 
     // card_id reaches the storage path and comes from the request, unlike the
     // user id. Without the segment guard it could climb out of the member's
     // own prefix.
-    const traversal = await sign(slidesSign, { content_type: 'image/png' }, { card_id: '../other-user' })
+    const traversal = await sign(slidesSign, { content_type: 'image/png', size: 2048 }, { card_id: '../other-user' })
     ok('slides: a traversing card_id is refused, not interpolated', traversal.status === 400, `${traversal.status} ${JSON.stringify(traversal.body)}`)
 
-    const dotted = await sign(slidesSign, { content_type: 'image/png' }, { card_id: 'a/b' })
+    const dotted = await sign(slidesSign, { content_type: 'image/png', size: 2048 }, { card_id: 'a/b' })
     ok('slides: a card_id with a separator is refused too', dotted.status === 400, `${dotted.status}`)
 
     const noAuthReq: any = { method: 'GET', headers: {}, query: {}, body: {} }

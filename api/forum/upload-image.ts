@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
-import { DIRECT_UPLOAD_MAX_BYTES, DIRECT_UPLOAD_MAX_LABEL, readBoundedBody } from '../../lib/rawBody'
+import { DIRECT_UPLOAD_MAX_BYTES, DIRECT_UPLOAD_MAX_LABEL, readBoundedBody, respondTooLarge, tooLargeMessage } from '../../lib/rawBody'
 
 // POST /api/forum/upload-image — body is the raw image bytes, Content-Type set
 // to the image's real mime type. Vercel's default JSON body parser can't handle
@@ -54,7 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       buffer = await readBoundedBody(req, MAX_BYTES)
     } catch (readErr) {
       if (readErr instanceof Error && readErr.message === 'file_too_large') {
-        return res.status(413).json({ error: `Image must be ${DIRECT_UPLOAD_MAX_LABEL} or smaller` })
+        return respondTooLarge(res, tooLargeMessage('Image'))
       }
       throw readErr
     }

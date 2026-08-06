@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { UPLOAD_TOO_LARGE_STATUS } from './rawBody'
 
 // Signed upload URLs — the way past the platform body cap described in
 // lib/rawBody.ts.
@@ -28,6 +29,20 @@ import { supabase } from './supabase'
 // allowed_mime_types NULL, which was harmless while every write went through a
 // function that checked them — and would have been an unbounded public write
 // endpoint the moment one didn't.
+//
+// THE BUCKET'S REFUSAL CANNOT BE DETECTED BY STATUS CODE. When storage rejects
+// an oversize object it answers the PUT with HTTP 400 carrying
+// `{"statusCode":"413", ...}` in the BODY. So `res.status === 413` is false on
+// exactly the case that needs handling, and a frontend that checks it will get
+// the direct endpoints right and this one wrong.
+//
+// The fix is to not depend on that response. `size` is REQUIRED on both signing
+// endpoints, so a legitimate oversize file is refused here — with a real
+// UPLOAD_TOO_LARGE_STATUS and a readable message — before a single byte is
+// transferred. Storage's refusal is then only reachable by a client that
+// declared one size and sent another, which is a bug or an attack, not a member
+// with a large photo. Treat a failed PUT as a generic upload failure; the case
+// worth explaining was already explained.
 
 export const IMAGE_EXT_BY_TYPE: Record<string, string> = {
   'image/png': 'png',
@@ -83,7 +98,7 @@ export async function signImageUpload(opts: {
   bucket: SignedUploadBucket
   prefix: string
   contentType: string
-  declaredBytes?: number | null
+  declaredBytes: number | null
 }): Promise<SignImageResult> {
   const contentType = (opts.contentType || '').split(';')[0].trim().toLowerCase()
   const ext = IMAGE_EXT_BY_TYPE[contentType]
@@ -96,9 +111,21 @@ export async function signImageUpload(opts: {
     return { ok: false, status: 400, error: 'invalid_upload_prefix' }
   }
 
+  // Required, not optional. See the note above: this check is the ONLY place a
+  // member can be told their image is too big in a way the frontend can detect
+  // by status, because storage reports its own refusal as a 400 with the 413
+  // buried in the body. Letting a caller omit the size would hand that case
+  // straight to the undetectable path.
   const declared = opts.declaredBytes
-  if (typeof declared === 'number' && Number.isFinite(declared) && declared > SIGNED_UPLOAD_MAX_BYTES) {
-    return { ok: false, status: 413, error: `Image must be ${SIGNED_UPLOAD_MAX_LABEL} or smaller` }
+  if (typeof declared !== 'number' || !Number.isFinite(declared) || declared <= 0) {
+    return { ok: false, status: 400, error: 'size required' }
+  }
+  if (declared > SIGNED_UPLOAD_MAX_BYTES) {
+    return {
+      ok: false,
+      status: UPLOAD_TOO_LARGE_STATUS,
+      error: `Image must be ${SIGNED_UPLOAD_MAX_LABEL} or smaller`,
+    }
   }
 
   // A NEW object per upload — timestamp + short random keep paths unique, so a

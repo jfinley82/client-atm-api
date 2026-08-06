@@ -161,6 +161,18 @@ read-path transforms need the same care as write-path ones, and `original` is
 excluded from `sanitizePhrasingDeep`'s walk so a read→save cycle can't launder
 mangled copy into the baseline that detects coach edits.
 
+**A size refusal that can't be detected by status code.** Supabase answers an
+oversize signed-URL PUT with **HTTP 400 carrying `"statusCode":"413"` in the
+body**, so `res.status === 413` is false on exactly the case that needs
+handling. The signing endpoints therefore require `size`, so a legitimate
+oversize file is refused by *us* with a real 413 before any transfer; storage's
+own refusal is then only reachable by a client that declared one size and sent
+another. Related: seven endpoints shared the too-large condition and disagreed
+about its status (two 413, five 400) — invisible while every message was
+readable, live the moment a frontend keys on the status. `lib/rawBody.ts` owns
+the number, the message **and** the status; collapsing duplicates in one
+dimension just moves the drift into the next one.
+
 **An upload fails as a network error with no status, and the handler's own limit
 never fires.** Vercel refuses a serverless request body over ~4.5MB **at the
 edge** — the function is never invoked, so no handler code runs and nothing it

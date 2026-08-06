@@ -1,4 +1,4 @@
-import type { VercelRequest } from '@vercel/node'
+import type { VercelRequest, VercelResponse } from '@vercel/node'
 
 // Raw request bodies, read once and correctly, for every endpoint that runs with
 // `bodyParser: false`.
@@ -31,6 +31,39 @@ export const PLATFORM_BODY_LIMIT_BYTES = Math.floor(4.5 * 1024 * 1024)
 export const DIRECT_UPLOAD_MAX_BYTES = 4 * 1024 * 1024
 
 export const DIRECT_UPLOAD_MAX_LABEL = '4MB'
+
+// The status every "too large" refusal answers with, everywhere.
+//
+// This module already owned the number and the message. It owns the status for
+// the same reason: seven endpoints share one condition, and before this they
+// disagreed about it — forum/upload-image and slides/upload-image returned 413
+// while auth/upload-avatar, guide/publish, hub cover, transcribe and pdf/render
+// returned 400. Every message was correct and readable, so nothing was
+// member-facing; it bites the first time a frontend writes
+// `if (res.status === 413)` and gets it right on two endpoints out of seven.
+//
+// Collapsing six copies of readBoundedBody into one removed the drift in the
+// size dimension. Leaving the status behind would just have opened a new one.
+//
+// 413 rather than 400 because that is what the condition means, because it is
+// what the two most recently written endpoints already used, and because it is
+// what Supabase itself reports for an oversize object — see the note in
+// lib/uploadUrl.ts about it doing so inside a 400.
+export const UPLOAD_TOO_LARGE_STATUS = 413
+
+/** The standard prose refusal. `noun` is the thing being uploaded: 'Image', 'PDF'. */
+export function tooLargeMessage(noun: string): string {
+  return `${noun} must be ${DIRECT_UPLOAD_MAX_LABEL} or smaller`
+}
+
+/**
+ * Answer a too-large body. Every caller goes through here so the status cannot
+ * drift again; the message stays the caller's, because transcribe speaks in
+ * machine codes and pdf/render is not talking about a file.
+ */
+export function respondTooLarge(res: VercelResponse, error: string) {
+  return res.status(UPLOAD_TOO_LARGE_STATUS).json({ error })
+}
 
 /**
  * Read the request body into a Buffer, bounded at maxBytes.

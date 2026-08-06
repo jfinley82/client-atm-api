@@ -9,7 +9,7 @@ import { signImageUpload } from '../../lib/uploadUrl'
 // for the ceiling and lib/uploadUrl.ts for what still enforces size and type
 // once this function is no longer in the transfer path.
 //
-// Request:  { content_type: 'image/png', size?: 1234567 }
+// Request:  { content_type: 'image/png', size: 1234567 }   — size is REQUIRED
 // Response: { uploadUrl, token, path, publicUrl, maxBytes }
 //
 // The frontend then does:
@@ -29,6 +29,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
   const contentType = typeof body.content_type === 'string' ? body.content_type : ''
+  // Required. A missing size would push the refusal onto storage, whose
+  // oversize answer is an HTTP 400 with "statusCode":"413" in the body — a
+  // refusal no frontend can detect by status. See lib/uploadUrl.ts.
   const size = typeof body.size === 'number' ? body.size : null
 
   try {

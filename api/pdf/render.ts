@@ -3,7 +3,7 @@ import chromium from '@sparticuz/chromium'
 import puppeteer from 'puppeteer-core'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
-import { DIRECT_UPLOAD_MAX_BYTES, DIRECT_UPLOAD_MAX_LABEL, readBoundedBody } from '../../lib/rawBody'
+import { DIRECT_UPLOAD_MAX_BYTES, DIRECT_UPLOAD_MAX_LABEL, readBoundedBody, respondTooLarge, tooLargeMessage } from '../../lib/rawBody'
 
 // @sparticuz/chromium is pinned to 133.0.0 — the last CommonJS release (137+ is
 // ESM-only) — with its matching puppeteer-core (Chrome 133). Both are CJS, so
@@ -78,7 +78,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     body = JSON.parse(raw.toString('utf8') || '{}') as Record<string, unknown>
   } catch (err) {
     if (err instanceof Error && err.message === 'file_too_large') {
-      return res.status(400).json({ error: `html too large (max ${MAX_HTML_LABEL})` })
+      return respondTooLarge(res, `html too large (max ${MAX_HTML_LABEL})`)
     }
     return res.status(400).json({ error: 'Invalid JSON body' })
   }
@@ -88,7 +88,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'html required' })
   }
   if (Buffer.byteLength(html, 'utf8') > MAX_HTML_BYTES) {
-    return res.status(400).json({ error: `html too large (max ${MAX_HTML_LABEL})` })
+    return respondTooLarge(res, `html too large (max ${MAX_HTML_LABEL})`)
   }
 
   const format: 'Letter' | 'A4' = body.format === 'A4' ? 'A4' : 'Letter'
