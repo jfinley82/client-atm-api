@@ -82,6 +82,98 @@ removing it.
 - The gate proves logic. It does not prove packaging or deployment. See the rule
   above.
 
+## Merging
+
+Backend work in this repo **merges by default** once `npm run gate` is green.
+Report after; do not ask first.
+
+Every unmerged branch costs a round. The other builder reads `main`, correctly
+finds a different world, and reports a contract mismatch that is really a merge
+that never happened. That happened twice on 2026-08-06 — the six-commit quiz
+chain (which is where `api/quiz/questions.ts`, `gap.focus/resolution/disputed`
+and `MATERIAL_MARGIN` all arrived) and then `af732f3`, where nothing on `main`
+read `quiz_responses` — and each time the frontend was right and the branch was
+the problem.
+
+**Still stop and ask** for:
+
+- **Visible behaviour changes.** The `charge-demo` "bookable → not bookable"
+  flip is the shape. If a coach or a lead would notice, ask.
+- **Migrations and production data writes.** Validate in `begin; … rollback;`
+  first and say what is about to be applied. `record_quiz_result` needing to be
+  an upsert is why: the gate was green and the design was still wrong, and only
+  production had the `UNIQUE(user_id)` constraint that proved it.
+- **Anything in `client-atm-frontend`.** Another session's repo.
+- **Anything you expect to be overruled on.** State the reasoning rather than
+  deciding quietly; the `stated_challenge` decline was right and would have been
+  invisible otherwise.
+
+Confirm a merge landed **by capability, not by SHA**. Squash merges mean the
+branch SHA never appears on `main`. Check that the endpoint answers, not that
+the commit is an ancestor.
+
+---
+
+## Verification
+
+### Fix the property, not the example
+
+When a defect arrives as an example, it is not fixed until the **property** it
+violates is written down in words, in the commit and in the test.
+
+"A coach with a perfect offer must not be told their offer is unclear" is an
+example, and it produces a guard against one row. "The results screen may not
+assert something the scores contradict" is the property, and it produces a guard
+against the class. If the property cannot be stated, the fix is not understood
+yet, and shipping it is a guess wearing a green check.
+
+On 2026-08-06 the same gap guard leaked three times. Each fix aimed at the last
+example, and each time the carve-out was where it leaked next.
+
+### A sweep is only as good as its predicate
+
+An exhaustive run reporting zero failures is evidence about the predicate, not
+about the code, until the predicate has been watched to fail.
+
+- **Dump one complete result and read it before writing any predicate against
+  it.** A sweep of 65,536 rows reading a field that had been renamed reported
+  perfect health, instantly and loudly.
+- **Report the distribution across every state, not the count of failures.** A
+  guard that swallows everything and a guard that catches nothing both report
+  zero. Only the spread separates them.
+- **Never call the code under test from the assertion.** Mutating a shared
+  helper moves the rule and the check together, and the test passes while the
+  bug runs. Write the predicate out independently and assert the lib agrees.
+
+### Assert the thing, not its proxy
+
+- A guard shaped like a container (bucket, host, path prefix) passes until real
+  data shares that container. Assert the **specific value** that must be absent.
+- A fixture that shares no host, id or shape with production data proves nothing
+  about production data.
+- A mock without the real table's constraints will pass a design the database
+  rejects.
+- If every fixture already satisfies a guard, the mutation that guard exists to
+  catch is untested. Add the fixture that violates it.
+
+### Stale comments are defects
+
+A comment that was true of the previous design is a lie the next reader will act
+on. When behaviour changes, the comment above it changes in the same commit.
+Four instances on 2026-08-06: a "needs a decision" note on an answered question,
+a `PROPOSAL FOR JAMAUL` block describing work that had shipped, a hardcoded
+count above a table of a different size, and a mapping rationale that survived
+the mapping it justified.
+
+### Counts and copy come from the data
+
+Never write a literal for something the data already knows: question counts,
+served string totals, list lengths, "Question X of 7". Derive it. The only
+literals that stay explicit are the ones pinning intended **shape**, and those
+belong in one place.
+
+---
+
 ## Migrations
 
 - `supabase/migrations/NNN_name.sql`, applied by `scripts/migrate.mjs`.
