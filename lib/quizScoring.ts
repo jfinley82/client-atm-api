@@ -1,4 +1,5 @@
-// The ATM Quiz: seven multiple-choice questions, three sub-scores, one composite.
+// The ATM Quiz: eight multiple-choice questions — seven scored into three
+// sub-scores and one composite, plus one that names the coach's own gap.
 //
 // EVERYTHING THAT DECIDES A NUMBER IS A TABLE IN THIS FILE, and so is every word
 // the coach reads. No points are computed in the handler, none are derived from
@@ -31,7 +32,7 @@ export const QUIZ_PILLARS: QuizPillar[] = ['attract', 'transform', 'monetize']
  *
  * 'capacity' is NOT a pillar and is deliberately not one: "it sells but I can't
  * deliver more" is a constraint no amount of attracting, clarifying or pricing
- * addresses, and nothing in the seven questions measures it. It can be STATED
+ * addresses, and nothing in the scored questions measures it. It can be STATED
  * and acted on without being scored, which is exactly why the question that
  * names it is not scored either.
  */
@@ -73,7 +74,7 @@ export type ScoredQuestion = {
  *
  * It is now the PRIMARY source of the gap line: this is the one question where
  * the coach states their constraint outright, and that is better evidence than a
- * minimum derived from the other six. The answer is still stored, and travels in
+ * minimum derived from the scored ones. The answer is still stored, and travels in
  * the result so Step 1 can use it alongside the problem statement.
  */
 export type FocusQuestion = {
@@ -86,7 +87,9 @@ export type FocusQuestion = {
 export type QuizQuestion = ScoredQuestion | FocusQuestion
 
 /**
- * The seven scored questions, in the order they are asked.
+ * Every multiple-choice question, in the order they are asked. Seven are scored;
+ * one names the gap and is not. The open problem question is NOT here — it is
+ * not multiple choice and does not belong in the same loop.
  *
  * ARRAY ORDER IS PRESENTATION ORDER and nothing else — scoring is keyed by
  * question id and by letter, so these can be resequenced without moving a single
@@ -173,6 +176,24 @@ export const QUIZ_QUESTIONS: QuizQuestion[] = [
   },
   {
     kind: 'scored',
+    id: 'delivery_repeatability',
+    pillar: 'transform',
+    // The other half of Transform. offer_clarity asks whether the offer can be
+    // SAID; this asks whether it can be DELIVERED repeatably, which is what
+    // Step 2 works on. Added 2026-08-06 after biggest_challenge stopped being
+    // scored left Transform resting on one question — it could then only read
+    // 0, 33, 67 or 100 while Attract moved in ten steps, so the results bars
+    // would have looked jumpy next to each other for a reason nobody could see.
+    prompt: 'How repeatable is the way you deliver results?',
+    options: [
+      { letter: 'a', label: 'Every client is different and I improvise', points: 1 },
+      { letter: 'b', label: 'A rough process, but I rework it each time', points: 2 },
+      { letter: 'c', label: 'A defined process most clients go through', points: 3 },
+      { letter: 'd', label: 'Documented well enough that someone else could run it', points: 4 },
+    ],
+  },
+  {
+    kind: 'scored',
     id: 'ninety_day_goal',
     pillar: 'monetize',
     // Scored as a position, not an ambition: wanting to scale delivery implies
@@ -189,36 +210,18 @@ export const QUIZ_QUESTIONS: QuizQuestion[] = [
 
 export const QUIZ_QUESTION_IDS = QUIZ_QUESTIONS.map((q) => q.id)
 
-/** The six that produce numbers. Derived, never a second hand-written list. */
+/** The ones that produce numbers. Derived, never a second hand-written list. */
 export const SCORED_QUESTIONS = QUIZ_QUESTIONS.filter((q): q is ScoredQuestion => q.kind === 'scored')
 
 /** The one that names the gap. Derived the same way, and there is exactly one. */
 export const FOCUS_QUESTION = QUIZ_QUESTIONS.find((q): q is FocusQuestion => q.kind === 'focus')!
 
-// ---------------------------------------------------------------------------
-// PROPOSAL FOR JAMAUL — a second Transform question. NOT WIRED IN.
-//
-// Making biggest_challenge unscored leaves Transform resting on offer_clarity
-// alone. That is correct rather than broken — normalise handles a one-question
-// pillar — but it is coarse: Transform can only ever read 0, 33, 67 or 100,
-// while Attract moves in seven steps. A pillar that can only take four values
-// will look jumpy next to the other two on the results bars.
-//
-// The gap is real: offer_clarity asks whether the offer can be SAID. Nothing
-// asks whether it can be DELIVERED repeatably, which is the other half of
-// Transform and the half Step 2 works on. Suggested:
-//
-//   id: 'delivery_repeatability', pillar: 'transform'
-//   "How repeatable is the way you deliver results?"
-//     a  Every client is different and I improvise            1
-//     b  I have a rough process, but I rework it each time     2
-//     c  A defined process most clients go through             3
-//     d  Documented well enough that someone else could run it 4
-//
-// Left for Jamaul to accept, reword or reject — inventing an eighth question
-// silently is how the option text ended up needing writing down in the first
-// place. Adding it needs no code change beyond the entry itself.
-// ---------------------------------------------------------------------------
+// Transform holds two questions as of 2026-08-06. It briefly held one, when
+// biggest_challenge stopped being scored, and that was correct but coarse: a
+// one-question pillar can only read 0, 33, 67 or 100 while Attract moves in ten
+// steps, so the results bars would have looked jumpy for a reason nobody could
+// see. delivery_repeatability was proposed rather than invented, and wired in
+// only after Jamaul approved the wording unchanged.
 
 /**
  * The open question, asked last and never scored.

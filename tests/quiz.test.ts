@@ -198,12 +198,16 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
 
   console.log('\n-- the scoring table is complete and self-consistent --')
   {
-    ok('seven questions are asked', QUIZ_QUESTIONS.length === 7, `${QUIZ_QUESTIONS.length}`)
-    ok('six of them are scored', SCORED_QUESTIONS.length === 6, `${SCORED_QUESTIONS.length}`)
+    // The intended SHAPE, spelled out — these are the spec, not incidentals.
+    // Everything else below derives its count so a question added or removed
+    // moves one number here and nothing else.
+    ok('eight questions are asked', QUIZ_QUESTIONS.length === 8, `${QUIZ_QUESTIONS.length}`)
+    ok('seven of them are scored', SCORED_QUESTIONS.length === 7, `${SCORED_QUESTIONS.length}`)
+    ok('Attract 3, Transform 2, Monetize 2', JSON.stringify(QUIZ_PILLARS.map((p) => SCORED_QUESTIONS.filter((q) => q.pillar === p).length)) === '[3,2,2]', JSON.stringify(QUIZ_PILLARS.map((p) => SCORED_QUESTIONS.filter((q) => q.pillar === p).length)))
     ok('and exactly one names the gap', QUIZ_QUESTIONS.filter((q) => q.kind === 'focus').length === 1)
     ok('every scored question belongs to a pillar', SCORED_QUESTIONS.every((q) => QUIZ_PILLARS.includes(q.pillar)))
     ok('every pillar has at least one scored question', QUIZ_PILLARS.every((p) => SCORED_QUESTIONS.some((q) => q.pillar === p)))
-    ok('no duplicate question ids', new Set(QUIZ_QUESTION_IDS).size === 7)
+    ok('no duplicate question ids', new Set(QUIZ_QUESTION_IDS).size === QUIZ_QUESTIONS.length)
 
     // A composite with no moniker is a results screen with an empty headline.
     // Checked across all 101 values rather than by reading the bands.
@@ -264,8 +268,11 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
     ok('the question set is served', served.status === 200, `${served.status} ${JSON.stringify(served.body)}`)
 
     const questions = (served.body?.questions || []) as Array<{ id: string; prompt: string; options: Array<{ letter: string; label: string }> }>
-    ok('all seven come back', questions.length === QUIZ_QUESTIONS.length, `${questions.length}`)
-    ok('and the count is echoed rather than hardcoded downstream', served.body?.total === QUIZ_QUESTIONS.length)
+    ok('all of them come back', questions.length === QUIZ_QUESTIONS.length, `${questions.length}`)
+    // The progress counter reads from this. A literal anywhere downstream would
+    // have gone stale when the scored set grew from six to seven.
+    ok('the total is echoed from the served set, not a literal', served.body?.total === QUIZ_QUESTIONS.length, `${served.body?.total} vs ${QUIZ_QUESTIONS.length}`)
+    ok('and it equals what was actually served', served.body?.total === questions.length, `${served.body?.total} vs ${questions.length}`)
 
     // ONE: every served option maps to a points entry.
     const unscored: string[] = []
@@ -319,7 +326,7 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
     // The open question travels with them, separately, because it is not scored
     // and must not be rendered into the scored loop.
     ok('the open question is served', served.body?.problem_question?.prompt === QUIZ_PROBLEM_PROMPT, JSON.stringify(served.body?.problem_question))
-    ok('and is not one of the scored seven', !questions.some((q) => q.prompt === QUIZ_PROBLEM_PROMPT))
+    ok('and is not one of the multiple-choice set', !questions.some((q) => q.prompt === QUIZ_PROBLEM_PROMPT))
     ok('and names the field it posts to', served.body?.problem_question?.field === 'problem_statement')
 
     // Answering with what was served is accepted end to end — the loop closed.
@@ -357,7 +364,7 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
       `attract ${attractOnly.composite} vs monetize ${monetizeOnly.composite}`
     )
 
-    // The unscored question moves NO number. Same six scored answers, four
+    // The unscored question moves NO number. Same scored answers, four
     // different stated challenges, identical scores — which is the property
     // that broke before: it summed into Transform and dragged it around.
     const acrossChallenges = FOCUS_QUESTION.options.map((o) =>
@@ -447,11 +454,11 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
     // Attract 0, Transform 0, Monetize 17, challenge (c). The page said "Your
     // biggest gap is Monetize" — the only pillar with any score at all.
     {
-      const r = scoreQuiz({
-        client_flow: 'a', lead_source: 'a', ideal_client: 'a',
-        offer_clarity: 'a', pricing_confidence: 'a', ninety_day_goal: 'b',
-        biggest_challenge: 'c',
-      } as any)
+      // Built from WORST so a question added later cannot silently drop out of
+      // this fixture — the first version listed the ids by hand and stopped
+      // covering delivery_repeatability the moment it was added, throwing rather
+      // than quietly scoring a partial answer set.
+      const r = scoreQuiz({ ...WORST, ninety_day_goal: 'b', biggest_challenge: 'c' } as any)
       ok('the scores reproduce', JSON.stringify(r.scores) === JSON.stringify({ attract: 0, transform: 0, monetize: 17 }), JSON.stringify(r.scores))
       ok('the gap is no longer Monetize', r.gap.focus !== 'monetize', `${r.gap.focus} — "${r.gap.title}"`)
       ok('it names a pillar the scores actually put lowest', r.gap.focus !== null && r.scores[r.gap.focus as 'attract' | 'transform' | 'monetize'] === 0)
@@ -588,8 +595,8 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
     // Asserted against the ROW, not the response body — the brief is explicit,
     // and a handler that returned a correct-looking payload while storing
     // something else is exactly the failure this catches.
-    ok('the row holds all seven letters', QUIZ_QUESTION_IDS.every((id) => row.answers[id] === 'c'), JSON.stringify(row.answers))
-    ok('and only those seven', Object.keys(row.answers).length === 7, JSON.stringify(Object.keys(row.answers)))
+    ok('the row holds every letter', QUIZ_QUESTION_IDS.every((id) => row.answers[id] === 'c'), JSON.stringify(row.answers))
+    ok('and only those', Object.keys(row.answers).length === QUIZ_QUESTION_IDS.length, JSON.stringify(Object.keys(row.answers)))
     ok('the row holds the composite', typeof row.score === 'number' && row.score === (res.body as any).score, `${row.score}`)
     ok('the row holds the analysis object', !!row.analysis && typeof (row.analysis as any).moniker === 'string', JSON.stringify(row.analysis))
     ok(
@@ -770,7 +777,7 @@ const MESSY_PROBLEM = "I help coaches who can't say what they do\n\nin one sente
   {
     const checked = validateQuizAnswers({ ...ANSWERS_C, sneaky: 'd', quiz_score: '999' })
     ok('it accepts the submission', checked.ok)
-    ok('and keeps only the known ids', checked.ok && Object.keys(checked.answers).length === 7, JSON.stringify(checked.ok && checked.answers))
+    ok('and keeps only the known ids', checked.ok && Object.keys(checked.answers).length === QUIZ_QUESTION_IDS.length, JSON.stringify(checked.ok && checked.answers))
     ok('uppercase letters are accepted and folded', (() => { const c = validateQuizAnswers({ ...ANSWERS_C, client_flow: 'D' }); return c.ok && c.answers.client_flow === 'd' })())
   }
 

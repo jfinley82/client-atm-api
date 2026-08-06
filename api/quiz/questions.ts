@@ -3,8 +3,9 @@ import { requireActiveUser } from '../../lib/auth'
 import { setCors, noStore } from '../../lib/cors'
 import { QUIZ_PROBLEM_HELP, QUIZ_PROBLEM_PROMPT, servedQuestions } from '../../lib/quizScoring'
 
-// GET /api/quiz/questions — authenticated. The quiz itself: seven prompts with
-// their options, in order, plus the open question asked last.
+// GET /api/quiz/questions — authenticated. The quiz itself: every
+// multiple-choice prompt with its options, in order, plus the open question
+// asked last. The count is whatever the table holds — see `total` below.
 //
 // WHY THE BACKEND OWNS THE WORDS. Scoring is keyed by question id and letter, so
 // what an answer is WORTH lives here. If the option text lived in the frontend,
@@ -35,9 +36,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   return res.status(200).json({
     questions,
-    // Echoed so the progress counter reads "Question X of 7" from the served set
-    // rather than from a 7 written into the frontend, which would go stale the
-    // moment a question is added or removed here.
+    // Echoed so the progress counter reads "Question X of N" from the SERVED set
+    // rather than from a number written into the frontend. That number has
+    // already changed once — the scored set went from six to seven when
+    // delivery_repeatability was added — and a literal anywhere downstream would
+    // have gone stale silently, counting to the wrong total on a live quiz.
     total: questions.length,
     // The open question is deliberately NOT in `questions`: it is not scored,
     // does not auto-advance, and posts to a different field. Keeping it separate
