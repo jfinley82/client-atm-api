@@ -125,7 +125,9 @@ function funnelTags(funnelId?: string, leadId?: string | null, kind?: string): {
 // affect the email that already went out. status 'queued' = handed to Resend
 // with a scheduledAt and still cancelable; 'sent' = delivered immediately.
 async function recordFunnelEmailSend(row: {
-  funnelId: string
+  // NULL for a send with no funnel behind it — a public /book booking is MTM's
+  // own, not a coach's. See migration 089.
+  funnelId: string | null
   leadId: string | null
   // Set only on invite_* sends, which go to a coach_contacts row instead of a
   // lead. Exactly the rows where leadId is null.
@@ -199,6 +201,34 @@ export async function loadCoachBrand(userId: string): Promise<CoachBrand> {
     logoUrl: settings.logo_url && isValidHttpUrl(settings.logo_url) ? settings.logo_url : null,
     primaryColor: sanitizeBrandColor(settings.brand_primary_color, DEFAULT_BRAND_PRIMARY),
   }
+}
+
+// The brand a booking email wears when there is no coach behind it.
+//
+// Public /book bookings are MTM's own discovery calls, so they cannot borrow a
+// coach's business name, logo or reply-to. This is the one default, defined
+// once: a null funnel must never fall through to an unbranded email, which is
+// what happens when each caller invents its own fallback.
+export const MTM_BRAND: CoachBrand = {
+  fromName: 'Micro-Training Method',
+  coachName: 'Micro-Training Method',
+  businessName: 'Micro-Training Method',
+  // No reply-to: replies go to the from address, which is monitored, rather than
+  // to a coach inbox that has nothing to do with this call.
+  replyTo: null,
+  logoUrl: null,
+  primaryColor: DEFAULT_BRAND_PRIMARY,
+}
+
+/**
+ * The brand for a booking's emails, from whichever side owns it.
+ *
+ * ONE resolver, so the coach path and the public path cannot drift into
+ * different answers for the same question. A coach id yields their brand; no
+ * coach yields MTM's.
+ */
+export async function resolveBookingBrand(coachUserId: string | null | undefined): Promise<CoachBrand> {
+  return coachUserId ? loadCoachBrand(coachUserId) : MTM_BRAND
 }
 
 // Coach-branded HTML shell. Header = coach logo, else the business name as text
@@ -745,7 +775,9 @@ export async function sendOneOffEmail(opts: {
 // Resend message id (or null on failure). Never throws.
 export async function scheduleFunnelEmail(opts: {
   brand: CoachBrand
-  funnelId: string
+  // NULL for a public booking, which has no funnel. The Resend tag is simply
+  // omitted in that case — funnelTags already skips a falsy id.
+  funnelId: string | null
   leadId: string | null
   contactId?: string | null
   kind: string
@@ -761,7 +793,7 @@ export async function scheduleFunnelEmail(opts: {
       to: opts.to,
       ...(opts.brand.replyTo ? { replyTo: opts.brand.replyTo } : {}),
       subject: opts.subject,
-      tags: funnelTags(opts.funnelId, opts.leadId, opts.kind),
+      tags: funnelTags(opts.funnelId ?? undefined, opts.leadId, opts.kind),
       ...(opts.scheduledAt ? { scheduledAt: opts.scheduledAt } : {}),
       html: opts.html,
     })
@@ -823,6 +855,7 @@ export async function sendBookingConfirmationEmail(opts: {
   leadId?: string | null
   coachUserId?: string
   manageUrl?: string
+  bookingId?: string
 }): Promise<void> {
   try {
     const kind = 'booking_confirmation'
@@ -867,7 +900,7 @@ export async function sendBookingConfirmationEmail(opts: {
           </tr></table>
           <p style="margin:26px 0 6px; font-family:Arial,Helvetica,sans-serif; font-size:13px; line-height:20px; color:#8A94A6;">Or paste this link into your browser:</p>
           <p style="margin:0; font-family:Arial,Helvetica,sans-serif; font-size:13px; line-height:20px; word-break:break-all;"><a href="${escapeHtml(opts.joinUrl)}" target="_blank" style="color:#3B7A16; text-decoration:none;">${escapeHtml(opts.joinUrl)}</a></p>
-          <p style="margin:24px 0 0; font-family:Arial,Helvetica,sans-serif; font-size:13px; line-height:20px; color:#8A94A6;">The attached calendar file will add this to your calendar.</p>
+          <p style="margin:24px 0 0; font-family:Arial,Helvetica,sans-serif; font-size:13px; line-height:20px; color:#8A94A6;">The attached calendar file will add this to your calendar.</p>${manageSentence(opts.manageUrl)}
         </td></tr>
         <tr><td style="padding-top:24px; padding-left:8px;">
           <p style="margin:0; font-family:Arial,Helvetica,sans-serif; font-size:12px; line-height:20px; color:#98A2B3;">Micro-Training Method</p>
@@ -884,18 +917,28 @@ export async function sendBookingConfirmationEmail(opts: {
       ...(replyTo ? { replyTo } : {}),
       subject: 'Your call is booked',
       attachments: [{ filename: 'invite.ics', content: Buffer.from(opts.icsContent) }],
-      ...(opts.funnelId ? { tags: funnelTags(opts.funnelId, opts.leadId, kind) } : {}),
+      tags: funnelTags(opts.funnelId, opts.leadId, kind),
       html,
     })
-    if (opts.funnelId) {
-      await recordFunnelEmailSend({
-        funnelId: opts.funnelId,
-        leadId: opts.leadId ?? null,
-        kind,
-        messageId: data?.id ?? null,
-        status: error ? 'failed' : 'sent',
-      })
-    }
+    // RECORDED WHETHER OR NOT THERE IS A FUNNEL. This used to be gated on
+    // opts.funnelId, so a public booking's confirmation was sent and never
+    // tracked — the send row is what api/webhooks/resend.ts matches delivery,
+    // bounce and open events against, so an untracked confirmation means a
+    // BOUNCED confirmation is invisible. That is the one email whose failure
+    // means the visitor never received their join link.
+    //
+    // It carries booking_id like the reminders, so one booking's mail is one
+    // group. cancelBookingReminders only touches status 'queued', and a
+    // confirmation is 'sent' the moment it goes, so recording it here cannot put
+    // it in the path of a cancel.
+    await recordFunnelEmailSend({
+      funnelId: opts.funnelId ?? null,
+      leadId: opts.leadId ?? null,
+      kind,
+      messageId: data?.id ?? null,
+      status: error ? 'failed' : 'sent',
+      bookingId: opts.bookingId ?? null,
+    })
     if (error) throw new Error(error.message)
   } catch (err) {
     console.error(`[email] booking confirmation send failed (to=${opts.email})`, err)

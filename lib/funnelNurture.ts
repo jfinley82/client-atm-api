@@ -248,54 +248,120 @@ export async function pivotToBookACall(funnel: Funnel, leadId: string, email: st
   }
 }
 
-// Booking reminders: 24h and 1h before the call. Only schedules a reminder whose
-// send time is still in the future (a call booked <1h out gets no 1h reminder).
-export async function scheduleBookingReminders(
-  funnel: Funnel,
-  leadId: string,
-  email: string,
-  startIso: string,
-  joinUrl: string,
-  bookingId: string,
-  manageUrl?: string,
-  nowMs: number = Date.now(),
-  // The zone the visitor booked in, when one was captured. Optional and last so
-  // every existing caller keeps working and keeps rendering UTC.
-  timezone: string | null = null
-): Promise<void> {
+// ── Booking reminders ────────────────────────────────────────────────────────
+// ONE cadence for every booking, funnel or public: confirmation (sent by the
+// booking handler) plus 1 week, 3 days, 24 hours and 1 hour before the call.
+//
+// Funnel bookings previously got 24h/1h only. Two cadences would have meant a
+// reason for the difference that has to survive every future reader, and this
+// codebase has already paid for one idea with two implementations — the 60/45/14
+// availability window mess came from exactly that.
+//
+// There is no cron. scheduleFunnelEmail hands scheduledAt to Resend, which does
+// the scheduling, and records a queued row carrying the Resend message id so
+// cancelBookingReminders can stop it later.
+// The minimum gap between the confirmation and a HORIZON reminder.
+//
+// A booking made 7.5 days out would otherwise get "your call is next week" about
+// twelve hours after its confirmation — a system with no memory of the email it
+// just sent. These two reminders say nothing except "this is still a while
+// away", which is exactly the claim a fresh confirmation has already made.
+//
+// APPLIED PER REMINDER, not to the set, because a blanket gap does real damage.
+// At 24 hours it would drop the 1-hour reminder for any booking made less than
+// 25 hours ahead — someone booking a call for tomorrow morning would get no
+// nudge before it. That is the single most valuable email here for preventing a
+// no-show, and its worth comes from being close to the CALL, not from being far
+// from the booking. The same argument covers the 24-hour reminder: "your call is
+// tomorrow" is a proximity alert, and it is still true and still useful six
+// hours after someone books.
+const MIN_GAP_AFTER_BOOKING_MS = 24 * HOUR
+
+const BOOKING_REMINDERS: { kind: string; before: number; heading: string; horizon: boolean }[] = [
+  { kind: 'reminder_1w', before: 7 * DAY, heading: 'Your call is next week', horizon: true },
+  { kind: 'reminder_3d', before: 3 * DAY, heading: 'Your call is in 3 days', horizon: true },
+  { kind: 'reminder_24h', before: 24 * HOUR, heading: 'Your call is tomorrow', horizon: false },
+  { kind: 'reminder_1h', before: 1 * HOUR, heading: 'Your call is in 1 hour', horizon: false },
+]
+
+export type BookingReminderContext = {
+  /** Whose brand the emails wear. Resolve with resolveBookingBrand. */
+  brand: CoachBrand
+  /** NULL for a public booking — see migration 089. */
+  funnelId?: string | null
+  /** NULL when no lead matches, which is always true for a public booking. */
+  leadId?: string | null
+  email: string
+  startIso: string
+  joinUrl: string
+  bookingId: string
+  manageUrl?: string
+  /** The zone the visitor booked in, when one was captured. */
+  timezone?: string | null
+  nowMs?: number
+}
+
+/**
+ * Schedule the reminder set for one booking.
+ *
+ * TAKES WHAT IT NEEDS, not a Funnel. It used to require a Funnel as its first
+ * argument and destructure two fields from it, which is precisely what kept the
+ * public path out: a public booking has no funnel to pass. One function serves
+ * both callers rather than a second copy that drifts within a month.
+ *
+ * SHORT NOTICE IS HANDLED BY SKIPPING, NOT BY CLAMPING. An offset already in the
+ * past is not scheduled at all — a booking two days out gets 24h and 1h and no
+ * "your call is next week", rather than a row dated in the past that Resend
+ * would either reject or fire immediately. The +60s margin keeps a reminder that
+ * would land within the next minute out of the set too, since a scheduled send
+ * that close is indistinguishable from an immediate one.
+ *
+ * UNSUBSCRIBE, decided explicitly rather than left to fall out of the code:
+ *   - No lead (public booking): nothing to check, and nothing to check it
+ *     against. The booking itself is the consent — someone who just picked a
+ *     time is asking to be reminded of it. Reminders are scheduled.
+ *   - A lead who has unsubscribed: reminders are SKIPPED, which is the existing
+ *     behaviour and is kept deliberately. These are transactional and a case
+ *     could be made either way, but a five-touch cadence is exactly what
+ *     somebody who asked us to stop emailing would be objecting to. The
+ *     confirmation still goes out, because that is the receipt for an action
+ *     they took a second ago.
+ */
+export async function scheduleBookingReminders(ctx: BookingReminderContext): Promise<void> {
   try {
-    if (!email) return
-    if (await isUnsubscribed(leadId)) return
-    const startMs = new Date(startIso).getTime()
+    if (!ctx.email) return
+    // Only a real lead can have unsubscribed; a public booking has nobody to ask.
+    if (ctx.leadId && (await isUnsubscribed(ctx.leadId))) return
+
+    const startMs = new Date(ctx.startIso).getTime()
     if (!Number.isFinite(startMs)) return
-    const brand = await loadCoachBrand(funnel.user_id as string)
-    const label = bookingTimeLabel(startIso, timezone)
-    const manageLine = manageUrl
-      ? `<p style="margin:14px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;">Need to change your time? You can <a href="${escapeHtml(manageUrl)}" target="_blank" style="color:#8A94A6;text-decoration:underline;">reschedule or cancel here</a>.</p>`
+    const nowMs = ctx.nowMs ?? Date.now()
+
+    const label = bookingTimeLabel(ctx.startIso, ctx.timezone ?? null)
+    const manageLine = ctx.manageUrl
+      ? `<p style="margin:14px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:#8A94A6;">Need to change your time? You can <a href="${escapeHtml(ctx.manageUrl)}" target="_blank" style="color:#8A94A6;text-decoration:underline;">reschedule or cancel here</a>.</p>`
       : ''
 
-    const reminders = [
-      { kind: 'reminder_24h', at: startMs - 24 * HOUR, heading: 'Your call is tomorrow' },
-      { kind: 'reminder_1h', at: startMs - 1 * HOUR, heading: 'Your call is in 1 hour' },
-    ]
     const tasks: Promise<unknown>[] = []
-    for (const r of reminders) {
-      if (r.at <= nowMs + 60_000) continue // in the past / too soon to schedule
+    for (const r of BOOKING_REMINDERS) {
+      const at = startMs - r.before
+      if (at <= nowMs + 60_000) continue // in the past / too soon to schedule
+      if (r.horizon && at - nowMs < MIN_GAP_AFTER_BOOKING_MS) continue // reads as redundant next to the confirmation
       const bodyHtml = `
           <p style="margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;">A quick reminder about your call:</p>
           <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#0B1120;font-weight:bold;">${escapeHtml(label)}</p>${manageLine}`
-      const html = brandedEmailHtml(brand, { heading: r.heading, bodyHtml, cta: { label: 'Join the call', url: joinUrl } })
+      const html = brandedEmailHtml(ctx.brand, { heading: r.heading, bodyHtml, cta: { label: 'Join the call', url: ctx.joinUrl } })
       tasks.push(
         scheduleFunnelEmail({
-          brand,
-          funnelId: funnel.id as string,
-          leadId,
+          brand: ctx.brand,
+          funnelId: ctx.funnelId ?? null,
+          leadId: ctx.leadId ?? null,
           kind: r.kind,
-          to: email,
+          to: ctx.email,
           subject: r.heading,
           html,
-          scheduledAt: new Date(r.at).toISOString(),
-          bookingId,
+          scheduledAt: new Date(at).toISOString(),
+          bookingId: ctx.bookingId,
         })
       )
     }

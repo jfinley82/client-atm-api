@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { verifyManageToken } from '../../lib/funnelLeadToken'
 import { loadBooking, resolveFunnelAndLead, formatInTz, MANAGE_CUTOFF_MS, RESCHEDULE_CAP } from '../../lib/bookingManage'
+import { bookingTimeLabel } from '../../lib/bookingTimezone'
 import { loadUserAvailability } from '../../lib/availabilitySettings'
 
 // GET /api/funnel/booking?token=… — PUBLIC self-service manage page for a booked
@@ -46,7 +47,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const booking = await loadBooking(bookingId)
   // Do not reveal existence — a missing booking looks like an invalid link.
-  if (!booking || !booking.coach_user_id) {
+  // A null coach_user_id is NOT missing: it is a shared-Zoom booking (the public
+  // /book path, and any funnel whose owner has no Google connection). Treating
+  // it as invalid here is why those bookings' manage links always dead-ended.
+  if (!booking) {
     return messagePage(res, 400, 'This link is no longer valid', 'Reply to your confirmation email and your coach can help.')
   }
   if (booking.status === 'canceled') {
@@ -58,13 +62,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return messagePage(res, 200, 'Your call is coming up soon', "Your call is coming up soon, so it can't be changed here. Reply to your confirmation email to reach your coach.")
   }
 
+  const coach = booking.coach_user_id
   const [settings, ctx] = await Promise.all([
-    loadUserAvailability(booking.coach_user_id),
-    resolveFunnelAndLead(booking.coach_user_id, booking.email),
+    coach ? loadUserAvailability(coach) : Promise.resolve(null),
+    coach ? resolveFunnelAndLead(coach, booking.email) : Promise.resolve({ funnel: null, leadId: null }),
   ])
-  const tz = settings.working_hours?.timezone
-  const whenLabel = formatInTz(booking.start_time, tz)
+  // The visitor's own zone when we captured one, which is what they picked in;
+  // otherwise the coach's, which is the best available frame for a funnel
+  // booking; otherwise UTC.
+  const whenLabel = booking.timezone
+    ? bookingTimeLabel(booking.start_time, booking.timezone)
+    : formatInTz(booking.start_time, settings?.working_hours?.timezone)
   const funnelId = ctx.funnel?.id ? String(ctx.funnel.id) : ''
+  // Where the reschedule panel fetches open times from. A funnel booking asks
+  // its funnel; a shared-Zoom booking asks the same public endpoint the /book
+  // page uses, which is the list it was booked from in the first place.
+  const slotsUrl = funnelId
+    ? `/api/funnel/availability?funnel_id=${encodeURIComponent(funnelId)}`
+    : '/api/calendar/availability'
   const capped = booking.reschedule_count >= RESCHEDULE_CAP
 
   // When capped, keep the current time + cancel, drop the reschedule panel and
@@ -104,9 +119,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     function loadSlots(){
       var slotsEl = document.getElementById('slots');
-      if (!FUNNEL_ID) { slotsEl.innerHTML = '<p class="muted">No times available right now. Reply to your confirmation email to reach your coach.</p>'; return; }
       slotsEl.innerHTML = '<p class="muted">Loading available times…</p>';
-      fetch('/api/funnel/availability?funnel_id=' + encodeURIComponent(FUNNEL_ID)).then(function(r){ return r.json(); }).then(function(j){
+      fetch(SLOTS_URL).then(function(r){ return r.json(); }).then(function(j){
         var slots = (j && j.slots) || [];
         if (!slots.length) { slotsEl.innerHTML = '<p class="muted">No open times right now. Please check back soon.</p>'; return; }
         slotsEl.innerHTML = '';
@@ -121,7 +135,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const script = `
     var TOKEN = ${JSON.stringify(token)};
-    var FUNNEL_ID = ${JSON.stringify(funnelId)};
+    var SLOTS_URL = ${JSON.stringify(slotsUrl)};
     var doneEl = document.getElementById('done');
     var cardEl = document.querySelector('.card');
     function fmt(iso){ try { return new Date(iso).toLocaleString(); } catch(e){ return iso; } }
