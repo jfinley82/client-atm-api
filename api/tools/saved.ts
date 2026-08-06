@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { getSavedOutput, stripSessionHistory } from '../../lib/savedOutputs'
+import { audienceForDisplay } from '../../lib/audienceDisplay'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
@@ -20,7 +21,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (toolType && typeof toolType === 'string') {
     try {
       const data = await getSavedOutput(userId, toolType)
-      return res.status(200).json(data ? { ...data, content: stripSessionHistory(data.content) } : null)
+      // Audience rows get the same read-time derivation as the dedicated GET,
+      // so a panel reading through this endpoint cannot see a different profile
+      // shape than one reading through the other. Only audience has a display
+      // subset; every other tool_type passes through untouched.
+      const stripped = data ? { ...data, content: stripSessionHistory(data.content) } : null
+      return res.status(200).json(
+        stripped && toolType === 'audience' ? { ...stripped, content: audienceForDisplay(stripped.content) } : stripped
+      )
     } catch (err) {
       console.error('[tools/saved] GET one', err)
       return res.status(500).json({ error: 'Failed to load saved output' })
@@ -37,7 +45,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .order('created_at', { ascending: false })
 
     if (error) throw error
-    return res.status(200).json((data || []).map((row: any) => ({ ...row, content: stripSessionHistory(row.content) })))
+    return res.status(200).json(
+      (data || []).map((row: any) => {
+        const content = stripSessionHistory(row.content)
+        return { ...row, content: row.tool_type === 'audience' ? audienceForDisplay(content) : content }
+      })
+    )
   } catch (err) {
     console.error('[tools/saved] GET all', err)
     return res.status(500).json({ error: 'Failed to load saved outputs' })

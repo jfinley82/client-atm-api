@@ -22,6 +22,7 @@ import {
   SuggestedOffer,
 } from '../../lib/matcherAnalysis'
 import { buildSystemPrompt, deriveAudienceDisplayFields } from './chat'
+import { audienceForDisplay } from '../../lib/audienceDisplay'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -110,7 +111,11 @@ async function handleAudience(userId: string, res: VercelResponse) {
 
   // Already finalized once — return the persisted profile, don't regenerate.
   if (content.finalized === true) {
-    return res.status(200).json({ output: stripSessionHistory(content) })
+    // Same read-time derivation as the GET path. A profile finalized before a
+    // display alias existed would otherwise return the aliases it had on that
+    // day, which is the identical staleness — this branch is the one that
+    // serves every already-finalized coach.
+    return res.status(200).json({ output: audienceForDisplay(stripSessionHistory(content)) })
   }
 
   const sessionHistory = extractSessionHistory(content) as { role: string; content: string }[]
@@ -130,7 +135,7 @@ async function handleAudience(userId: string, res: VercelResponse) {
   const finalized = { ...profile, completed: true, finalized: true, session_history: sessionHistory }
   await saveOutput(userId, 'audience', finalized)
 
-  return res.status(200).json({ output: stripSessionHistory(finalized) })
+  return res.status(200).json({ output: audienceForDisplay(stripSessionHistory(finalized)) })
 }
 
 async function handleTransformation(userId: string, res: VercelResponse) {
