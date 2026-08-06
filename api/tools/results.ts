@@ -115,7 +115,7 @@ async function handleAudience(userId: string, res: VercelResponse) {
     // display alias existed would otherwise return the aliases it had on that
     // day, which is the identical staleness — this branch is the one that
     // serves every already-finalized coach.
-    return res.status(200).json({ output: audienceForDisplay(stripSessionHistory(content)) })
+    return res.status(200).json({ output: audienceForDisplay(stripSessionHistory(content), userId) })
   }
 
   const sessionHistory = extractSessionHistory(content) as { role: string; content: string }[]
@@ -135,7 +135,7 @@ async function handleAudience(userId: string, res: VercelResponse) {
   const finalized = { ...profile, completed: true, finalized: true, session_history: sessionHistory }
   await saveOutput(userId, 'audience', finalized)
 
-  return res.status(200).json({ output: audienceForDisplay(stripSessionHistory(finalized)) })
+  return res.status(200).json({ output: audienceForDisplay(stripSessionHistory(finalized), userId) })
 }
 
 async function handleTransformation(userId: string, res: VercelResponse) {

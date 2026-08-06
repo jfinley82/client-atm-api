@@ -27,7 +27,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // subset; every other tool_type passes through untouched.
       const stripped = data ? { ...data, content: stripSessionHistory(data.content) } : null
       return res.status(200).json(
-        stripped && toolType === 'audience' ? { ...stripped, content: audienceForDisplay(stripped.content) } : stripped
+        stripped && toolType === 'audience' ? { ...stripped, content: audienceForDisplay(stripped.content, userId) } : stripped
       )
     } catch (err) {
       console.error('[tools/saved] GET one', err)
@@ -48,7 +48,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json(
       (data || []).map((row: any) => {
         const content = stripSessionHistory(row.content)
-        return { ...row, content: row.tool_type === 'audience' ? audienceForDisplay(content) : content }
+        return { ...row, content: row.tool_type === 'audience' ? audienceForDisplay(content, userId) : content }
       })
     )
   } catch (err) {

@@ -28,7 +28,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // it was written — and every profile written before the avatar hero's
         // six were added rendered a blank hero, with who_they_are 245 characters
         // present in the row and whoTheyAre undefined in this response.
-        output: audienceForDisplay(stripSessionHistory(saved?.content) ?? null),
+        output: audienceForDisplay(stripSessionHistory(saved?.content) ?? null, userId),
         session_history: extractSessionHistory(saved?.content),
         exists: !!saved,
       })

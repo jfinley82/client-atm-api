@@ -191,6 +191,83 @@ function makeRes() {
     ok('and bookkeeping passes through', profile.completed === true)
   }
 
+  console.log('\n-- the persona avatar resolves, and resolves the SAME every time --')
+  {
+    savedRow = { tool_type: 'audience', content: { ...OLD_ROW_RAW } }
+    const out = await get(audience)
+    const profile = out.body?.output as Record<string, unknown>
+
+    // NAMED personaAvatarUrl, not avatarUrl. users.avatar_url is the COACH's own
+    // account photo — the private field this repo spent a day keeping off public
+    // surfaces — so a key called `avatarUrl` on a profile payload is one careless
+    // read from wiring the wrong one.
+    ok('personaAvatarUrl is served', typeof profile.personaAvatarUrl === 'string', JSON.stringify(profile.personaAvatarUrl))
+    ok('and it is NOT called avatarUrl', !('avatarUrl' in profile), 'a name that collides with the coach account photo')
+    ok('it points at the avatars path', String(profile.personaAvatarUrl).includes('/avatars/'))
+    ok('and at an svg', /\.svg$/.test(String(profile.personaAvatarUrl)), String(profile.personaAvatarUrl))
+
+    // It works on an OLD row — the fixture has no camelCase at all — which is the
+    // same read-time rule as the six hero fields.
+    ok('it resolves for a row written before it existed', !!profile.personaAvatarUrl)
+
+    // STABILITY IS THE ENTIRE REASON THE HELPER EXISTS: the same persona must
+    // resolve to the same face on the Audience band, the Launch persona tile and
+    // every Launch library card. Asserted by resolving twice and comparing, not
+    // by reading the hash function.
+    const second = await get(audience)
+    ok(
+      'the same profile resolves to the same URL twice',
+      (second.body?.output as any)?.personaAvatarUrl === profile.personaAvatarUrl,
+      `${(second.body?.output as any)?.personaAvatarUrl} vs ${profile.personaAvatarUrl}`
+    )
+
+    // And "stable" must not mean "constant" — a different persona has to land
+    // somewhere else, or the seed is doing nothing.
+    //
+    // BOTH PERSONAS ARE PINNED TO THE SAME GENDER, and that is the whole point of
+    // the fixture. The first version compared Sarah against Marcus, which land in
+    // different gender BUCKETS — so they differed even with the seed ignored
+    // entirely, and a mutation replacing the seed with a constant passed the
+    // suite. Same bucket means only the seed can separate them.
+    savedRow = {
+      tool_type: 'audience',
+      content: { ...OLD_ROW_RAW, avatar_name: 'Sarah the Overwhelmed Coach', avatar_gender: 'feminine' },
+    }
+    const sameGenderBase = await get(audience)
+    savedRow = {
+      tool_type: 'audience',
+      content: { ...OLD_ROW_RAW, avatar_name: 'Priya the Stalled Founder', avatar_gender: 'feminine' },
+    }
+    const other = await get(audience)
+    ok(
+      'a different persona in the SAME gender bucket resolves to a different face',
+      (other.body?.output as any)?.personaAvatarUrl !== (sameGenderBase.body?.output as any)?.personaAvatarUrl,
+      `both landed on ${(other.body?.output as any)?.personaAvatarUrl} — the seed is not being used`
+    )
+
+    // Seeded from the NAME when there is one. Same name, different everything
+    // else, must give the same face.
+    savedRow = { tool_type: 'audience', content: { avatar_name: OLD_ROW_RAW.avatar_name } }
+    const nameOnly = await get(audience)
+    ok(
+      'the name alone determines it',
+      (nameOnly.body?.output as any)?.personaAvatarUrl === profile.personaAvatarUrl,
+      'something other than the persona seed is feeding the choice'
+    )
+
+    // No name yet: still a face, seeded from the coach id, so the band is not
+    // empty before the persona is named.
+    savedRow = { tool_type: 'audience', content: { who_they_are: 'someone' } }
+    const unnamed = await get(audience)
+    ok(
+      'an unnamed persona still resolves, seeded from the coach',
+      typeof (unnamed.body?.output as any)?.personaAvatarUrl === 'string',
+      JSON.stringify((unnamed.body?.output as any)?.personaAvatarUrl)
+    )
+
+    savedRow = { tool_type: 'audience', content: { ...OLD_ROW_RAW } }
+  }
+
   console.log('\n-- deriving on read repairs, it does not overwrite --')
   {
     // A row carrying a STALE alias — one whose raw source has since changed —
