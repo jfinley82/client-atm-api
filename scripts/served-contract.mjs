@@ -23,15 +23,18 @@ const root = process.cwd()
 const outPath = path.join(root, 'docs', 'served-contract.md')
 
 // ---------------------------------------------------------------------------
-// 1. Bundle api/tools/chat.ts so the real deriver can be called.
+// 1. Bundle lib/audienceDisplay.ts so the real deriver can be called. It moved
+//    out of api/tools/chat.ts so read endpoints could use it without dragging in
+//    the Anthropic client; bundling the lib directly also keeps this script off
+//    that dependency.
 //    --packages=external for the reason scripts/run-tests.mjs documents: an
 //    inlined dependency reading import.meta at module scope breaks.
 // ---------------------------------------------------------------------------
 const tmpDir = fs.mkdtempSync(path.join(root, 'node_modules', '.contract-'))
-const bundle = path.join(tmpDir, 'chat.cjs')
+const bundle = path.join(tmpDir, 'audienceDisplay.cjs')
 const build = spawnSync(
   'npx',
-  ['esbuild', 'api/tools/chat.ts', '--bundle', '--platform=node', '--format=cjs', '--packages=external', `--outfile=${bundle}`],
+  ['esbuild', 'lib/audienceDisplay.ts', '--bundle', '--platform=node', '--format=cjs', '--packages=external', `--outfile=${bundle}`],
   { cwd: root, encoding: 'utf8' }
 )
 if (build.status !== 0) {
@@ -49,7 +52,7 @@ const { deriveAudienceDisplayFields } = require_(bundle)
 // 2. Discover which raw keys the deriver reads, by reading its source.
 //    Generated rather than listed, so a new `raw.something` is picked up.
 // ---------------------------------------------------------------------------
-const chatSrc = fs.readFileSync(path.join(root, 'api', 'tools', 'chat.ts'), 'utf8')
+const chatSrc = fs.readFileSync(path.join(root, 'lib', 'audienceDisplay.ts'), 'utf8')
 const fnStart = chatSrc.indexOf('export function deriveAudienceDisplayFields')
 const fnEnd = chatSrc.indexOf('\n}', fnStart)
 const fnSrc = chatSrc.slice(fnStart, fnEnd)

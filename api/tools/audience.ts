@@ -3,6 +3,7 @@ import chatHandler from './chat'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors, noStore } from '../../lib/cors'
 import { getSavedOutput, stripSessionHistory, extractSessionHistory, resetToolOutputs } from '../../lib/savedOutputs'
+import { audienceForDisplay } from '../../lib/audienceDisplay'
 
 // REST alias for the unified tools chat handler. The frontend calls the tool by
 // path (/api/tools/audience); we fix tool_type from the path and delegate to the
@@ -22,7 +23,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
       const saved = await getSavedOutput(userId, 'audience')
       return res.status(200).json({
-        output: stripSessionHistory(saved?.content) ?? null,
+        // DERIVED AT READ TIME. The display subset used to be computed only on
+        // write, so a row carried whichever camelCase aliases existed on the day
+        // it was written — and every profile written before the avatar hero's
+        // six were added rendered a blank hero, with who_they_are 245 characters
+        // present in the row and whoTheyAre undefined in this response.
+        output: audienceForDisplay(stripSessionHistory(saved?.content) ?? null),
         session_history: extractSessionHistory(saved?.content),
         exists: !!saved,
       })

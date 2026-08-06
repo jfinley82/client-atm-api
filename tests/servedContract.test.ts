@@ -3,7 +3,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'stub-key'
 process.env.JWT_SECRET = 'stub-secret'
 process.env.ANTHROPIC_API_KEY = 'stub-anthropic'
 
-import { deriveAudienceDisplayFields } from '../api/tools/chat'
+import { deriveAudienceDisplayFields } from '../lib/audienceDisplay'
 
 let pass = 0,
   fail = 0
@@ -53,7 +53,7 @@ function ok(label: string, cond: boolean, extra?: string) {
     // against the document by name — not by counting, which would pass while
     // naming the wrong keys.
     const probe: Record<string, unknown> = {}
-    const src = readFileSync(join(process.cwd(), 'api/tools/chat.ts'), 'utf8')
+    const src = readFileSync(join(process.cwd(), 'lib/audienceDisplay.ts'), 'utf8')
     const fn = src.slice(
       src.indexOf('export function deriveAudienceDisplayFields'),
       src.indexOf('\n}', src.indexOf('export function deriveAudienceDisplayFields'))
