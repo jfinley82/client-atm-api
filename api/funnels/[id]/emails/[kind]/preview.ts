@@ -13,7 +13,7 @@ import { requireFunnelBuilder, getOwnedFunnel } from '../../../../../lib/funnels
 //
 // The three kinds split by where their content actually comes from:
 //
-//   booking_confirmation / reminder_24h / reminder_1h
+//   booking_confirmation / reminder_1w / reminder_3d / reminder_24h / reminder_1h
 //     Fixed product templates, composed inline by lib/email.ts and
 //     lib/funnelNurture.ts at send time out of runtime values (the lead's name,
 //     the call time, the join link). There is no stored copy to read, so the
@@ -49,6 +49,30 @@ const FIXED_TEMPLATES: Record<string, Preview> = {
       'Join the call: [JOIN_LINK]',
       '',
       'The attached calendar file will add this to your calendar.',
+      '',
+      MANAGE_LINE,
+    ].join('\n'),
+  },
+  reminder_1w: {
+    subject: 'Your call is next week',
+    body: [
+      'A quick reminder about your call:',
+      '',
+      '[CALL_TIME]',
+      '',
+      'Join the call: [JOIN_LINK]',
+      '',
+      MANAGE_LINE,
+    ].join('\n'),
+  },
+  reminder_3d: {
+    subject: 'Your call is in 3 days',
+    body: [
+      'A quick reminder about your call:',
+      '',
+      '[CALL_TIME]',
+      '',
+      'Join the call: [JOIN_LINK]',
       '',
       MANAGE_LINE,
     ].join('\n'),

@@ -153,3 +153,43 @@ export async function createZoomMeeting(topic: string, startUtcISO: string): Pro
   const data = (await res.json()) as { id: number | string; join_url: string; start_time: string }
   return { id: String(data.id), join_url: data.join_url, start_time: data.start_time }
 }
+
+// Move an existing meeting to a new time, keeping the same id and join URL.
+//
+// Used by the public reschedule flow. Without it a moved booking would keep a
+// Zoom meeting stamped with the old time: the join link still works, but the
+// meeting's own details — and anything Zoom shows the host — would disagree with
+// what the attendee was told.
+//
+// Best-effort by return value rather than by throwing, so the caller can decide
+// whether a failed patch should roll the move back.
+export async function updateZoomMeetingTime(meetingId: string, startUtcISO: string): Promise<boolean> {
+  try {
+    const res = await zoomFetch(`/meetings/${encodeURIComponent(meetingId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ start_time: startUtcISO, duration: SLOT_MINUTES, timezone: 'UTC' }),
+    })
+    // 204 on success. 404 means the meeting is already gone, which is not a
+    // reason to block a move the database has accepted.
+    if (res.ok || res.status === 404) return true
+    console.error('[zoom] update meeting failed', res.status, await res.text().catch(() => ''))
+    return false
+  } catch (err) {
+    console.error('[zoom] update meeting threw', err)
+    return false
+  }
+}
+
+// Delete a meeting on cancel, so a canceled booking does not leave a live room
+// on the shared host's calendar. Tolerates an already-deleted meeting for the
+// same reason deleteCalendarEvent does: cancel must be idempotent.
+export async function deleteZoomMeeting(meetingId: string): Promise<void> {
+  try {
+    const res = await zoomFetch(`/meetings/${encodeURIComponent(meetingId)}`, { method: 'DELETE' })
+    if (!res.ok && res.status !== 404) {
+      console.error('[zoom] delete meeting failed', res.status, await res.text().catch(() => ''))
+    }
+  } catch (err) {
+    console.error('[zoom] delete meeting threw', err)
+  }
+}

@@ -42,7 +42,7 @@ const EDITABLE_KEYS = new Set([
 // there is finally a write path after creation; lib/funnelNurture.ts already
 // reads these two columns through the same coerceEmails on every send, so an
 // edit takes effect on the next scheduled send with no other change needed.
-// booking_confirmation/reminder_24h/reminder_1h/post_call_* are system
+// booking_confirmation/reminder_* /post_call_* are system
 // templates, not stored per funnel — out of scope, no column for them.
 const EMAIL_SEQUENCE_FIELDS = ['nurture_emails', 'book_a_call_emails', 'warm_invite_emails']
 

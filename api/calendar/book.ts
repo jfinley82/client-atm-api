@@ -5,7 +5,7 @@ import { setCors } from '../../lib/cors'
 import { isZoomConfigured, createZoomMeeting, slotMinutes } from '../../lib/zoom'
 import { isSchedulerSlotOpen } from '../../lib/schedulerSlots'
 import { buildBookingIcs } from '../../lib/ics'
-import { sendBookingConfirmationEmail, sendCoachBookingNotification } from '../../lib/email'
+import { resolveBookingBrand, sendBookingConfirmationEmail, sendCoachBookingNotification } from '../../lib/email'
 import { funnelBookingQuestions, loadBookingQuestions, validateBookingAnswers, bookingQuestionErrorMessage, resolveBookingType, ValidatedAnswer } from '../../lib/bookingQuestions'
 import { bookingTimeLabel, normalizeTimeZone } from '../../lib/bookingTimezone'
 import { checkGate } from '../../lib/applicationGate'
@@ -15,7 +15,7 @@ import { isSlotOpen } from '../../lib/funnelAvailability'
 import { getValidAccessToken, createCalendarEvent, deleteCalendarEvent, ValidToken } from '../../lib/googleCalendar'
 import { loadBusinessSettings } from '../../lib/businessSettings'
 import { cancelLeadOutreach, scheduleBookingReminders } from '../../lib/funnelNurture'
-import { buildManageUrl } from '../../lib/bookingManage'
+import { buildBookingManageUrl } from '../../lib/bookingManage'
 
 // POST /api/calendar/book
 // Body: { slot_start, first_name, last_name, email, answers?, funnel_id? }
@@ -273,7 +273,7 @@ async function bookGooglePath(
   })
   // Lead-side manage link (Phase 3b follow-up): reschedule/cancel, on the funnel
   // domain so /api/ reaches the real function rather than the renderer.
-  const manageUrl = funnelRow.subdomain ? buildManageUrl(funnelRow.subdomain as string, reserved.id as string) : undefined
+  const manageUrl = buildBookingManageUrl(reserved.id as string, (funnelRow.subdomain as string) || null)
 
   await sendBookingConfirmationEmail({ email, name, startLabel, joinUrl: meetingUrl, icsContent: ics, funnelId: funnelRow.id as string, leadId, coachUserId: owner, manageUrl })
   await sendCoachBookingNotification({
@@ -288,10 +288,20 @@ async function bookGooglePath(
 
   // Nurture suppression (Phase 5b): a booked lead exits the sequence — cancel any
   // still-scheduled nurture/book-a-call sends — and gets 24h/1h call reminders.
-  if (leadId) {
-    await cancelLeadOutreach(leadId)
-    await scheduleBookingReminders(funnelRow, leadId, email, startIso, meetingUrl, reserved.id as string, manageUrl, undefined, timezone)
-  }
+  if (leadId) await cancelLeadOutreach(leadId)
+  // Reminders are scheduled for EVERY booking, lead or not — the cadence is a
+  // property of the call, not of whether we matched a funnel lead to it.
+  await scheduleBookingReminders({
+    brand: await resolveBookingBrand(owner),
+    funnelId: funnelRow.id as string,
+    leadId,
+    email,
+    startIso,
+    joinUrl: meetingUrl,
+    bookingId: reserved.id as string,
+    manageUrl,
+    timezone,
+  })
 
   return res.status(200).json({ booking_id: reserved.id, join_url: meetingUrl, meeting_url: meetingUrl, start_time: startIso })
 }
@@ -435,6 +445,9 @@ async function bookLegacyPath(
     startLabel,
     joinUrl: meeting.join_url,
     icsContent: ics,
+    // Five reminders with no way out is how a cancellation becomes a no-show, so
+    // the manage link rides on the confirmation for public bookings too.
+    manageUrl: buildBookingManageUrl(reserved.id as string, (funnelRow?.subdomain as string) || null),
     ...(funnelRow ? { funnelId: funnelRow.id as string, leadId, coachUserId: funnelRow.user_id as string } : {}),
   })
 
@@ -454,26 +467,23 @@ async function bookLegacyPath(
     })
   }
 
-  // Nurture suppression + reminders when this legacy booking came from a funnel.
-  if (funnelRow && leadId) {
-    await cancelLeadOutreach(leadId)
-    // manageUrl was missing here, so native-booking reminders lacked the
-    // reschedule/cancel link the Google path's reminders carry. Parity fix.
-    const legacyManageUrl = funnelRow.subdomain
-      ? buildManageUrl(funnelRow.subdomain as string, reserved.id as string)
-      : undefined
-    await scheduleBookingReminders(
-      funnelRow,
-      leadId,
-      email,
-      startIso,
-      meeting.join_url,
-      reserved.id as string,
-      legacyManageUrl,
-      undefined,
-      timezone
-    )
-  }
+  if (funnelRow && leadId) await cancelLeadOutreach(leadId)
+
+  // Reminders for EVERY booking on this path, funnel or public. A public /book
+  // booking has no funnel, no lead and no coach — which is exactly why it used
+  // to get the confirmation and nothing else. It wears MTM's brand and records
+  // send rows with a null funnel_id (migration 089).
+  await scheduleBookingReminders({
+    brand: await resolveBookingBrand(funnelRow ? (funnelRow.user_id as string) : null),
+    funnelId: funnelRow ? (funnelRow.id as string) : null,
+    leadId,
+    email,
+    startIso,
+    joinUrl: meeting.join_url,
+    bookingId: reserved.id as string,
+    manageUrl: buildBookingManageUrl(reserved.id as string, (funnelRow?.subdomain as string) || null),
+    timezone,
+  })
 
   return res.status(200).json({ booking_id: reserved.id, join_url: meeting.join_url, start_time: startIso })
 }

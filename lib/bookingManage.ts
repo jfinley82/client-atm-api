@@ -19,6 +19,10 @@ export const RESCHEDULE_CAP = 2
 
 export type BookingRow = {
   id: string
+  // NULL for a shared-Zoom booking: the public /book path and any funnel whose
+  // owner has no Google connection. Those are NOT broken rows — see the note on
+  // the insert in api/calendar/book.ts — so every manage surface has to handle
+  // them rather than treating null as "not found", which is what it did.
   coach_user_id: string | null
   google_event_id: string | null
   meeting_url: string | null
@@ -28,9 +32,26 @@ export type BookingRow = {
   email: string
   name: string | null
   reschedule_count: number
+  zoom_meeting_id: string | null
+  zoom_join_url: string | null
+  funnel_id: string | null
+  timezone: string | null
 }
 
-const BOOKING_COLUMNS = 'id, coach_user_id, google_event_id, meeting_url, start_time, end_time, status, email, name, reschedule_count'
+const BOOKING_COLUMNS =
+  'id, coach_user_id, google_event_id, meeting_url, start_time, end_time, status, email, name, reschedule_count, zoom_meeting_id, zoom_join_url, funnel_id, timezone'
+
+// The link a lead actually joins on, whichever path booked them.
+export function bookingJoinUrl(b: BookingRow): string {
+  return b.meeting_url || b.zoom_join_url || ''
+}
+
+// True when this booking lives on the shared Zoom host rather than a coach's
+// Google Calendar. The public /book path and native-calendar funnels both land
+// here.
+export function isSharedZoomBooking(b: BookingRow): boolean {
+  return !b.coach_user_id
+}
 
 export async function loadBooking(bookingId: string): Promise<BookingRow | null> {
   const { data } = await supabase.from('bookings').select(BOOKING_COLUMNS).eq('id', bookingId).maybeSingle()
@@ -76,11 +97,31 @@ export async function resolveFunnelAndLead(
   return { funnel: liveFunnels[0], leadId: null }
 }
 
-// The manage link that goes in the booking emails, on the funnel's public domain
-// (matches the training/book links the lead already clicked). vercel.json's
-// rewrite excludes /api/, so this reaches the real function, not the renderer.
+// Where the API actually serves from, for a booking with no funnel domain to
+// borrow. Same default as lib/funnelNurture.ts.
+const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
+
+// The manage link that goes in the booking emails.
+//
+// ONE builder for both kinds of booking. A funnel booking keeps its funnel's
+// public domain, which matches the training/book links the lead already clicked
+// (vercel.json's rewrite excludes /api/, so this reaches the real function
+// rather than the renderer). A PUBLIC booking has no funnel and therefore no
+// subdomain, so it goes straight to the API host.
+//
+// The token is the same either way: signManageToken is scoped to one booking id
+// and grants nothing but the reschedule and cancel actions on that booking. It
+// is not a session and cannot be verified as one — see verifyManageToken — so a
+// leaked link exposes one call, not an account.
 export function buildManageUrl(subdomain: string, bookingId: string): string {
   return `https://${subdomain}.${FUNNEL_DOMAIN}/api/funnel/booking?token=${encodeURIComponent(signManageToken(bookingId))}`
+}
+
+export function buildBookingManageUrl(bookingId: string, subdomain?: string | null): string {
+  const token = encodeURIComponent(signManageToken(bookingId))
+  return subdomain
+    ? `https://${subdomain}.${FUNNEL_DOMAIN}/api/funnel/booking?token=${token}`
+    : `${API_URL.replace(/\/+$/, '')}/api/funnel/booking?token=${token}`
 }
 
 // Format an instant in the coach's timezone for the lead-facing copy.
