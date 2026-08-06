@@ -20,9 +20,38 @@ function ok(label: string, cond: boolean, extra?: string) {
 }
 
 const COACH = 'coach-1'
-// Distinctive enough that finding it anywhere in a rendered page is unambiguous.
-const ACCOUNT_AVATAR = 'https://cdn.example.com/ACCOUNT-PROFILE-PICTURE.png'
-const BRAND_HEADSHOT = 'https://cdn.example.com/brand-headshot.jpg'
+
+// THE TWO URLS SHARE A BUCKET, and these fixtures are shaped like the real ones
+// on purpose. Both live in `avatars`, and both carry the coach's id:
+//
+//   account photo   .../public/avatars/avatars/<uid>
+//   brand headshot  .../public/avatars/brand/<uid>/headshot
+//
+// So the obvious phrasings of "the account photo did not leak" are all wrong,
+// and wrong in the direction that looks like a passing guard until a coach
+// actually uploads a headshot. Measured against the real production values:
+//
+//   no '/avatars/'            catches the leak, FALSE-FIRES on the headshot
+//   no '<coach uid>'          catches the leak, FALSE-FIRES on the headshot
+//   no '/storage/v1/object/'  catches the leak, FALSE-FIRES on the headshot
+//   not '/avatars/avatars/<uid>'                    catches it, allows it
+//
+// Only the last one is a leak guard. The others are bucket-shaped, and the
+// tempting fix when one of them fires on a legitimate value is to weaken it —
+// which is how the guard quietly stops guarding. ASSERT THE ACCOUNT PHOTO'S
+// SPECIFIC VALUE IS ABSENT, never the bucket, the id, or the storage host.
+//
+// Earlier fixtures here used cdn.example.com for the account photo and never
+// built a brand URL at all, so the two could not collide and a bucket-shaped
+// guard would have passed this suite. The fixtures now make that impossible:
+// ACCEPTANCE 5 requires '/avatars/' to be PRESENT in a healthy page.
+const STORAGE = 'https://stub.supabase.co/storage/v1/object/public'
+const ACCOUNT_AVATAR = `${STORAGE}/avatars/avatars/${COACH}?v=1786022484350`
+const BRAND_HEADSHOT = `${STORAGE}/avatars/brand/${COACH}/headshot?v=1786024979335`
+
+// The account object's path, which appears in the account photo's URL and in
+// nothing else. This is the string every leak assertion below tests for.
+const ACCOUNT_OBJECT = `/avatars/avatars/${COACH}`
 
 let settingsRow: any = {}
 let uploadedObjects: Array<{ path: string; contentType: string }> = []
@@ -121,10 +150,14 @@ const FUNNEL = {
       ok(`${name} page renders`, html.length > 0)
       ok(
         `${name} page does not contain the account avatar`,
-        !html.includes('ACCOUNT-PROFILE-PICTURE'),
+        !html.includes(ACCOUNT_OBJECT),
         'the account profile picture reached a public funnel page'
       )
-      ok(`${name} page does not contain avatar_url at all`, !html.includes('avatar_url'))
+      // A SECOND, WEAKER CHECK, labelled as such. It catches a template that
+      // emitted the column NAME; it is blind to a leaked VALUE, because no
+      // storage URL contains the string 'avatar_url'. The line above is the
+      // leak guard. Keeping them separate so neither is mistaken for the other.
+      ok(`${name} page does not name the avatar_url column`, !html.includes('avatar_url'))
     }
   }
 
@@ -139,12 +172,35 @@ const FUNNEL = {
     // assertion looked for it on the wrong surface and "failed" against
     // correct code.
     const html = bookPage(FUNNEL, b)
-    ok('and it reaches the rendered page', html.includes('brand-headshot.jpg'), 'the configured headshot did not render')
-    ok('still no account avatar', !html.includes('ACCOUNT-PROFILE-PICTURE'))
+    ok('and it reaches the rendered page', html.includes(BRAND_HEADSHOT), 'the configured headshot did not render')
+    ok('still no account avatar', !html.includes(ACCOUNT_OBJECT))
 
     // Nothing else regressed: the landing and training pages render as before.
     ok('landing still renders', landingPage(FUNNEL, b).length > 0)
     ok('training still renders', trainingPage(FUNNEL, b, []).length > 0)
+  }
+
+  console.log('\n-- ACCEPTANCE 5: the leak guard is VALUE-shaped, not bucket-shaped --')
+  // The assertion above is only worth anything if it can tell the two apart.
+  // This block proves it can, by requiring the healthy page to contain exactly
+  // the substrings a lazier guard would have banned. Rewrite the guard as
+  // "no /avatars/", "no <uid>", or "no /storage/v1/object/" and this fails —
+  // which is the point: the suite should refuse the degraded phrasing rather
+  // than quietly accept it.
+  {
+    settingsRow = { user_id: COACH, headshot_url: BRAND_HEADSHOT, logo_url: null, business_name: 'Rivera Coaching' }
+    const html = bookPage(FUNNEL, await loadBranding(FUNNEL))
+
+    ok('a healthy page DOES contain the shared bucket', html.includes('/avatars/'), 'fixtures no longer share a bucket — the collision this pins is gone')
+    ok('a healthy page DOES contain the coach id', html.includes(COACH))
+    ok('a healthy page DOES contain the storage host', html.includes('/storage/v1/object/'))
+    ok('and still does NOT contain the account object', !html.includes(ACCOUNT_OBJECT))
+
+    // Stated as the predicate itself, so the distinction is executable rather
+    // than something a reader has to reconstruct from the fixtures.
+    const leaked = (s: string) => s.includes(ACCOUNT_OBJECT)
+    ok('the guard catches the account photo', leaked(ACCOUNT_AVATAR))
+    ok('the guard allows the brand headshot', !leaked(BRAND_HEADSHOT))
   }
 
   console.log('\n-- ACCEPTANCE 3+4: the SECOND instance, found by sweeping --')

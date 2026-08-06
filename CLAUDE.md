@@ -230,6 +230,30 @@ the transfer path: `lib/uploadUrl.ts` mints a signed URL the browser PUTs to
 directly. That moves size/mime enforcement onto the bucket, which is why
 migration 087 exists — signed URLs without it are an unbounded write endpoint.
 
+**A leak assertion starts failing on a legitimate value, and the obvious fix is
+to weaken it.** The private thing and the public thing can live in the same
+place: `users.avatar_url` is `avatars/avatars/<uid>`, a coach's Brand Identity
+headshot is `avatars/brand/<uid>/headshot` — same bucket, same host, same coach
+id. Measured against the real production URLs, three plausible phrasings of "the
+account photo did not leak" all catch the leak *and* reject the headshot:
+`/avatars/`, the coach's uid, `/storage/v1/object/`. Only the account **object
+path** discriminates. **Assert the specific value is absent, never the container
+it sits in** — and note the direction of the trap: the bucket-shaped guard looks
+green until someone uploads a real headshot, and then the pressure is to relax
+the guard rather than re-aim it, which is how it stops guarding.
+Two second-order lessons, both of which applied here:
+- A guard can be correctly phrased and still untested, if the fixtures are far
+  enough apart that the wrong phrasing would also pass. These fixtures now share
+  the bucket on purpose, and `tests/brandIdentity.test.ts` asserts a healthy page
+  **contains** `/avatars/`, the uid, and the storage host — so the degraded
+  phrasing fails the suite instead of being quietly accepted.
+- Mutate the guard and watch it fail before believing it. Swapping
+  `ACCOUNT_OBJECT` to `/avatars/` fails three assertions; without running that,
+  "it's value-shaped" was a claim about the code, not a fact about the suite.
+Keep the value check and any column-name check separate and labelled: no storage
+URL contains the string `avatar_url`, so the key check is blind to a leaked value
+and must not be mistaken for the leak guard.
+
 **Two renderings of the same thing drift apart, and it looks fine wherever you
 test.** The email CTA button is emitted twice — a VML branch only Outlook draws,
 an anchor branch everyone else draws — and the VML shipped 44px tall against the
