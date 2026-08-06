@@ -4,7 +4,7 @@ process.env.JWT_SECRET = 'stub-secret'
 
 import { createSessionToken } from '../lib/auth'
 import { normalizeSettingValue } from '../lib/appSettings'
-import { WORKSHOP_TIME_ZONE, normalizeWorkshopDate, parseWorkshopDate } from '../lib/workshopDate'
+import { WORKSHOP_TIME_ZONE, carryTimeOnto, normalizeWorkshopDate, parseWorkshopDate } from '../lib/workshopDate'
 
 type Handler = (req: any, res: any) => Promise<void>
 
@@ -190,6 +190,148 @@ function makeRes() {
     )
     ok('the save is 400', r.out.status === 400, `${r.out.status}`)
     ok('and the good key was NOT written either', settings.login_headline === undefined, JSON.stringify(settings))
+  }
+
+  console.log('\n-- a named zone from the admin picker round-trips --')
+  // An offset pins the instant but cannot say "Central", so a renderer has no
+  // zone name to show and no way to follow the zone across a DST boundary. The
+  // bracketed suffix is RFC 9557 / IXDTF — the shape Temporal emits — rather
+  // than something invented here.
+  {
+    ok(
+      'a wall-clock time is resolved IN the named zone, not the default one',
+      normalizeWorkshopDate('2026-08-28T14:30[America/Chicago]') === '2026-08-28T14:30-05:00[America/Chicago]',
+      String(normalizeWorkshopDate('2026-08-28T14:30[America/Chicago]'))
+    )
+    ok(
+      'the same wall clock in January gets the winter offset',
+      normalizeWorkshopDate('2027-01-14T14:30[America/Chicago]') === '2027-01-14T14:30-06:00[America/Chicago]',
+      String(normalizeWorkshopDate('2027-01-14T14:30[America/Chicago]'))
+    )
+    ok(
+      'an explicit offset alongside a zone is trusted as given',
+      normalizeWorkshopDate('2026-08-28T14:30-04:00[America/New_York]') === '2026-08-28T14:30-04:00[America/New_York]',
+      String(normalizeWorkshopDate('2026-08-28T14:30-04:00[America/New_York]'))
+    )
+    ok('an unknown zone is rejected, not ignored', normalizeWorkshopDate('2026-08-28T14:30[Mars/Nope]') === null)
+    ok(
+      'a zone on a date-only value is dropped, since a day has no instant to place',
+      normalizeWorkshopDate('2026-08-28[America/Chicago]') === '2026-08-28',
+      String(normalizeWorkshopDate('2026-08-28[America/Chicago]'))
+    )
+    const parsed = parseWorkshopDate('2026-08-28T14:30[America/Chicago]')
+    ok('the zone is exposed for a renderer', parsed?.timeZone === 'America/Chicago', JSON.stringify(parsed?.timeZone))
+    ok('and the instant is 19:30Z', parsed?.instant?.toISOString() === '2026-08-28T19:30:00.000Z', String(parsed?.instant?.toISOString()))
+    ok('a value with no zone reports none', parseWorkshopDate('2026-08-28T14:30')?.timeZone === null)
+
+    // Carrying across a DST boundary follows the ZONE, so the workshop stays at
+    // 11am for the people it was scheduled for rather than shifting an hour.
+    ok(
+      'a carried named-zone time keeps its wall clock across DST',
+      carryTimeOnto('2027-01-14', '2026-08-28T11:00-05:00[America/Chicago]') === '2027-01-14T11:00-06:00[America/Chicago]',
+      String(carryTimeOnto('2027-01-14', '2026-08-28T11:00-05:00[America/Chicago]'))
+    )
+  }
+
+  console.log('\n-- what is sent is what is stored: a date CLEARS a time --')
+  // The form now has date, time and zone inputs, so a date-only post is the
+  // admin deliberately saying "that day, no particular time". This briefly
+  // carried the stored time forward instead, which made that unreachable — the
+  // only escape was an empty string, and that clears the date too.
+  {
+    settings = { workshop_event_date: '2026-08-28T14:30-05:00[America/Chicago]' }
+    const r = makeRes()
+    await adminSettings(
+      {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${await createSessionToken(ADMIN)}` },
+        query: {},
+        body: { workshop_event_date: '2026-09-15' },
+      },
+      r.res
+    )
+    ok('a date-only save succeeds', r.out.status === 200, `${r.out.status}`)
+    ok(
+      'and the stored time is GONE, not re-added',
+      settings.workshop_event_date === '2026-09-15',
+      settings.workshop_event_date
+    )
+    ok(
+      'the response agrees, so the form does not show a time it did not send',
+      r.out.body?.settings?.workshop_event_date === '2026-09-15',
+      JSON.stringify(r.out.body?.settings?.workshop_event_date)
+    )
+
+    // Clearing the date entirely is still separate from clearing the time.
+    settings = { workshop_event_date: '2026-08-28T14:30-04:00' }
+    const r2 = makeRes()
+    await adminSettings(
+      {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${await createSessionToken(ADMIN)}` },
+        query: {},
+        body: { workshop_event_date: '' },
+      },
+      r2.res
+    )
+    ok('an empty value clears the setting outright', settings.workshop_event_date === '', JSON.stringify(settings.workshop_event_date))
+
+    // And a full datetime replaces a full datetime, zone and all.
+    settings = { workshop_event_date: '2026-08-28T14:30-04:00' }
+    const r3 = makeRes()
+    await adminSettings(
+      {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${await createSessionToken(ADMIN)}` },
+        query: {},
+        body: { workshop_event_date: '2026-08-28T18:45[America/Chicago]' },
+      },
+      r3.res
+    )
+    ok(
+      'a datetime with a zone replaces what was there',
+      settings.workshop_event_date === '2026-08-28T18:45-05:00[America/Chicago]',
+      settings.workshop_event_date
+    )
+  }
+
+  console.log('\n-- carryTimeOnto is kept, and kept OFF the write path --')
+  // The arithmetic is correct and worth keeping for a caller that decides on its
+  // own evidence that a time should move. It must not be re-attached to the
+  // shape of an incoming value: that is an inference about whichever control
+  // produced it, and it expires silently when the control changes.
+  {
+    ok(
+      'the DST re-resolution still holds',
+      carryTimeOnto('2027-01-14', '2026-08-28T11:00-04:00') === '2027-01-14T11:00-05:00',
+      String(carryTimeOnto('2027-01-14', '2026-08-28T11:00-04:00'))
+    )
+    ok(
+      'a named zone follows its own rules across the boundary',
+      carryTimeOnto('2027-01-14', '2026-08-28T11:00-05:00[America/Chicago]') === '2027-01-14T11:00-06:00[America/Chicago]',
+      String(carryTimeOnto('2027-01-14', '2026-08-28T11:00-05:00[America/Chicago]'))
+    )
+    ok(
+      'a deliberately pinned offset is carried literally',
+      carryTimeOnto('2026-09-15', '2026-08-28T11:00+02:00') === '2026-09-15T11:00+02:00',
+      String(carryTimeOnto('2026-09-15', '2026-08-28T11:00+02:00'))
+    )
+    ok('nothing is carried from a date-only value', carryTimeOnto('2026-09-15', '2026-08-28') === null)
+    ok('nothing is carried from junk', carryTimeOnto('2026-09-15', 'whatever') === null)
+
+    // The guard that matters: no write path may call it.
+    const { readFileSync } = await import('fs')
+    const { join } = await import('path')
+    for (const f of ['lib/appSettings.ts', 'api/admin/settings/index.ts', 'api/settings/index.ts']) {
+      // An invocation, not a mention: the note in appSettings.ts names the
+      // function precisely so the next person knows why it is absent, and a
+      // bare-word grep would fail on that explanation.
+      ok(
+        `${f} does not call carryTimeOnto`,
+        !/carryTimeOnto\s*\(/.test(readFileSync(join(process.cwd(), f), 'utf8')),
+        'reconnected to a write path — see the note in lib/workshopDate.ts'
+      )
+    }
   }
 
   console.log('\n-- other settings are untouched by this --')

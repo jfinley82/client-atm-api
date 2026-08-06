@@ -1,4 +1,4 @@
-import { normalizeWorkshopDate } from './workshopDate'
+import { parseWorkshopDate } from './workshopDate'
 
 // The set of app_settings keys the write paths accept. Both write paths
 // (PATCH /api/admin/settings and the legacy POST /api/settings) validate
@@ -71,15 +71,34 @@ export function normalizeSettingValue(
   value: string
 ): { ok: true; value: string } | { ok: false; error: string } {
   if (key === 'workshop_event_date') {
-    const normalized = normalizeWorkshopDate(value)
-    if (normalized === null) {
+    const parsed = parseWorkshopDate(value)
+    if (parsed === null) {
       return {
         ok: false,
         error:
           "value for 'workshop_event_date' must be a date (2026-08-28) or a date and time (2026-08-28T14:30, or 2026-08-28T14:30-04:00)",
       }
     }
-    return { ok: true, value: normalized }
+
+    // WHAT IS SENT IS WHAT IS STORED. A date with no time clears any time that
+    // was there, because a date with no time is now a thing the admin can
+    // deliberately mean.
+    //
+    // This briefly did the opposite: it carried a stored time onto a date-only
+    // post, on the reasoning that <input type="date"> cannot express a time and
+    // so cannot be asking to remove one. That reasoning depended on the control,
+    // and the control changed — the form now has date, time and zone inputs, and
+    // posts date-only to mean exactly that. The rule then made "a day, no
+    // particular time" unreachable: the only escape was an empty string, which
+    // clears the date too.
+    //
+    // The general lesson, worth more than the rule: do not infer intent from the
+    // SHAPE of a value. Shape is a property of whatever control happened to
+    // produce it, so an inference drawn from it expires silently when that
+    // control is replaced. If a net for older callers is ever wanted, gate it on
+    // an explicit signal in the request. carryTimeOnto survives in
+    // lib/workshopDate.ts for that, and is deliberately not wired here.
+    return { ok: true, value: parsed.value }
   }
   return { ok: true, value }
 }
