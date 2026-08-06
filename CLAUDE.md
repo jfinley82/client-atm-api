@@ -161,6 +161,20 @@ read-path transforms need the same care as write-path ones, and `original` is
 excluded from `sanitizePhrasingDeep`'s walk so a read→save cycle can't launder
 mangled copy into the baseline that detects coach edits.
 
+**An endpoint that 502s "intermittently" on a parameter the caller controls.**
+`GET /api/calendar/availability` forwarded `from`/`to` from the query string
+unbounded; Zoom's `available_times` rejects any window over 45 days with a 400,
+so every request over the limit 502'd — deterministically, not intermittently.
+The page asked for 60 days and got a calendar with all 42 cells disabled.
+**Probe with the request the client actually sends.** A 14-day probe returned
+5/5 at 200 and read as "healthy, transient"; the same endpoint at 60 days failed
+every time. When a failure looks flaky, vary the input before concluding it is
+upstream flakiness — bracket it (44/45/46 found the limit on its own). Clamping
+lives in `lib/schedulerSlots.ts` because the list and the booking check must
+never diverge, and this was the third time they had; note `isSchedulerSlotOpen`
+re-anchors on the slot rather than truncating, or a far-future slot falls outside
+its own validation window and a bookable time gets rejected.
+
 **A size refusal that can't be detected by status code.** Supabase answers an
 oversize signed-URL PUT with **HTTP 400 carrying `"statusCode":"413"` in the
 body**, so `res.status === 413` is false on exactly the case that needs
