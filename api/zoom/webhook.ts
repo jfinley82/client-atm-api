@@ -1,6 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import crypto from 'crypto'
 import { supabase } from '../../lib/supabase'
+import { cancelBookingReminders } from '../../lib/funnelNurture'
+import { sendBookingCanceledEmail } from '../../lib/email'
+import { formatInTz } from '../../lib/bookingManage'
 
 // POST /api/zoom/webhook — receives Zoom event notifications.
 //
@@ -83,12 +86,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (body.event === 'meeting.deleted') {
       const meetingId = body.payload?.object?.id
       if (meetingId != null) {
-        const { error } = await supabase
+        // ZOOM IS THE SOURCE OF TRUTH. A coach deleting the meeting there means
+        // the call is off, and the failure worth avoiding is a client joining a
+        // call that no longer exists — which costs a relationship rather than a
+        // support ticket.
+        //
+        // canceled_by 'coach': no cutoff applies on this path, so it is the ONLY
+        // way a late cancellation enters the system. That matters downstream —
+        // a client must never be charged a session for a call their coach
+        // cancelled, whenever it happened.
+        //
+        // .select() so the rows are available for the two things that have to
+        // happen next. The previous version updated blind, which is why neither
+        // of them did.
+        const { data: canceled, error } = await supabase
           .from('bookings')
-          .update({ status: 'canceled' })
+          .update({ status: 'canceled', canceled_at: new Date().toISOString(), canceled_by: 'coach' })
           .eq('zoom_meeting_id', String(meetingId))
           .eq('status', 'active')
+          .select('id, email, name, start_time, timezone, coach_user_id, funnel_id')
         if (error) console.error('[zoom/webhook] cancel booking failed', error)
+
+        // Scoped to rows this call actually flipped — `.eq('status','active')`
+        // means a redelivered meeting.deleted matches nothing, so neither the
+        // reminders nor the email fire twice. Zoom redelivers.
+        for (const b of canceled || []) {
+          // BOTH HALVES, TOGETHER. Sending the cancellation without stopping the
+          // reminders would tell the client it is off and then remind them about
+          // it twice. Reminders first: a client who gets no email but also no
+          // reminders is merely uninformed, while one who gets reminders for a
+          // dead call is actively misled.
+          await cancelBookingReminders(b.id as string)
+
+          await sendBookingCanceledEmail({
+            email: b.email as string,
+            name: (b.name as string | null) ?? null,
+            // Rendered in the zone the visitor booked in (088), falling back to
+            // UTC — telling someone their 2pm is cancelled in the wrong zone is
+            // its own small failure.
+            startLabel: formatInTz(b.start_time as string, (b.timezone as string | null) ?? undefined),
+            coachUserId: (b.coach_user_id as string | null) ?? null,
+            funnelId: (b.funnel_id as string | null) ?? null,
+            bookingId: b.id as string,
+          })
+        }
       }
     }
     // Other subscribed events fall through as an acknowledged no-op.
