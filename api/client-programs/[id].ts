@@ -3,13 +3,13 @@ import { supabase } from '../../lib/supabase'
 import { setCors, noStore } from '../../lib/cors'
 import { requireFunnelBuilder } from '../../lib/funnels'
 import { redriveDueDates, isValidStartDate } from '../../lib/clientProgramPlan'
-import type { ProgramRow } from '../../lib/clientProgramSerializers'
+import { serializeProgramDetail, type ProgramRow, type ItemRow, type NoteRow, type SessionRequestRow, type ProgramBookingRow } from '../../lib/clientProgramSerializers'
+import { signProgramToken } from '../../lib/funnelLeadToken'
+import { APP_URL } from '../../lib/appUrls'
 
+// GET    /api/client-programs/[id] — the whole programme, in one call.
 // PATCH  /api/client-programs/[id] — edit a program.
 // DELETE /api/client-programs/[id] — discard a DRAFT.
-//
-// GET (the detail payload) lands with the item endpoints; this file owns the two
-// writes that change a program's own row.
 export const config = { maxDuration: 30 }
 
 const PROGRAM_COLUMNS =
@@ -44,7 +44,7 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
-  if (req.method !== 'PATCH' && req.method !== 'DELETE') return res.status(405).end()
+  if (req.method !== 'GET' && req.method !== 'PATCH' && req.method !== 'DELETE') return res.status(405).end()
   noStore(res)
 
   const userId = await requireFunnelBuilder(req, res)
@@ -63,12 +63,82 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const program = existing as unknown as ProgramRow
 
+    if (req.method === 'GET') return getProgram(res, program)
     if (req.method === 'DELETE') return deleteProgram(res, program)
     return patchProgram(req, res, program)
   } catch (err) {
     console.error('[client-programs/[id]]', err)
     return res.status(500).json({ error: 'Failed to update program' })
   }
+}
+
+/**
+ * ONE CALL for the whole programme — items, notes and session requests together.
+ *
+ * Built through serializeProgramDetail so the shape is the one
+ * docs/served-contract.md was generated from; a second hand-rolled response here
+ * would be a second contract nobody regenerates.
+ */
+async function getProgram(res: VercelResponse, program: ProgramRow) {
+  const [itemsRes, notesRes, requestsRes, bookingsRes] = await Promise.all([
+    supabase
+      .from('client_program_items')
+      .select('id, kind, sequence_position, source_week, sort_order, title, detail, phase_name, due_date, status, completed_at, completed_by')
+      .eq('program_id', program.id)
+      .order('sequence_position', { ascending: true }),
+    supabase
+      .from('client_program_notes')
+      .select('id, body, visibility, created_at')
+      .eq('program_id', program.id)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('client_program_session_requests')
+      .select('id, item_id, note, preferred_1, preferred_2, status, booking_id, decline_reason, created_at, resolved_at')
+      .eq('program_id', program.id)
+      .order('created_at', { ascending: false }),
+    supabase.from('bookings').select('id, status, start_time, end_time, canceled_at').eq('program_id', program.id),
+  ])
+  if (itemsRes.error) throw itemsRes.error
+  if (notesRes.error) throw notesRes.error
+  if (requestsRes.error) throw requestsRes.error
+  if (bookingsRes.error) throw bookingsRes.error
+
+  const bookings = (bookingsRes.data || []) as unknown as (ProgramBookingRow & { end_time: string | null })[]
+  const byBooking = new Map(bookings.map((b) => [b.id, b]))
+
+  // due_date is a `date` and carries no time of day, so a confirmed call's
+  // instant lives on the booking. This join is the only way to render
+  // "Week 6 check-in call, Thursday 2:00pm" rather than a bare date.
+  const sessionRequests = ((requestsRes.data || []) as unknown as (SessionRequestRow & { booking_id: string | null })[]).map((r) => {
+    const b = r.booking_id ? byBooking.get(r.booking_id) : undefined
+    return { ...r, booking: b ? { start_time: b.start_time, end_time: b.end_time ?? null } : null }
+  })
+
+  // DISPLAY ONLY, and the comment on ProgramDetailInput.discoveryCallCount says
+  // why: this is the (coach, email) match the schema calls a trap, and it must
+  // never reach the allowance, which counts by program_id and nothing else.
+  const { count: discoveryCallCount } = await supabase
+    .from('bookings')
+    .select('id', { count: 'exact', head: true })
+    .eq('coach_user_id', program.user_id)
+    .ilike('email', program.client_email)
+    .is('program_id', null)
+
+  const portalUrl = `${APP_URL}/p/${signProgramToken(program.id, program.portal_token_version)}`
+
+  return res.status(200).json(
+    serializeProgramDetail({
+      program,
+      items: (itemsRes.data || []) as unknown as ItemRow[],
+      bookings,
+      openSessionRequests: sessionRequests.filter((r) => r.status === 'requested').length,
+      today: new Date().toISOString().slice(0, 10),
+      notes: (notesRes.data || []) as unknown as NoteRow[],
+      sessionRequests: sessionRequests as unknown as SessionRequestRow[],
+      portalUrl,
+      discoveryCallCount: discoveryCallCount ?? 0,
+    })
+  )
 }
 
 /**
