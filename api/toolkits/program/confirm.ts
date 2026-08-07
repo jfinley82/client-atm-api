@@ -1,3 +1,6 @@
+// One owner for what a usable weekly_breakdown entry is — lib/clientProgramPlan.ts
+// needs the same answer when it turns a snapshot into a client's plan.
+import { isNonEmptyString, isValidWeeklyEntry } from '../../../lib/weeklyBreakdown'
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { requireActiveUser } from '../../../lib/auth'
 import { requireCapability } from '../../../lib/entitlements'
@@ -8,20 +11,6 @@ import { CoreOffersAnalysis } from '../../../lib/coreOffersAnalysis'
 import { stampSyncSnapshot } from '../../../lib/syncDependencies'
 import { checkSyncGate } from '../../../lib/syncGate'
 
-function isNonEmptyString(v: unknown): v is string {
-  return typeof v === 'string' && v.trim().length > 0
-}
-
-function isValidWeeklyEntry(v: unknown): v is WeeklyBreakdownEntry {
-  if (!v || typeof v !== 'object') return false
-  const w = v as Record<string, unknown>
-  return (
-    typeof w.week === 'number' &&
-    isNonEmptyString(w.phase_name) &&
-    typeof w.session_focus === 'string' &&
-    typeof w.client_milestone === 'string'
-  )
-}
 
 // Explicit buy-in step. Body carries the full (possibly edited) program.
 // Sets confirmed: true.
