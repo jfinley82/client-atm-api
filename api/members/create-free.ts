@@ -1,12 +1,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
+import { requireWebhookSecret } from '../../lib/webhookAuth'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end()
 
-  if (req.headers['x-webhook-secret'] !== process.env.WEBHOOK_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' })
-  }
+  // Refuses when WEBHOOK_SECRET is unset instead of comparing undefined to
+  // undefined and letting everyone through. See lib/webhookAuth.ts.
+  if (!requireWebhookSecret(req, res, 'members/create-free')) return
 
   const body = req.body || {}
   const email = body.customData?.email || body.email

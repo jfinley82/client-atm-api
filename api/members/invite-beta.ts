@@ -3,6 +3,7 @@ import crypto from 'crypto'
 import { supabase } from '../../lib/supabase'
 import { sendBetaWelcomeEmail } from '../../lib/email'
 import { INVITE_TTL_MS } from '../../lib/tokenLifetimes'
+import { requireWebhookSecret } from '../../lib/webhookAuth'
 
 // The API's own public base URL — the invite email's login link must hit the
 // BACKEND magic-token processor (GET /api/auth/callback), same as
@@ -13,9 +14,9 @@ const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-40
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end()
 
-  if (req.headers['x-webhook-secret'] !== process.env.WEBHOOK_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' })
-  }
+  // Refuses when WEBHOOK_SECRET is unset instead of comparing undefined to
+  // undefined and letting everyone through. See lib/webhookAuth.ts.
+  if (!requireWebhookSecret(req, res, 'members/invite-beta')) return
 
   const body = req.body || {}
   const email = body.customData?.email || body.email

@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { sendTierWelcomeEmail } from '../../lib/email'
+import { requireWebhookSecret } from '../../lib/webhookAuth'
 
 // Explicit product_type -> membership_tier map, no default. This is the GHL
 // onboarding webhook, so an unknown label must fail loudly (400) rather than
@@ -21,9 +22,9 @@ const PAID_PRODUCTS = new Set(['low_ticket', 'accelerator', 'full'])
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end()
 
-  if (req.headers['x-webhook-secret'] !== process.env.WEBHOOK_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' })
-  }
+  // Refuses when WEBHOOK_SECRET is unset instead of comparing undefined to
+  // undefined and letting everyone through. See lib/webhookAuth.ts.
+  if (!requireWebhookSecret(req, res, 'members/create-paid')) return
 
   console.log('[members/create-paid] incoming request body:', JSON.stringify(req.body))
 

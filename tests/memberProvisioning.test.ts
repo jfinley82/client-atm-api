@@ -480,9 +480,20 @@ function tokenFromLink(link: string): string {
 
     // Asserted by VALUE against a named list, not by counting. A count would
     // stay green when one gated writer is swapped for an ungated one.
+    // STRIP COMMENTS, THEN match adjacency. Neither half alone works:
+    //  - `.from('users')\s*.upsert(` misses api/members/create-free.ts, which
+    //    carries a comment between the two lines. Shipped that way yesterday,
+    //    so the sweep walked past a file that CREATES USERS and reported a
+    //    clean list — evidence about the regex, not about the code.
+    //  - "mentions users anywhere AND inserts anywhere" catches every handler
+    //    that merely READS a user and writes some other table.
+    // The question is "does this file insert into users", so ask exactly that.
+    const stripComments = (src: string) =>
+      src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+
     const inserters = files.filter((f) => {
-      const src = readFileSync(f, 'utf8')
-      return /\.from\(['"]users['"]\)\s*[\r\n\s]*\.(insert|upsert)\(/.test(src)
+      const src = stripComments(readFileSync(f, 'utf8'))
+      return /\.from\(['"]users['"]\)\s*\.(insert|upsert)\(/.test(src)
     })
 
     // Every writer, grouped by the gate it ACTUALLY has, with that gate
@@ -494,9 +505,12 @@ function tokenFromLink(link: string): string {
     const GATES: { file: string; mustContain: string[]; why: string }[] = [
       // Not a route. The write POST /api/admin/members and /bulk perform.
       { file: 'lib/memberInvite.ts', mustContain: [], why: 'library, reached only from the admin routes asserted below' },
-      // GoHighLevel webhooks — a shared secret, checked before anything else.
-      { file: 'api/members/invite-beta.ts', mustContain: ['x-webhook-secret', 'WEBHOOK_SECRET'], why: 'GHL beta invite' },
-      { file: 'api/members/create-paid.ts', mustContain: ['x-webhook-secret', 'WEBHOOK_SECRET'], why: 'GHL paid grant' },
+      // GoHighLevel webhooks. The gate is lib/webhookAuth.ts, which refuses
+      // when WEBHOOK_SECRET is unset rather than comparing undefined to
+      // undefined and admitting everyone.
+      { file: 'api/members/invite-beta.ts', mustContain: ['requireWebhookSecret'], why: 'GHL beta invite' },
+      { file: 'api/members/create-paid.ts', mustContain: ['requireWebhookSecret'], why: 'GHL paid grant' },
+      { file: 'api/members/create-free.ts', mustContain: ['requireWebhookSecret'], why: 'GHL free grant' },
       // Stripe — signature verification, not a shared secret.
       { file: 'api/stripe/webhook.ts', mustContain: ['constructEvent', 'STRIPE_WEBHOOK_SECRET'], why: 'Stripe payment' },
     ]
@@ -523,7 +537,7 @@ function tokenFromLink(link: string): string {
     for (const g of GATES.filter((x) => x.mustContain.length)) {
       const src = readFileSync(g.file, 'utf8')
       const gateAt = Math.min(...g.mustContain.map((n) => src.indexOf(n)).filter((i) => i >= 0))
-      const writeAt = src.search(/\.from\(['"]users['"]\)\s*[\r\n\s]*\.(insert|upsert)\(/)
+      const writeAt = stripComments(src).search(/\.from\(['"]users['"]\)\s*\.(insert|upsert)\(/)
       ok(`  and gates BEFORE it writes`, gateAt >= 0 && writeAt > gateAt, `${g.file}: gate at ${gateAt}, write at ${writeAt}`)
     }
 
