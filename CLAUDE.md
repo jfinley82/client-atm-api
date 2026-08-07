@@ -212,6 +212,36 @@ found this also found `api/stripe/webhook.ts` accepting a forged
 `payment_intent.succeeded` when its secret was empty, which nobody had reported
 and which granted paid tiers.
 
+### Six negative cases that all fail for one reason are one case
+
+Different from "can this fixture tell the difference", and the tell is
+different too. There the mutation you expect to fail does not fail. Here every
+guard is live and correct, and **a stricter rule rejects every payload before
+any of them runs.**
+
+`PATCH .../resequence` has three guards: ids must belong to the program, no
+duplicates, and complete coverage. Six negative fixtures, each named for a
+different violation, all returned `400 invalid_sequence`. Deleting the
+unknown-id check changed nothing. Deleting the duplicate check changed
+nothing. **Coverage was answering for both** — every fixture failed it too, so
+two live guards were untested behind a third that fired first.
+
+**THE TELL IS THAT EVERY REJECTION RETURNED THE SAME REASON.** A suite where N
+negative cases all fail identically is testing one guard, whatever the case
+names say — and the case names are exactly what makes it look covered. Return a
+distinguishing `reason` and assert it, or the count of cases is a count of
+labels.
+
+The fix is a payload that satisfies every rule except the one under test:
+seven entries covering all six items with one repeated (coverage passes,
+duplicate fails), and six entries where one names a row from another program
+(coverage passes, unknown-id fails). The second is the sharp one — under the
+mutation it writes `sequence_position: undefined` rather than failing loudly.
+
+Same shape, one level out: a guard can be masked by a *neighbouring* guard, not
+only by a fixture that cannot vary. Ask which rule actually rejected each case,
+not whether the case was rejected.
+
 ### A stub that cannot withhold cannot test
 
 A fake that answers every read with its whole fixture makes every "the handler
