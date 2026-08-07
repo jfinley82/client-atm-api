@@ -440,3 +440,24 @@ extracts both labels from the same output and compares them, and recomputes the
 anchor's height from its emitted style (`padding*2 + line-height`) to check the
 VML matches. Same shape as the button colour being one parameter, never two
 defaults — if the branches *can* disagree, they eventually will.
+
+**A green gate that proves nothing, because the working tree is not what you
+think it is.** The local checkout rewound to an older commit mid-session. All 37
+test files ran and passed — but the session's own five test files no longer
+existed, so the run was green about code that wasn't there. Nothing in the
+output said so: a gate reports on the files it finds, and it cannot report on
+files it doesn't.
+**The assertion COUNT is the tell, and it is the only one.** 2380 → 2001 with
+zero failures is not a quiet success, it is a missing suite. Note the direction
+of the trap — the number going *down* while everything passes reads as calm.
+Check the total against what you last saw before believing a green run, and if
+it moved without a deletion you intended, find out why before merging.
+Recovery, in order: `git ls-remote origin` first, because it distinguishes a
+local rewind (remote intact, nothing lost) from a real one and takes a second.
+Then `git fetch --force origin refs/heads/main:refs/remotes/origin/main` — a
+plain fetch will NOT correct an `origin/main` that has rewound backwards.
+Related, and the reason this cost as much as it did: **back work up the same way
+every time.** Untracked files were safe in a scratchpad copy; the one file
+restored with `git checkout <path>` was the one whose changes were destroyed.
+`git checkout` on a path is not a backup, and a mixed strategy fails exactly
+where it differs.
