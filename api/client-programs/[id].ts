@@ -4,8 +4,7 @@ import { setCors, noStore } from '../../lib/cors'
 import { requireFunnelBuilder } from '../../lib/funnels'
 import { redriveDueDates, isValidStartDate } from '../../lib/clientProgramPlan'
 import { serializeProgramDetail, type ProgramRow, type ItemRow, type NoteRow, type SessionRequestRow, type ProgramBookingRow } from '../../lib/clientProgramSerializers'
-import { signProgramToken } from '../../lib/funnelLeadToken'
-import { APP_URL } from '../../lib/appUrls'
+import { programPortalUrl } from '../../lib/clientProgramPortal'
 
 // GET    /api/client-programs/[id] — the whole programme, in one call.
 // PATCH  /api/client-programs/[id] — edit a program.
@@ -124,7 +123,7 @@ async function getProgram(res: VercelResponse, program: ProgramRow) {
     .ilike('email', program.client_email)
     .is('program_id', null)
 
-  const portalUrl = `${APP_URL}/p/${signProgramToken(program.id, program.portal_token_version)}`
+  const portalUrl = programPortalUrl(program)
 
   return res.status(200).json(
     serializeProgramDetail({

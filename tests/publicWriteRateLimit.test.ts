@@ -163,9 +163,23 @@ function call(handler: Handler, opts: { ip?: string; method?: string; body?: unk
       if (WEBHOOK.some((w) => src.includes(w))) return false
       // A signed token IS a credential: those endpoints cannot be driven without
       // one, so they are a different risk profile from an open form post.
-      if (/verify[A-Z][A-Za-z]*Token/.test(src)) return false
+      //
+      // `loadTokenProgram` is the same fact reached through a helper — every
+      // api/client/** route resolves its token there instead of calling verify
+      // inline, precisely so the four checks cannot be spelled four ways. The
+      // name alone would be a hollow exemption, so it is anchored below: the
+      // helper has to actually verify a signature for this line to be honest.
+      if (/verify[A-Z][A-Za-z]*Token/.test(src) || src.includes('loadTokenProgram(')) return false
       return true
     })
+
+    // THE ANCHOR for the line above. If loadTokenProgram ever stops verifying a
+    // signature, four public write endpoints silently leave this sweep and
+    // nothing else would notice.
+    {
+      const access = stripComments(readFileSync('lib/clientProgramAccess.ts', 'utf8'))
+      ok('loadTokenProgram verifies a signed token', /export async function loadTokenProgram[\s\S]{0,400}verifyProgramToken\(/.test(access), 'the token exemption no longer holds')
+    }
 
     // By value. The set is small enough to name, and naming it is the point —
     // a sixth file appearing here is a decision someone has to make rather than

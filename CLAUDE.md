@@ -339,6 +339,40 @@ belong in one place.
 
 ---
 
+## Public routes — the allowlist
+
+**Two families are unauthenticated. Everything else requires a session.**
+
+- `api/funnel/**` — the lead-facing funnel: opt-in, events, booking, cancel,
+  reschedule, unsubscribe. Keyed by a live funnel or a signed manage token.
+- `api/client/**` — the client programme portal. Keyed by a signed program
+  token (`signProgramToken`), except `api/client/program/resend.ts`, which takes
+  no token at all and answers identically whatever it is given.
+
+This list exists because the only other way to enumerate public routes is to
+grep for the *absence* of `requireActiveUser`, and an absence is not a control —
+a new file is public by default and nothing anywhere says so. `api/client/**` is
+the first unauthenticated family that can **write outside booking management**,
+which is what made writing the list down worth doing rather than intending to.
+
+Adding a route to either directory makes it public. Adding a public route
+anywhere else means this list is wrong; fix the list in the same commit.
+
+The rules that hold inside them:
+
+- A signed token is a **name, not a credential**. It names one program (or one
+  booking). Any child row reached through it must separately prove it belongs to
+  that parent — `loadOwnedChild` with the token's id as parent, never an id from
+  the body.
+- `404`, never `403`, for a stale token or a resource the caller has no claim
+  on. A 403 confirms the id is real to whoever guessed it.
+- A public lookup keyed on an address answers **uniformly** and mails only the
+  address **on file**. The submitted value is a key, never a destination.
+- User input reaching a PostgREST filter is **syntax**, not a value — escape it
+  (`escapeForOr`, `escapeLike`) or it selects rows you did not mean.
+
+---
+
 ## Gotchas
 
 Things that cost real debugging time here. **Add to this list when you burn time
