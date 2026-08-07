@@ -39,10 +39,19 @@ import {
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
 
+  // METHOD BEFORE AUTH, matching confirm.ts and the 104 of 123 handlers here
+  // that do the same. analyze.ts is one of the 19 that authenticate first, but
+  // only because it serves GET as well and needs the user for that branch —
+  // this route is POST-only, so it has no such reason.
+  //
+  // It also keeps a route's shape answerable without a session, which the
+  // frontend's route-manifest generator assumes: a handler that authenticates
+  // first answers 401 to a GET where every neighbour answers 405, and the
+  // manifest reads that as a different kind of route.
+  if (req.method !== 'POST') return res.status(405).end()
+
   const userId = await requireActiveUser(req, res)
   if (!userId) return
-
-  if (req.method !== 'POST') return res.status(405).end()
 
   if (!(await requireCapability(userId, 'method_steps', res))) return
 

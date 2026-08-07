@@ -172,6 +172,25 @@ you expect to fail does not — so make the mutation, every time, and hold one
 variable at a time when building the fixture: same gender, same padding, same
 prefix. If two things differ between your fixtures, you are testing neither.
 
+### Enumerate the legal shapes, not the shapes you happen to have
+
+Production data is a sample, and usually a biased one. Testing against the rows
+that exist tests the generator's habits, not the code's contract.
+
+`lib/frameworkAnalysis.ts` permits **2 or 3** steps per phase, so a framework
+has 6 to 9 steps across eight legal shapes. All three framework rows in
+production are `3+3+3`. Every real framework divides cleanly by three — so the
+reshape distribution had a defect (a session labelled with one phase carrying a
+step from the next) that **could not surface on any live account**, and would
+have waited for the first coach whose framework came back `2+2+3`. Both of the
+first-draft fixtures were `3+3+3` and `2+2+2`, and both divided cleanly, so the
+mutation that should have failed did not.
+
+The whole production dataset was hiding it. So: derive the legal shapes from
+the rule that generates them — the prompt constraint, the CHECK, the enum — and
+run all of them. A fixture drawn from live data proves the code works on the
+past.
+
 ### The file cited as the precedent is the one nobody has read
 
 "Follow the pattern in X" is a claim about X, and it inherits all the authority
@@ -242,6 +261,23 @@ belong in one place.
 - External webhooks redeliver. Any handler that writes must be idempotent on a
   key from the payload — see `support_ticket_messages.resend_email_id` and its
   partial unique index, and the `alreadyProcessed` path in `appendTicketMessage`.
+- **An absent field means UNKNOWN, never zero or empty.** Rows written before a
+  field existed do not carry it, and "nothing was recorded" is a different fact
+  from "there was nothing to record". `weekly_breakdown[].step_ids` is the live
+  case: a breakdown generated before `program/reshape` shipped has no step ids
+  because the model wrote prose and nothing captured which steps it meant — it
+  does **not** mean the plan covered no steps, and a consumer that renders it as
+  "0 steps" or filters those rows out is wrong about every program predating the
+  endpoint. Same shape as the six hero aliases, which were confirmed present in
+  source and absent on the wire because the stored rows predated the deriver.
+  Read absence as "ask the source", backfill, or derive at read time — never as
+  a value.
+- **Method check before the auth gate**, so a route's shape is answerable
+  without a session and a wrong method reads as 405 rather than 401. 104 of 123
+  handlers do this; the exceptions are the ones serving GET as well as POST,
+  which need the user for the GET branch. It matters beyond tidiness: the
+  frontend's route manifest infers from the status, and an auth-first route
+  looks like a different kind of route.
 
 ---
 
