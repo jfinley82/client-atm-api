@@ -30,6 +30,13 @@ export type OwnedBookingsQuery = {
   /** PostgREST column list. Must include `id` and `start_time`. */
   columns: string
   /**
+   * 'active' (default) drops canceled rows in SQL — what a calendar or an
+   * upcoming-calls panel wants. 'any' keeps them, which the contacts surfaces
+   * need: their timeline renders "Call canceled" as an event, and pickBooking
+   * does its own filtering. Choosing wrong is silent, so it is explicit.
+   */
+  status?: 'active' | 'any'
+  /**
    * Extra filters, applied IDENTICALLY to both arms.
    *
    * Identical is the point. A filter added to one arm only makes the two halves
@@ -41,7 +48,8 @@ export type OwnedBookingsQuery = {
 
 export async function loadOwnedActiveBookings<T = Record<string, any>>(opts: OwnedBookingsQuery): Promise<T[]> {
   const arm = () => {
-    const q = supabase.from('bookings').select(opts.columns).eq('status', 'active')
+    let q = supabase.from('bookings').select(opts.columns)
+    if ((opts.status ?? 'active') === 'active') q = q.eq('status', 'active')
     return opts.refine ? opts.refine(q) : q
   }
 

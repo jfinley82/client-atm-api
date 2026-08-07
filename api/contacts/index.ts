@@ -2,12 +2,13 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { setCors, noStore } from '../../lib/cors'
 import { requireFunnelBuilder } from '../../lib/funnels'
+import { loadOwnedActiveBookings } from '../../lib/coachBookings'
 import {
   STAGES,
   Stage,
   BookingRow,
   Contact,
-  bookingKey,
+  buildBookingIndex,
   pickBooking,
   buildContact,
   loadOutcomeTimes,
@@ -87,41 +88,57 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       contacts: [] as Contact[],
       page: { page, limit, total: 0 },
     }
+    // A coach with no funnels has no CONTACTS — this list is built from
+    // funnel_leads, and a coach-page booking creates no lead. Returning empty is
+    // correct here, unlike the calendar, where it hid real calls.
     if (!funnelIds.length) return res.status(200).json(empty)
 
-    const [leadsRes, bookingsRes] = await Promise.all([
+    const [leadsRes, allBookings] = await Promise.all([
       supabase
         .from('funnel_leads')
         .select(LEAD_COLUMNS)
         .in('funnel_id', funnelIds)
         .order('created_at', { ascending: false })
         .limit(MAX_SCAN),
-      supabase
-        .from('bookings')
-        .select('id, funnel_id, email, name, start_time, attended, status, zoom_join_url, meeting_url, custom_answers, created_at')
-        .in('funnel_id', funnelIds),
+      // BOTH ownership arms — see lib/coachBookings.ts. Scoped funnel-only, a
+      // rebooked call made through the coach's own page never reached the
+      // contact it belongs to.
+      //
+      // 'active', not 'any': this list feeds the set straight into pickBooking,
+      // which discards canceled rows, and nothing else here reads them — so
+      // fetching them would be dead weight. The DETAIL view does need 'any',
+      // because its timeline renders "Call canceled" as an event. Verified by
+      // mutation: flipping this makes no observable difference, flipping the
+      // detail view's does.
+      //
+      // A funnel_id filter narrows funnelIds, but the coach arm is keyed on the
+      // caller, so it would still return calls from every funnel. Refined to the
+      // selected funnel's leads below rather than here: a coach-page booking has
+      // no funnel to filter on, so the narrowing has to happen where the lead is
+      // known.
+      loadOwnedActiveBookings<BookingRow>({
+        userId,
+        funnelIds,
+        columns: 'id, funnel_id, email, name, start_time, attended, status, zoom_join_url, meeting_url, custom_answers, created_at',
+        status: 'active',
+      }),
     ])
     if (leadsRes.error) throw leadsRes.error
-    if (bookingsRes.error) throw bookingsRes.error
 
     const leads = (leadsRes.data || []) as Record<string, any>[]
     if (!leads.length) return res.status(200).json(empty)
 
-    // Group bookings by (funnel_id, lower(email)) — bookings has no lead_id.
-    const bookingsByKey = new Map<string, BookingRow[]>()
-    for (const b of (bookingsRes.data || []) as BookingRow[]) {
-      const key = bookingKey(b.funnel_id, b.email)
-      const list = bookingsByKey.get(key)
-      if (list) list.push(b)
-      else bookingsByKey.set(key, [b])
-    }
+    // bookings has no lead_id, so the match is (funnel_id, lower(email)) for a
+    // funnel booking and email alone for a coach-page one — see
+    // buildBookingIndex, which owns that rule for every contacts surface.
+    const bookingsFor = buildBookingIndex(leads, allBookings)
 
     const leadIds = leads.map((l) => l.id as string)
     const [wonAtByLead, videoByLead] = await Promise.all([loadOutcomeTimes(leadIds), loadLatestVideo(leadIds)])
 
     const now = Date.now()
     const all: Contact[] = leads.map((lead) => {
-      const booking = pickBooking(bookingsByKey.get(bookingKey(lead.funnel_id, lead.email)) || [])
+      const booking = pickBooking(bookingsFor(lead))
       return buildContact(lead, booking, byFunnel.get(lead.funnel_id as string), wonAtByLead.get(lead.id as string) ?? null, videoByLead.get(lead.id as string) ?? null, now)
     })
 

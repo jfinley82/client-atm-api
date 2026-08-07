@@ -45,6 +45,83 @@ export function bookingKey(funnelId: string | null | undefined, email: string | 
   return `${funnelId || ''}::${(email || '').trim().toLowerCase()}`
 }
 
+const normEmail = (v: unknown): string => (typeof v === 'string' ? v : '').trim().toLowerCase()
+
+/**
+ * Which bookings belong to which contact — INCLUDING the ones that came through
+ * the coach's own booking page.
+ *
+ * bookingKey needs a funnel id on both sides. A coach-page booking has
+ * funnel_id NULL, so it keys as `::email` and can never equal a lead's
+ * `funnelId::email`. The person shows up in the CRM fine — they became a lead
+ * through the funnel — but their call does not attach to them. That is the
+ * rebooking case exactly: someone who already came through the funnel is handed
+ * the booking link so they need not reapply, and the resulting call is invisible
+ * on the contact it belongs to.
+ *
+ * So a funnel-less booking matches on EMAIL ALONE, within the coach's own leads.
+ * The caller must pass only leads and bookings it has already scoped to the
+ * coach — this function does no ownership checking and must not be given a
+ * wider set.
+ *
+ * ONE CALL, ONE CONTACT. The same address can be a lead in several funnels, and
+ * attaching one call to all of them would show it two or three times and count
+ * "booked" that many times in stage_counts. It attaches to the MOST RECENTLY
+ * CREATED lead with that address, which is the same "most recent lead for this
+ * email" rule api/calendar/book.ts already uses when it attributes a booking,
+ * tie-broken on id so the choice is stable rather than dependent on row order.
+ */
+export function buildBookingIndex(
+  leads: LeadRow[],
+  bookings: BookingRow[]
+): (lead: LeadRow) => BookingRow[] {
+  const byFunnelKey = new Map<string, BookingRow[]>()
+  const coachPageByEmail = new Map<string, BookingRow[]>()
+
+  for (const b of bookings) {
+    if (b.funnel_id) {
+      const key = bookingKey(b.funnel_id, b.email)
+      const list = byFunnelKey.get(key)
+      if (list) list.push(b)
+      else byFunnelKey.set(key, [b])
+    } else {
+      const key = normEmail(b.email)
+      if (!key) continue
+      const list = coachPageByEmail.get(key)
+      if (list) list.push(b)
+      else coachPageByEmail.set(key, [b])
+    }
+  }
+
+  // Whichever lead owns the funnel-less calls for an address. Computed over
+  // every lead, not only those with a booking, so the answer does not change
+  // with which bookings happen to exist.
+  const ownerByEmail = new Map<string, LeadRow>()
+  for (const l of leads) {
+    const key = normEmail(l.email)
+    if (!key) continue
+    const current = ownerByEmail.get(key)
+    if (!current || isNewerLead(l, current)) ownerByEmail.set(key, l)
+  }
+
+  return (lead: LeadRow): BookingRow[] => {
+    const funnelBookings = byFunnelKey.get(bookingKey(lead.funnel_id, lead.email)) || []
+    const key = normEmail(lead.email)
+    const owner = key ? ownerByEmail.get(key) : undefined
+    if (!owner || owner.id !== lead.id) return funnelBookings
+    return [...funnelBookings, ...(coachPageByEmail.get(key) || [])]
+  }
+}
+
+// Newest created_at wins; ties broken on id so two leads created in the same
+// millisecond still resolve to the same owner on every request.
+function isNewerLead(candidate: LeadRow, current: LeadRow): boolean {
+  const a = String(candidate.created_at || '')
+  const b = String(current.created_at || '')
+  if (a !== b) return a > b
+  return String(candidate.id) > String(current.id)
+}
+
 // The lead's most recent ACTIVE booking. Canceled bookings do not make a lead
 // "booked" — the slot was released and the lead is back in the pipeline.
 export function pickBooking(bookings: BookingRow[]): BookingRow | null {
