@@ -3,6 +3,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'stub-key'
 process.env.JWT_SECRET = 'stub-secret'
 process.env.ANTHROPIC_API_KEY = 'stub-anthropic'
 
+import { projectSelect } from './support/postgrest'
 import { createSessionToken } from '../lib/auth'
 import { reshapeProgram, sessionCountFor, SESSION_CADENCES, type SessionCadence } from '../lib/programReshape'
 import type { FrameworkPhase } from '../lib/frameworkAnalysis'
@@ -145,7 +146,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const method = (init?.method || 'GET').toUpperCase()
   const body = init?.body ? JSON.parse(String(init.body)) : undefined
   const json = (b: unknown, status = 200) =>
-    new Response(b === null ? 'null' : JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+    new Response(b === null ? 'null' : JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('/rest/v1/users')) {
     return json({ id: USER, status: 'active', role: 'user', membership_tier: 'full' })

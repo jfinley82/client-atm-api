@@ -6,6 +6,7 @@ process.env.ZOOM_CLIENT_ID = 'stub-client'
 process.env.ZOOM_CLIENT_SECRET = 'stub-secret'
 process.env.ZOOM_SCHEDULE_ID = 'stub-schedule'
 
+import { projectSelect } from './support/postgrest'
 import { DEFAULT_WINDOW_DAYS, ZOOM_MAX_WINDOW_DAYS, clampSchedulerWindow } from '../lib/schedulerSlots'
 
 type Handler = (req: any, res: any) => Promise<void>
@@ -33,7 +34,7 @@ const realFetch = globalThis.fetch
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = String(typeof input === 'string' ? input : input.url)
   const json = (b: unknown, status = 200) =>
-    new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+    new Response(JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('zoom.us/oauth/token')) {
     return json({ access_token: 'stub-token', expires_in: 3600 })

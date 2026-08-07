@@ -2,6 +2,7 @@ process.env.SUPABASE_URL = 'https://stub.supabase.co'
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'stub-key'
 process.env.JWT_SECRET = 'stub-secret'
 
+import { projectSelect } from './support/postgrest'
 import { createSessionToken } from '../lib/auth'
 import { normalizeSettingValue } from '../lib/appSettings'
 import { WORKSHOP_TIME_ZONE, carryTimeOnto, normalizeWorkshopDate, parseWorkshopDate } from '../lib/workshopDate'
@@ -29,7 +30,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const method = (init?.method || 'GET').toUpperCase()
   const body = init?.body ? JSON.parse(String(init.body)) : undefined
   const json = (b: unknown, status = 200) =>
-    new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+    new Response(JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('/rest/v1/users')) return json({ id: ADMIN, role: 'admin' })
   if (url.includes('/rest/v1/app_settings')) {

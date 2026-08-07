@@ -212,6 +212,34 @@ found this also found `api/stripe/webhook.ts` accepting a forged
 `payment_intent.succeeded` when its secret was empty, which nobody had reported
 and which granted paid tiers.
 
+### A stub that cannot withhold cannot test
+
+A fake that answers every read with its whole fixture makes every "the handler
+reads this column" guard decorative — not the `ok(..., true)` shape, but a
+correctly-worded assertion whose subject the fixture supplies regardless of
+whether the code asked for it. Measured: dropping `zoom_join_url` or
+`meeting_url` from `BOOKING_COLUMNS`, or `application_submitted_at` from
+`LEAD_COLUMNS`, each left the whole gate green — while `tests/calendar.test.ts`
+asserted "approved_at comes from application_submitted_at" **by name**.
+
+`tests/support/postgrest.ts` models `select=` for every stub in the suite, so a
+column dropped from a query is absent at runtime the way PostgREST makes it
+absent. Two things it must keep doing, both found by driving it rather than
+reasoning about it:
+
+- **Never project an error body.** PostgREST reports failure as a non-2xx
+  carrying `{ code, message }`, which `select=` says nothing about. Projecting
+  it strips `code`, so a handler branching on `'23505'` sees `undefined` and
+  returns 500 where it should return 409. This broke `api/admin/courses` on the
+  first run.
+- **Stay a model, not a spelling test.** Adding a column no handler reads must
+  change nothing, or the suite starts enforcing that a constant matches a
+  fixture instead of that the code reads what it declares.
+
+The general rule: **a mock should be able to answer wrongly.** Model the
+constraint the real thing imposes — the projection, the UNIQUE index, the CHECK,
+`in` never matching NULL — or the guard against violating it is untested.
+
 ### Assert the thing, not its proxy
 
 - A guard shaped like a container (bucket, host, path prefix) passes until real

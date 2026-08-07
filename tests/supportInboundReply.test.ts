@@ -7,6 +7,7 @@ process.env.RESEND_WEBHOOK_SECRET = 'whsec_' + Buffer.from('unit-test-secret').t
 // Dynamic import below: the webhook handler pulls in lib/email.ts, which
 // constructs `new Resend(process.env.RESEND_API_KEY!)` at module scope. A
 // static import would let esbuild run that before the env assignments above.
+import { projectSelect } from './support/postgrest'
 import crypto from 'crypto'
 import { Readable } from 'stream'
 
@@ -58,7 +59,7 @@ const realFetch = globalThis.fetch
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = String(typeof input === 'string' ? input : input.url)
   const method = (init?.method || 'GET').toUpperCase()
-  const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+  const json = (b: unknown, status = 200) => new Response(JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('/emails/receiving/')) {
     receivingApiCalls++

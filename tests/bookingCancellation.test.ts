@@ -4,6 +4,7 @@ process.env.JWT_SECRET = 'stub-secret'
 process.env.RESEND_API_KEY = 'stub-resend'
 process.env.ZOOM_WEBHOOK_SECRET_TOKEN = 'zoom-secret'
 
+import { projectSelect } from './support/postgrest'
 import crypto from 'crypto'
 import { Readable } from 'stream'
 import { signManageToken } from '../lib/funnelLeadToken'
@@ -89,7 +90,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const method = (init?.method || 'GET').toUpperCase()
   const body = init?.body ? JSON.parse(String(init.body)) : undefined
   const json = (b: unknown, status = 200) =>
-    new Response(b === null ? 'null' : JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+    new Response(b === null ? 'null' : JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('api.resend.com/emails/') && method === 'POST') {
     resendCancels.push(url.split('/emails/')[1].replace(/\/cancel.*$/, ''))

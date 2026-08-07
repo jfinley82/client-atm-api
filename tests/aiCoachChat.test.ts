@@ -5,6 +5,7 @@ process.env.ANTHROPIC_API_KEY = 'sk-ant-stub'
 
 // Dynamic imports: the chat handler constructs the Anthropic client at module
 // scope from ANTHROPIC_API_KEY, which must be set first.
+import { projectSelect } from './support/postgrest'
 import { signCoachToken } from '../lib/funnelLeadToken'
 
 type Handler = (req: any, res: any) => Promise<void>
@@ -49,7 +50,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const url = decodeURIComponent(String(typeof input === 'string' ? input : input.url))
   const method = (init?.method || 'GET').toUpperCase()
   const reqBody = init?.body ? JSON.parse(String(init.body)) : undefined
-  const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+  const json = (b: unknown, status = 200) => new Response(JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('api.anthropic.com')) {
     lastModelRequest = reqBody

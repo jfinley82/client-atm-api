@@ -16,6 +16,8 @@ process.env.ZOOM_SCHEDULE_ID = 'sched'
 process.env.ZOOM_HOST_EMAIL = 'teamfinley21@gmail.com'      // Zoom-side: a user in the Zoom account
 process.env.ZOOM_HOST_MTM_USER_ID = 'user-jamaul'           // MTM-side: a users.id in our database
 
+import { projectSelect } from './support/postgrest'
+
 let pass = 0,
   fail = 0
 function ok(label: string, cond: boolean, extra?: string) {
@@ -45,7 +47,7 @@ const zoomCreateUrls: string[] = []
 const realFetch = globalThis.fetch
 globalThis.fetch = (async (input: any) => {
   const url = decodeURIComponent(String(typeof input === 'string' ? input : input.url))
-  const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  const json = (b: unknown) => new Response(JSON.stringify(projectSelect(url, b)), { status: 200, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('/rest/v1/users')) {
     const m = /id=eq\.([^&]+)/.exec(url)
