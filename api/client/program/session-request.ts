@@ -3,6 +3,7 @@ import { supabase } from '../../../lib/supabase'
 import { setCors, noStore } from '../../../lib/cors'
 import { loadTokenProgram, loadOwnedChild } from '../../../lib/clientProgramAccess'
 import { sessionsUsed, type ProgramBookingRow } from '../../../lib/clientProgramSerializers'
+import { notifyCoachSessionRequested } from '../../../lib/clientProgramEmail'
 
 // POST /api/client/program/session-request?t=<token> — PUBLIC.
 // Body { item_id?, note?, preferred_1?, preferred_2? }.
@@ -87,6 +88,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       throw error
     }
+
+    // THE COACH IS THE ONE WHO HAS TO ACT. Best-effort and MTM-branded — this is
+    // our product telling a member something happened in it, not their business
+    // writing to them in their own name.
+    let itemTitle: string | null = null
+    if (itemId) {
+      const { data: linked } = await supabase.from('client_program_items').select('title').eq('id', itemId).maybeSingle()
+      itemTitle = (linked as { title?: string } | null)?.title ?? null
+    }
+    await notifyCoachSessionRequested(program, {
+      note: insert.note,
+      preferred_1: insert.preferred_1,
+      preferred_2: insert.preferred_2,
+      itemTitle,
+    })
 
     return res.status(201).json({ request: data })
   } catch (err) {

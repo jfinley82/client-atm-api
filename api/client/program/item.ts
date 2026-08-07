@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
 import { setCors, noStore } from '../../../lib/cors'
 import { loadTokenProgram, loadOwnedChild } from '../../../lib/clientProgramAccess'
+import { syncItemReminder, type ReminderItem } from '../../../lib/clientProgramEmail'
 
 // POST /api/client/program/item?t=<token> — body { item_id, status }. PUBLIC.
 //
@@ -16,7 +17,7 @@ import { loadTokenProgram, loadOwnedChild } from '../../../lib/clientProgramAcce
 // could tick items on every program in the table by naming their ids.
 export const config = { maxDuration: 30 }
 
-const ITEM_COLUMNS = 'id, program_id, kind, title, status, completed_at, completed_by, due_date, sequence_position'
+const ITEM_COLUMNS = 'id, program_id, kind, title, status, completed_at, completed_by, due_date, sequence_position, reminder_message_id'
 
 type Item = {
   id: string
@@ -76,6 +77,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .select(ITEM_COLUMNS)
       .single()
     if (error) throw error
+
+    // A TICKED ITEM STOPS NAGGING, and an un-ticked one starts again. Both are
+    // the same call: syncItemReminder cancels whatever is queued and then
+    // re-queues only if the row still wants one.
+    await syncItemReminder(program, data as unknown as ReminderItem)
 
     return res.status(200).json({ item: data })
   } catch (err) {

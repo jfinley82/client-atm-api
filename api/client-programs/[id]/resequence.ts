@@ -4,6 +4,7 @@ import { setCors, noStore } from '../../../lib/cors'
 import { requireFunnelBuilder } from '../../../lib/funnels'
 import { loadOwnedProgram, ITEM_COLUMNS } from '../../../lib/clientProgramAccess'
 import { redriveDueDates } from '../../../lib/clientProgramPlan'
+import { syncChangedReminders, type ReminderItem } from '../../../lib/clientProgramEmail'
 
 // PATCH /api/client-programs/[id]/resequence — { positions: [{item_id, sequence_position}] }
 //
@@ -88,6 +89,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const { data: after } = await supabase.from('client_program_items').select(ITEM_COLUMNS).eq('program_id', program.id)
+    // Only the rows whose DATE moved. A reminder is keyed on the due date, so a
+    // row that changed position without changing date keeps the message it
+    // already has.
+    await syncChangedReminders(program, items, (after || []) as unknown as ReminderItem[])
+
     return res.status(200).json({ items: after || [] })
   } catch (err) {
     console.error('[client-programs/[id]/resequence]', err)

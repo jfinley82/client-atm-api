@@ -5,6 +5,8 @@ import { requireFunnelBuilder } from '../../../../lib/funnels'
 import { cancelFunnelSends } from '../../../../lib/email'
 import { loadOwnedProgram, loadOwnedChild, ITEM_COLUMNS } from '../../../../lib/clientProgramAccess'
 import { derivedDueDate } from '../../../../lib/clientProgramPlan'
+import { syncItemReminder, syncChangedReminders, type ReminderItem } from '../../../../lib/clientProgramEmail'
+import type { ProgramRow } from '../../../../lib/clientProgramSerializers'
 
 // PATCH  /api/client-programs/[id]/items/[itemId]
 // DELETE /api/client-programs/[id]/items/[itemId]
@@ -40,15 +42,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const item = await loadOwnedChild<Item>('client_program_items', ITEM_COLUMNS, itemId, program.id)
     if (!item) return res.status(404).json({ error: 'not_found' })
 
-    if (req.method === 'DELETE') return deleteItem(res, program.id, program.start_date, item)
-    return patchItem(req, res, program.start_date, item)
+    if (req.method === 'DELETE') return deleteItem(res, program, item)
+    return patchItem(req, res, program, item)
   } catch (err) {
     console.error('[client-programs/[id]/items/[itemId]]', err)
     return res.status(500).json({ error: 'Failed to update item' })
   }
 }
 
-async function patchItem(req: VercelRequest, res: VercelResponse, startDate: string, item: Item) {
+async function patchItem(req: VercelRequest, res: VercelResponse, program: ProgramRow, item: Item) {
+  const startDate = program.start_date
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
   for (const key of Object.keys(body)) {
     if (!PATCHABLE.has(key)) return res.status(400).json({ error: 'invalid_field', field: key })
@@ -111,6 +114,14 @@ async function patchItem(req: VercelRequest, res: VercelResponse, startDate: str
 
   const { data, error } = await supabase.from('client_program_items').update(updates).eq('id', item.id).select(ITEM_COLUMNS).single()
   if (error) throw error
+
+  // THE QUEUE FOLLOWS THE PLAN. Re-synced from the row that was just written
+  // rather than from `updates`, so a column the database defaulted or a value
+  // this handler did not touch is still the one the reminder is built from.
+  // syncItemReminder cancels whatever was queued before doing anything else, so
+  // a completion, a moved date and a changed position all resolve the same way.
+  await syncItemReminder(program, data as unknown as ReminderItem)
+
   return res.status(200).json({ item: data })
 }
 
@@ -126,7 +137,9 @@ async function patchItem(req: VercelRequest, res: VercelResponse, startDate: str
  * still queued emails the client about work that no longer exists, and once the
  * row is gone there is nothing left to find the message id on.
  */
-async function deleteItem(res: VercelResponse, programId: string, startDate: string, item: Item) {
+async function deleteItem(res: VercelResponse, program: ProgramRow, item: Item) {
+  const programId = program.id
+  const startDate = program.start_date
   const position = item.sequence_position
   const wholePosition = item.kind === 'week'
 
@@ -159,5 +172,12 @@ async function deleteItem(res: VercelResponse, programId: string, startDate: str
   }
 
   const { data: after } = await supabase.from('client_program_items').select(ITEM_COLUMNS).eq('program_id', programId)
+
+  // COMPACTION MOVED DATES, SO IT MOVED REMINDERS — but only for the rows whose
+  // date actually changed. The deleted rows' messages were already cancelled
+  // above, before the delete, because once the row is gone there is nothing left
+  // to find the message id on.
+  await syncChangedReminders(program, items, (after || []) as unknown as ReminderItem[])
+
   return res.status(200).json({ deleted: doomed.map((d) => d.id), compacted: true, items: after || [] })
 }

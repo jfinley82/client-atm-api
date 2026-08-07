@@ -4,6 +4,7 @@ import { setCors, noStore } from '../../../../lib/cors'
 import { requireFunnelBuilder } from '../../../../lib/funnels'
 import { loadOwnedProgram, loadOwnedChild } from '../../../../lib/clientProgramAccess'
 import { sessionsUsed, type ProgramBookingRow } from '../../../../lib/clientProgramSerializers'
+import { sendSessionConfirmed, sendSessionDeclined } from '../../../../lib/clientProgramEmail'
 
 // POST /api/client-programs/[id]/requests/[requestId]
 //   { action: 'confirm', start_time, end_time } | { action: 'decline', decline_reason? }
@@ -59,6 +60,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (error) throw error
       const rows = (data || []) as unknown as Request[]
       if (!rows.length) return res.status(409).json({ error: 'not_open' })
+      // Best-effort, after the write. A decline the client never hears about
+      // leaves them waiting on a request that has already been answered.
+      await sendSessionDeclined(program, reason)
       return res.status(200).json({ request: rows[0] })
     }
 
@@ -121,6 +125,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await supabase.from('bookings').delete().eq('id', bookingId)
       return res.status(409).json({ error: 'not_open' })
     }
+
+    // The item's title, or null for an ad-hoc call. Read here rather than
+    // guessed in the mailer: only this handler knows which item the request
+    // named, and a confirmation titled "your call" when the client asked about
+    // week 6 reads as a different call.
+    let itemTitle: string | null = null
+    if (request.item_id) {
+      const { data: linked } = await supabase.from('client_program_items').select('title').eq('id', request.item_id).maybeSingle()
+      itemTitle = (linked as { title?: string } | null)?.title ?? null
+    }
+    await sendSessionConfirmed(program, { startIso: startTime, itemTitle })
 
     return res.status(200).json({ request: rows[0], booking })
   } catch (err) {
