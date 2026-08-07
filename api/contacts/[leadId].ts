@@ -2,8 +2,10 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { setCors, noStore } from '../../lib/cors'
 import { requireFunnelBuilder } from '../../lib/funnels'
+import { loadOwnedActiveBookings } from '../../lib/coachBookings'
 import {
   BookingRow,
+  buildBookingIndex,
   pickBooking,
   buildContact,
   renderAnswers,
@@ -49,15 +51,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .maybeSingle()
     if (!funnel || (funnel as any).user_id !== userId) return res.status(404).json({ error: 'Contact not found' })
 
-    const [bookingsRes, notesRes, eventsRes, wonAtByLead, videoByLead] = await Promise.all([
+    // The coach's OWN funnels, and every lead of theirs sharing this address.
+    // Both are needed to answer the same question the list answers: a
+    // funnel-less booking attaches to the most recently created lead with that
+    // address, so this view cannot decide alone whether THIS lead is the one.
+    // Resolving it differently here is how a list and a detail view start
+    // disagreeing about whether a call exists.
+    const { data: ownedFunnels } = await supabase.from('funnels').select('id').eq('user_id', userId)
+    const ownedFunnelIds = ((ownedFunnels || []) as { id: string }[]).map((f) => f.id)
+
+    const BOOKING_SELECT =
+      'id, funnel_id, email, name, start_time, end_time, attended, attendance_marked_at, status, zoom_join_url, meeting_url, custom_answers, reschedule_count, created_at'
+
+    const [bookingsForLead, siblingLeadsRes, notesRes, eventsRes, wonAtByLead, videoByLead] = await Promise.all([
+      // BOTH ownership arms — see lib/coachBookings.ts. ilike, not eq, on the
+      // address: a booking is taken from a form the lead retypes, so case can
+      // drift from the opt-in row, and buildBookingIndex normalizes the same way.
+      loadOwnedActiveBookings<BookingRow>({
+        userId,
+        funnelIds: ownedFunnelIds,
+        columns: BOOKING_SELECT,
+        status: 'any',
+        refine: (q) => q.ilike('email', (lead as any).email),
+      }),
       supabase
-        .from('bookings')
-        .select('id, funnel_id, email, name, start_time, end_time, attended, attendance_marked_at, status, zoom_join_url, meeting_url, custom_answers, reschedule_count, created_at')
-        .eq('funnel_id', (lead as any).funnel_id)
-        // ilike, not eq: a booking is taken from a form the lead retypes, so
-        // case can drift from the opt-in row. The list endpoint normalizes the
-        // same way (lib/contacts.ts bookingKey) — matching exactly here would
-        // let the list show a call the detail view then claims does not exist.
+        .from('funnel_leads')
+        .select('id, funnel_id, email, created_at')
+        .in('funnel_id', ownedFunnelIds.length ? ownedFunnelIds : ['00000000-0000-0000-0000-000000000000'])
         .ilike('email', (lead as any).email),
       supabase
         .from('funnel_lead_notes')
@@ -73,7 +93,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       loadLatestVideo([leadId]),
     ])
 
-    const bookings = (bookingsRes.data || []) as BookingRow[]
+    // Same rule, same answer as GET /api/contacts. `lead` is included in the
+    // sibling set explicitly rather than trusted to come back from the query,
+    // so a lead whose address differs only by case still owns its own calls.
+    const siblings = [...(((siblingLeadsRes.data || []) as any[]).filter((l) => l.id !== (lead as any).id)), lead as any]
+    const bookings = buildBookingIndex(siblings, bookingsForLead)((lead as any))
     const booking = pickBooking(bookings)
     const now = Date.now()
     const contact = buildContact(lead, booking, funnel as Record<string, any>, wonAtByLead.get(leadId) ?? null, videoByLead.get(leadId) ?? null, now)
