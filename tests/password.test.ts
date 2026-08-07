@@ -5,6 +5,7 @@ process.env.JWT_SECRET = 'stub-secret'
 // Dynamic imports below: lib/auth.ts encodes process.env.JWT_SECRET at module
 // scope, and lib/supabase.ts builds its client the same way. A static import
 // would let esbuild hoist both above the assignments here.
+import { projectSelect } from './support/postgrest'
 import bcrypt from 'bcryptjs'
 import { SignJWT } from 'jose'
 
@@ -24,7 +25,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const url = String(typeof input === 'string' ? input : input.url)
   const method = (init?.method || 'GET').toUpperCase()
   const json = (b: unknown, status = 200) =>
-    new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+    new Response(JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('/rest/v1/users')) {
     const m = /[?&]id=eq\.([^&]+)/.exec(url)

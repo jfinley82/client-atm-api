@@ -8,6 +8,8 @@ process.env.ZOOM_CLIENT_ID = 'b'
 process.env.ZOOM_CLIENT_SECRET = 'c'
 process.env.ZOOM_SCHEDULE_ID = 'sched'
 
+import { projectSelect } from './support/postgrest'
+
 // NOT static imports. lib/email.ts runs `new Resend(process.env.RESEND_API_KEY!)`
 // at module scope and ES imports hoist above the assignments above, so a static
 // import here constructs the client before the stub key exists. Documented in
@@ -43,7 +45,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const method = (init?.method || 'GET').toUpperCase()
   const body = init?.body && typeof init.body === 'string' ? JSON.parse(init.body) : undefined
   const json = (b: unknown, status = 200) =>
-    new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+    new Response(JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('/rest/v1/funnel_leads')) {
     const m = /id=eq\.([^&]+)/.exec(url)

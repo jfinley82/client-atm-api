@@ -5,6 +5,7 @@ process.env.RESEND_API_KEY = 'stub-resend-key'
 
 // Dynamic imports: outcome.ts -> lib/funnelNurture -> lib/email, which builds
 // `new Resend(process.env.RESEND_API_KEY!)` at module scope.
+import { projectSelect } from './support/postgrest'
 import { createSessionToken } from '../lib/auth'
 
 type Handler = (req: any, res: any) => Promise<void>
@@ -53,7 +54,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   // param helpers below would never match the raw URL.
   const url = decodeURIComponent(String(typeof input === 'string' ? input : input.url))
   const method = (init?.method || 'GET').toUpperCase()
-  const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  const json = (b: unknown) => new Response(JSON.stringify(projectSelect(url, b)), { status: 200, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('/rest/v1/users')) return json({ status: 'active', role: 'admin', membership_tier: 'full', add_ons: {} })
 

@@ -17,6 +17,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'stub-key'
 process.env.JWT_SECRET = 'stub-secret'
 process.env.RESEND_API_KEY = 'stub-resend-key'
 
+import { projectSelect } from './support/postgrest'
 import { createSessionToken } from '../lib/auth'
 
 type Handler = (req: any, res: any) => Promise<void>
@@ -73,7 +74,7 @@ function inParam(url: string, key: string): string[] | null {
 const realFetch = globalThis.fetch
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = decodeURIComponent(String(typeof input === 'string' ? input : input.url))
-  const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  const json = (b: unknown) => new Response(JSON.stringify(projectSelect(url, b)), { status: 200, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('/rest/v1/users')) return json({ status: 'active', role: 'admin', membership_tier: 'full', add_ons: {} })
   if (url.includes('/rest/v1/user_availability')) return json(null)
@@ -100,16 +101,8 @@ globalThis.fetch = (async (input: any, init?: any) => {
     if (coach && leakUnownedCoachPageBooking) rows = [...rows, leakUnownedCoachPageBooking]
     rows = rows.slice().sort((a, b) => String(a.start_time).localeCompare(String(b.start_time)))
 
-    // PROJECT THE SELECTED COLUMNS. PostgREST returns only what `select` asks
-    // for, so a column dropped from BOOKING_COLUMNS is absent at runtime. A stub
-    // that hands back the whole fixture regardless makes every "we read this
-    // column" guard untestable — dropping coach_user_id from the select left the
-    // suite green until this existed.
-    const sel = /[?&]select=([^&]+)/.exec(url)?.[1]
-    if (sel) {
-      const cols = sel.split(',').map((c) => c.trim()).filter(Boolean)
-      rows = rows.map((r) => Object.fromEntries(cols.filter((c) => c in r).map((c) => [c, r[c]])) as any)
-    }
+    // Column projection now lives in tests/support/postgrest.ts and is applied
+    // by `json` for every stub in the suite — this file had the only copy.
     return json(rows)
   }
 

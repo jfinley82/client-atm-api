@@ -2,6 +2,8 @@ process.env.SUPABASE_URL = 'https://stub.supabase.co'
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'stub-key'
 process.env.JWT_SECRET = 'stub-secret'
 
+import { projectSelect } from './support/postgrest'
+
 // The journey exists so the frontend renders "Step N of total_steps" from the
 // response, never from a constant of its own. These tests pin the sixth step
 // (Funnel Builder) and the two constants that must move together — total_steps
@@ -30,7 +32,7 @@ function eqParam(url: string, key: string): string | null {
 const realFetch = globalThis.fetch
 globalThis.fetch = (async (input: any) => {
   const url = decodeURIComponent(String(typeof input === 'string' ? input : input.url))
-  const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  const json = (b: unknown) => new Response(JSON.stringify(projectSelect(url, b)), { status: 200, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('/rest/v1/saved_outputs')) return json(savedOutputs)
   if (url.includes('/rest/v1/problem_solution_cards')) return json(validatedCards)

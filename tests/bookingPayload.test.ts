@@ -7,6 +7,7 @@ process.env.ZOOM_CLIENT_SECRET = 'c'
 process.env.ZOOM_SCHEDULE_ID = 'sched'
 process.env.RESEND_API_KEY = 'stub-resend'
 
+import { projectSelect } from './support/postgrest'
 import { bookingTimeLabel, isValidTimeZone, normalizeTimeZone } from '../lib/bookingTimezone'
 import { BOOKING_TYPE_ANSWER_ID, BOOKING_TYPE_LABEL, resolveBookingType } from '../lib/bookingQuestions'
 
@@ -50,7 +51,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const method = (init?.method || 'GET').toUpperCase()
   const body = init?.body && typeof init.body === 'string' ? JSON.parse(init.body) : undefined
   const json = (b: unknown, status = 200) =>
-    new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+    new Response(JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('zoom.us/oauth/token')) return json({ access_token: 't', expires_in: 3600 })
   if (url.includes('available_times')) {

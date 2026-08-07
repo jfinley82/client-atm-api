@@ -2,6 +2,7 @@ process.env.SUPABASE_URL = 'https://stub.supabase.co'
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'stub-key'
 process.env.JWT_SECRET = 'stub-secret'
 
+import { projectSelect } from './support/postgrest'
 import { createSessionToken } from '../lib/auth'
 import {
   DIRECT_UPLOAD_MAX_BYTES,
@@ -38,7 +39,7 @@ const realFetch = globalThis.fetch
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = decodeURIComponent(String(typeof input === 'string' ? input : input.url))
   const json = (b: unknown, status = 200) =>
-    new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+    new Response(JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('/rest/v1/users')) {
     return json({ id: USER, status: 'active', role: 'admin', membership_tier: 'full' })

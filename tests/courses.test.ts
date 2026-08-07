@@ -2,6 +2,7 @@ process.env.SUPABASE_URL = 'https://stub.supabase.co'
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'stub-key'
 process.env.JWT_SECRET = 'stub-secret'
 
+import { projectSelect } from './support/postgrest'
 import { createSessionToken } from '../lib/auth'
 
 type Handler = (req: any, res: any) => Promise<void>
@@ -65,7 +66,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const method = (init?.method || 'GET').toUpperCase()
   const body = init?.body ? JSON.parse(String(init.body)) : undefined
   const json = (b: unknown, status = 200, headers: Record<string, string> = {}) =>
-    new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json', ...headers } })
+    new Response(JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json', ...headers } })
   // head:true count requests come back as a Content-Range header, not a body.
   const countRes = (n: number) => new Response(null, { status: 200, headers: { 'Content-Range': `0-${Math.max(0, n - 1)}/${n}` } })
   const isCount = /count=exact/.test(String(init?.headers?.Prefer || init?.headers?.prefer || '')) || method === 'HEAD'

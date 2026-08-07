@@ -6,6 +6,7 @@ process.env.RESEND_API_KEY = 'stub-resend-key'
 // Dynamic imports: every handler here reaches lib/email.ts, which constructs
 // `new Resend(process.env.RESEND_API_KEY!)` at module scope. A static import
 // would let esbuild run that before the env assignment above.
+import { projectSelect } from './support/postgrest'
 import { createSessionToken } from '../lib/auth'
 
 type Handler = (req: any, res: any) => Promise<void>
@@ -50,7 +51,7 @@ const realFetch = globalThis.fetch
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = decodeURIComponent(String(typeof input === 'string' ? input : input.url))
   const method = (init?.method || 'GET').toUpperCase()
-  const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+  const json = (b: unknown, status = 200) => new Response(JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('api.resend.com/emails')) {
     const body = init?.body ? JSON.parse(String(init.body)) : {}

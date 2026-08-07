@@ -6,6 +6,7 @@ process.env.FUNNEL_PUBLIC_DOMAIN = 'freeminiworkshop.com'
 
 // Dynamic imports below: the handlers reach lib/email.ts, which constructs
 // `new Resend(process.env.RESEND_API_KEY!)` at module scope.
+import { projectSelect } from './support/postgrest'
 import { createSessionToken } from '../lib/auth'
 
 type Handler = (req: any, res: any) => Promise<void>
@@ -54,7 +55,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const url = decodeURIComponent(String(typeof input === 'string' ? input : input.url))
   const method = (init?.method || 'GET').toUpperCase()
   const body = init?.body ? JSON.parse(String(init.body)) : undefined
-  const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+  const json = (b: unknown, status = 200) => new Response(JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
 
   if (method === 'PATCH' || method === 'POST' || method === 'PUT') writes.push({ url, body })
 

@@ -5,6 +5,7 @@ process.env.ANTHROPIC_API_KEY = 'sk-ant-stub'
 
 // Dynamic imports: both endpoints reach lib/aiCoach.ts, which constructs
 // `new Anthropic({apiKey: process.env.ANTHROPIC_API_KEY!})` at module scope.
+import { projectSelect } from './support/postgrest'
 import { signCoachToken, signWatchToken, signOfferToken } from '../lib/funnelLeadToken'
 
 type Handler = (req: any, res: any) => Promise<void>
@@ -40,7 +41,7 @@ function eqParam(url: string, key: string) {
 const realFetch = globalThis.fetch
 globalThis.fetch = (async (input: any) => {
   const url = decodeURIComponent(String(typeof input === 'string' ? input : input.url))
-  const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  const json = (b: unknown) => new Response(JSON.stringify(projectSelect(url, b)), { status: 200, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('/rest/v1/funnel_leads')) return json(leads.find((l) => l.id === eqParam(url, 'id')) ?? null)
   if (url.includes('/rest/v1/funnels')) return json(funnels.find((f) => f.id === eqParam(url, 'id')) ?? null)

@@ -2,6 +2,8 @@ process.env.SUPABASE_URL = 'https://stub.supabase.co'
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'stub-key'
 process.env.JWT_SECRET = 'stub-secret'
 
+import { projectSelect } from './support/postgrest'
+
 type Handler = (req: any, res: any) => Promise<void>
 
 let pass = 0, fail = 0
@@ -55,7 +57,7 @@ const realFetch = globalThis.fetch
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = decodeURIComponent(String(typeof input === 'string' ? input : input.url))
   const json = (b: unknown, status = 200) =>
-    new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+    new Response(JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('/rest/v1/forum_categories')) {
     lastUrl = url

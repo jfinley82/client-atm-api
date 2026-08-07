@@ -3,6 +3,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'stub-key'
 process.env.JWT_SECRET = 'stub-secret'
 process.env.RESEND_API_KEY = 'stub-resend'
 
+import { projectSelect } from './support/postgrest'
 import { _clearRateLimitForTests } from '../lib/rateLimit'
 
 type Handler = (req: any, res: any) => Promise<void>
@@ -33,7 +34,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const url = decodeURIComponent(String(typeof input === 'string' ? input : input.url))
   const method = (init?.method || 'GET').toUpperCase()
   const json = (b: unknown, status = 200) =>
-    new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+    new Response(JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
   if (url.includes('/rest/v1/')) {
     const table = (/\/rest\/v1\/([a-z_]+)/.exec(url) || [, '?'])[1] as string
     if (method !== 'GET' && method !== 'HEAD') writes.push({ method, table })

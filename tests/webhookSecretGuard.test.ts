@@ -4,6 +4,7 @@ process.env.JWT_SECRET = 'stub-secret'
 process.env.RESEND_API_KEY = 'stub-resend'
 process.env.STRIPE_SECRET_KEY = 'sk_test_stub'
 
+import { projectSelect } from './support/postgrest'
 import crypto from 'crypto'
 import { Readable } from 'stream'
 
@@ -35,7 +36,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const url = decodeURIComponent(String(typeof input === 'string' ? input : input.url))
   const method = (init?.method || 'GET').toUpperCase()
   const json = (b: unknown, status = 200) =>
-    new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+    new Response(JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('/rest/v1/')) {
     const table = (/\/rest\/v1\/([a-z_]+)/.exec(url) || [, '?'])[1] as string

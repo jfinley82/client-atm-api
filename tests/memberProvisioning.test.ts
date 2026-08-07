@@ -3,6 +3,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'stub-key'
 process.env.JWT_SECRET = 'stub-secret'
 process.env.RESEND_API_KEY = 'stub-resend'
 
+import { projectSelect } from './support/postgrest'
 import { createSessionToken, verifySessionToken } from '../lib/auth'
 import { MEMBERSHIP_TIERS } from '../lib/entitlements'
 import { INVITE_TTL_MS, LOGIN_TTL_MS } from '../lib/tokenLifetimes'
@@ -99,7 +100,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const method = (init?.method || 'GET').toUpperCase()
   const body = init?.body ? JSON.parse(String(init.body)) : undefined
   const json = (b: unknown, status = 200) =>
-    new Response(b === null ? 'null' : JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+    new Response(b === null ? 'null' : JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
 
   // Whether the caller used .single()/.maybeSingle() is decided by the FILTERS,
   // not by sniffing the Accept header: supabase-js may pass headers as a

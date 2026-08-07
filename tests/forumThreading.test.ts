@@ -2,6 +2,7 @@ process.env.SUPABASE_URL = 'https://stub.supabase.co'
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'stub-key'
 process.env.JWT_SECRET = 'stub-secret'
 
+import { projectSelect } from './support/postgrest'
 import { createSessionToken } from '../lib/auth'
 import { DIRECT_UPLOAD_MAX_BYTES, DIRECT_UPLOAD_MAX_LABEL } from '../lib/rawBody'
 
@@ -42,7 +43,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const url = decodeURIComponent(String(typeof input === 'string' ? input : input.url))
   const method = (init?.method || 'GET').toUpperCase()
   const body = init?.body ? JSON.parse(String(init.body)) : undefined
-  const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+  const json = (b: unknown, status = 200) => new Response(JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
   const isHead = (init?.method || '').toUpperCase() === 'HEAD' || /count=exact/.test(String(init?.headers?.Prefer || init?.headers?.prefer || ''))
 
   if (url.includes('/rest/v1/users')) return json(users[eqParam(url, 'id') || ''] ?? null)

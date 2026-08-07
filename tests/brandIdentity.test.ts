@@ -3,6 +3,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'stub-key'
 process.env.JWT_SECRET = 'stub-secret'
 process.env.RESEND_API_KEY = 'stub-resend'
 
+import { projectSelect } from './support/postgrest'
 import { createSessionToken } from '../lib/auth'
 
 type Handler = (req: any, res: any) => Promise<void>
@@ -64,7 +65,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const method = (init?.method || 'GET').toUpperCase()
   const body = init?.body && typeof init.body === 'string' ? JSON.parse(init.body) : undefined
   const json = (b: unknown, status = 200) =>
-    new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } })
+    new Response(JSON.stringify(projectSelect(url, b, status)), { status, headers: { 'Content-Type': 'application/json' } })
 
   if (url.includes('/storage/v1/object/')) {
     const m = /\/object\/(?:avatars)\/(.+?)(?:\?|$)/.exec(url)
