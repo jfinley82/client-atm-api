@@ -446,6 +446,19 @@ async function callReshape(handler: Handler, body: unknown) {
     eq('all three phases still appear', [...new Set(p.weekly_breakdown.map((e) => e.phase_name))].sort(), ['Diagnose', 'Rebuild', 'Scale'])
   }
 
+  console.log('\n-- a wrong method answers 405, not 401 --')
+  {
+    // The route's shape has to be answerable without a session: 104 of 123
+    // handlers check the method first, and the frontend's route manifest infers
+    // from the status. An auth-first route answers 401 to a GET where every
+    // neighbour answers 405, and reads as a different kind of route.
+    let status = 0
+    const res: any = { setHeader() {}, status(c: number) { status = c; return res }, json() { return res }, end() { return res } }
+    const { default: h } = await import('../api/matcher/program/reshape')
+    await (h as Handler)({ headers: {}, method: 'GET', body: undefined, query: {} } as any, res)
+    eq('an unauthenticated GET is 405', status, 405)
+  }
+
   console.log('\n-- session content comes from the framework, not from paraphrase --')
   {
     const p = reshapeProgram(baseProgram(), FW9, { total_weeks: 9, session_cadence: 'weekly', session_length_minutes: 60 })
