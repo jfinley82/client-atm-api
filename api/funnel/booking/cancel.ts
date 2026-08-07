@@ -40,7 +40,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // 2) Free the slot — the unique index is scoped WHERE status='active'.
-    const { error: updErr } = await supabase.from('bookings').update({ status: 'canceled' }).eq('id', booking.id).eq('status', 'active')
+    // canceled_by 'client': the attendee gave the slot back themselves. This
+    // path refuses inside MANAGE_CUTOFF_MS above, so every row it writes is an
+    // EARLY cancel by construction — a late client cancellation cannot be
+    // produced through our own API at all.
+    const { error: updErr } = await supabase
+      .from('bookings')
+      .update({ status: 'canceled', canceled_at: new Date().toISOString(), canceled_by: 'client' })
+      .eq('id', booking.id)
+      .eq('status', 'active')
     if (updErr) throw updErr
 
     // 3) Cancel THIS booking's pending reminders (by booking_id, so the lead's

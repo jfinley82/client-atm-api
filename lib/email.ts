@@ -946,6 +946,73 @@ export async function sendBookingConfirmationEmail(opts: {
   }
 }
 
+/**
+ * Tell the CLIENT their call was cancelled.
+ *
+ * Only the Zoom path needs this. When a client cancels through
+ * api/funnel/booking/cancel.ts they already know — that path notifies the
+ * COACH. This is the mirror: the coach deleted the meeting in Zoom, and the
+ * person who would otherwise sit waiting on a call that no longer exists is the
+ * one who has to be told.
+ *
+ * COACH-BRANDED, never MTM's. The client's relationship is with the coach, and
+ * a cancellation arriving from a platform they have never heard of is worse
+ * than the cancellation itself. resolveBookingBrand falls back to the MTM brand
+ * only for a shared-Zoom booking with no coach_user_id, where there is no coach
+ * brand to use.
+ *
+ * Best-effort by contract: never throws. The booking is already cancelled by
+ * the time this runs, and a mail failure must not roll back a write that
+ * succeeded or make the webhook retry.
+ */
+export async function sendBookingCanceledEmail(opts: {
+  email: string
+  name: string | null
+  startLabel: string
+  coachUserId?: string | null
+  funnelId?: string | null
+  leadId?: string | null
+  bookingId?: string | null
+}): Promise<void> {
+  try {
+    const kind = 'booking_canceled'
+    const brand = await resolveBookingBrand(opts.coachUserId)
+
+    const bodyHtml = `
+          <p style="margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;">Hey ${escapeHtml(opts.name || 'there')},</p>
+          <p style="margin:0 0 8px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;">Your call has been cancelled. You don't need to do anything, and nothing will be charged.</p>
+          <p style="margin:0 0 4px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#0B1120;font-weight:bold;text-decoration:line-through;">${escapeHtml(opts.startLabel)}</p>
+          <p style="margin:18px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:#4B5563;">Just reply to this email if you'd like to find another time.</p>`
+
+    const html = brandedEmailHtml(brand, { heading: 'Your call has been cancelled', bodyHtml })
+
+    const { data, error } = await resend.emails.send({
+      from: `${brand.fromName} <noreply@mail.microtrainingmethod.com>`,
+      to: opts.email,
+      ...(brand.replyTo ? { replyTo: brand.replyTo } : {}),
+      subject: 'Your call has been cancelled',
+      tags: funnelTags(opts.funnelId ?? undefined, opts.leadId ?? null, kind),
+      html,
+    })
+
+    // Recorded whether or not there is a funnel, for the same reason the
+    // confirmation is: a BOUNCED cancellation notice is a client who still
+    // thinks the call is happening, and the send row is what the Resend webhook
+    // matches a bounce against.
+    await recordFunnelEmailSend({
+      funnelId: opts.funnelId ?? null,
+      leadId: opts.leadId ?? null,
+      kind,
+      messageId: data?.id ?? null,
+      status: error ? 'failed' : 'sent',
+      bookingId: opts.bookingId ?? null,
+    })
+    if (error) throw new Error(error.message)
+  } catch (err) {
+    console.error(`[email] booking cancellation send failed (to=${opts.email})`, err)
+  }
+}
+
 // ---- coach notifications (new booking / application / opt-in) --------------
 // Additive coach-facing operational notices, all sharing this file's Resend
 // sender + coach-brand layout with the existing booking notices below. Each is
