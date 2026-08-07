@@ -505,12 +505,10 @@ function tokenFromLink(link: string): string {
     const GATES: { file: string; mustContain: string[]; why: string }[] = [
       // Not a route. The write POST /api/admin/members and /bulk perform.
       { file: 'lib/memberInvite.ts', mustContain: [], why: 'library, reached only from the admin routes asserted below' },
-      // GoHighLevel webhooks. The gate is lib/webhookAuth.ts, which refuses
-      // when WEBHOOK_SECRET is unset rather than comparing undefined to
-      // undefined and admitting everyone.
-      { file: 'api/members/invite-beta.ts', mustContain: ['requireWebhookSecret'], why: 'GHL beta invite' },
-      { file: 'api/members/create-paid.ts', mustContain: ['requireWebhookSecret'], why: 'GHL paid grant' },
-      { file: 'api/members/create-free.ts', mustContain: ['requireWebhookSecret'], why: 'GHL free grant' },
+      // The GoHighLevel webhooks that used to be here — create-free,
+      // create-paid, invite-beta — were retired to 410 on 2026-08-07 and no
+      // longer write users at all. Asserted below rather than listed here, so
+      // un-retiring one fails this suite instead of quietly rejoining the set.
       // Stripe — signature verification, not a shared secret.
       { file: 'api/stripe/webhook.ts', mustContain: ['constructEvent', 'STRIPE_WEBHOOK_SECRET'], why: 'Stripe payment' },
     ]
@@ -539,6 +537,28 @@ function tokenFromLink(link: string): string {
       const gateAt = Math.min(...g.mustContain.map((n) => src.indexOf(n)).filter((i) => i >= 0))
       const writeAt = stripComments(src).search(/\.from\(['"]users['"]\)\s*\.(insert|upsert)\(/)
       ok(`  and gates BEFORE it writes`, gateAt >= 0 && writeAt > gateAt, `${g.file}: gate at ${gateAt}, write at ${writeAt}`)
+    }
+
+    // THE RETIRED FIVE MUST STAY RETIRED. GHL is disconnected; these answered
+    // a shared secret and could create users, grant paid tiers and suspend
+    // accounts. They now return 410 before any auth check, body parse or
+    // database access. If one ever regains a write this fails, which is the
+    // point — the capability is meant to be gone, not merely unused.
+    for (const retiredRoute of [
+      'api/members/create-free.ts',
+      'api/members/create-paid.ts',
+      'api/members/invite-beta.ts',
+      'api/members/resume.ts',
+      'api/members/suspend.ts',
+    ]) {
+      const src = readFileSync(retiredRoute, 'utf8')
+      ok(`${retiredRoute} is retired to 410`, src.includes('respondGone'), 'a retired route regained a handler body')
+      ok(`  and no longer appears in the users-insert set`, !inserters.includes(retiredRoute))
+      ok(
+        `  and reaches no table at all`,
+        !/\.from\(['"][a-z_]+['"]\)/.test(stripComments(src)),
+        'nothing may sit downstream of the 410 status line'
+      )
     }
 
     // The routes that call createMember are the admin ones, by value.

@@ -1,5 +1,16 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 
+// UNREFERENCED AS OF 2026-08-07, AND DELIBERATELY KEPT UNTIL 2026-08-21.
+//
+// Its five callers under api/members/** were retired to 410 the same day, and
+// the 410 is returned before any auth check, so nothing in this codebase reads
+// WEBHOOK_SECRET any more. It is kept for two weeks alongside those stubs so
+// that if a surviving caller announces itself in the [deprecated-410] logs,
+// restoring an endpoint is a revert rather than a rewrite. Delete this file
+// with the last of them.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+//
 // The shared-secret gate for the GoHighLevel webhooks under api/members/**.
 //
 // WHY THIS IS A FUNCTION AND NOT FIVE COPIES OF TWO LINES.
