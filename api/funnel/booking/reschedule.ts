@@ -10,7 +10,7 @@ import { isSchedulerSlotOpen } from '../../../lib/schedulerSlots'
 import { resolveBookingBrand } from '../../../lib/email'
 import { bookingTimeLabel } from '../../../lib/bookingTimezone'
 import { cancelBookingReminders, scheduleBookingReminders } from '../../../lib/funnelNurture'
-import { buildBookingIcs } from '../../../lib/ics'
+import { buildBookingIcs, FALLBACK_ORGANIZER_EMAIL } from '../../../lib/ics'
 import { sendBookingConfirmationEmail, sendCoachBookingChange } from '../../../lib/email'
 
 // POST /api/funnel/booking/reschedule — body { token, slot_start }. PUBLIC,
@@ -141,7 +141,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .eq('provider', 'google')
           .maybeSingle()
       : { data: null }
-    const organizerEmail = (conn as { calendar_email?: string } | null)?.calendar_email || process.env.ZOOM_HOST_EMAIL || 'noreply@mail.microtrainingmethod.com'
+    // See api/calendar/book.ts — the Zoom-side host identity must not leak onto
+    // a client's calendar invite.
+    const organizerEmail = (conn as { calendar_email?: string } | null)?.calendar_email || FALLBACK_ORGANIZER_EMAIL
 
     const ics = buildBookingIcs({
       uid: `booking-${booking.id}@microtrainingmethod.com`,

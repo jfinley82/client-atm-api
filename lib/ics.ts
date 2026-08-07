@@ -13,6 +13,22 @@ function escapeText(v: string): string {
   return v.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n')
 }
 
+/**
+ * Who a booking's invite says it is FROM, when the host has no connected
+ * calendar address of their own.
+ *
+ * This is a THIRD identity, distinct from both Zoom-side and MTM-side host
+ * identity, and it must not be sourced from either. It used to fall back to
+ * ZOOM_HOST_EMAIL, which was harmless only while that variable was unset: the
+ * Zoom-side identity has to be a real user in the Zoom account, and the moment
+ * it is set correctly that address lands on the calendar invite of every client
+ * who books — a value chosen to satisfy an API appearing in front of customers.
+ *
+ * A sending address we own, on a domain we control, is the right answer here and
+ * does not change when an integration is reconfigured.
+ */
+export const FALLBACK_ORGANIZER_EMAIL = 'noreply@mail.microtrainingmethod.com'
+
 export function buildBookingIcs(opts: {
   uid: string
   startUtcISO: string
