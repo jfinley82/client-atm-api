@@ -1,59 +1,29 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { supabase } from '../../lib/supabase'
-import { requireWebhookSecret } from '../../lib/webhookAuth'
+import { respondGone } from '../../lib/goneRoute'
 
+// RETIRED 2026-08-07 — GoHighLevel is no longer connected to this project, and
+// this was part of that integration and nothing else. It could create users,
+// and the set it belonged to could also grant paid tiers and suspend accounts,
+// so leaving it live as dead code meant carrying that capability for no caller.
+//
+// Not deleted outright: seven days of logs showing no successful call is not
+// proof of never, and a 404 would tell a surviving automation nothing. 410 says
+// what happened, and lib/goneRoute.ts logs the caller so it announces itself
+// instead of failing into silence. That matters most for create-paid, where a
+// silent failure means someone pays and gets nothing.
+//
+// DELETE THIS FILE AFTER 2026-08-21 if [deprecated-410] never appears in the
+// runtime logs. lib/webhookAuth.ts and lib/goneRoute.ts go with the last of
+// them. This note exists so it is a dated decision rather than a stub nobody
+// dares remove.
+//
+// The gate is GONE, not bypassed: the 410 is returned before any auth check,
+// any body parse and any database access, so WEBHOOK_SECRET is no longer read
+// by this file — or by anything else in the codebase.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'POST') return res.status(405).end()
-
-  // Refuses when WEBHOOK_SECRET is unset instead of comparing undefined to
-  // undefined and letting everyone through. See lib/webhookAuth.ts.
-  if (!requireWebhookSecret(req, res, 'members/create-free')) return
-
-  const body = req.body || {}
-  const email = body.customData?.email || body.email
-  const first_name = body.customData?.first_name || body.first_name
-  const last_name = body.customData?.last_name || body.last_name
-  if (!email || typeof email !== 'string') {
-    return res.status(400).json({ error: 'email required' })
-  }
-
-  const normalizedEmail = email.toLowerCase().trim()
-  const name = [first_name, last_name].filter(Boolean).join(' ').trim() || null
-
-  try {
-    const { error } = await supabase
-      .from('users')
-      // Insert-only: never overwrite an existing member's tier/status.
-      // ON CONFLICT DO NOTHING leaves any existing row completely untouched.
-      .upsert(
-        {
-          email: normalizedEmail,
-          name,
-          membership_tier: 'free',
-          status: 'active',
-        },
-        { onConflict: 'email', ignoreDuplicates: true }
-      )
-
-    if (error) throw error
-
-    const { data: member, error: fetchError } = await supabase
-      .from('users')
-      .select('id, email, membership_tier, status')
-      .eq('email', normalizedEmail)
-      .single()
-
-    if (fetchError) throw fetchError
-
-    return res.status(200).json({
-      success: true,
-      user_id: member.id,
-      email: member.email,
-      membership_tier: member.membership_tier,
-      status: member.status,
-    })
-  } catch (err) {
-    console.error('[members/create-free]', err)
-    return res.status(500).json({ error: 'Failed to create member' })
-  }
+  return respondGone(req, res, {
+    label: 'members/create-free',
+    useInstead: 'Create members with POST /api/admin/members (admin-gated), or many at once with POST /api/admin/members/bulk.',
+    removeAfter: '2026-08-21',
+  })
 }

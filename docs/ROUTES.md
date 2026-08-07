@@ -15,14 +15,29 @@ header to see the gate — you will get `401`.
 
 | Route | Gate | Missing-secret behaviour | Writes |
 |---|---|---|---|
-| `/api/members/create-free` | shared secret — `x-webhook-secret` header | lib/webhookAuth.ts (refuses 500 when WEBHOOK_SECRET is unset) | yes |
-| `/api/members/create-paid` | shared secret — `x-webhook-secret` header | lib/webhookAuth.ts (refuses 500 when WEBHOOK_SECRET is unset) | yes |
-| `/api/members/invite-beta` | shared secret — `x-webhook-secret` header | lib/webhookAuth.ts (refuses 500 when WEBHOOK_SECRET is unset) | yes |
-| `/api/members/resume` | shared secret — `x-webhook-secret` header | lib/webhookAuth.ts (refuses 500 when WEBHOOK_SECRET is unset) | yes |
-| `/api/members/suspend` | shared secret — `x-webhook-secret` header | lib/webhookAuth.ts (refuses 500 when WEBHOOK_SECRET is unset) | yes |
 | `/api/stripe/webhook` | Stripe signature — `stripe-signature` header | inline (refuses 500 when the secret is unset) | yes |
 | `/api/webhooks/resend` | Svix signature — `svix-*` headers | inline (refuses 500 when the secret is unset) | yes |
 | `/api/zoom/webhook` | HMAC signature — `x-zm-signature` header | inline (refuses 500 when the secret is unset) | yes |
+
+## Retired
+
+These answered a shared secret until 2026-08-07. GoHighLevel is no longer
+connected, so they were retired to **410 Gone** rather than deleted: a 404 tells
+a surviving caller nothing, and for a paid-tier grant a silent failure means
+someone pays and gets nothing. The 410 is returned before any auth check, any
+body parse and any database access, so the capability is gone immediately, and
+each call logs `[deprecated-410]` with the caller's identifiers — never the
+secret. **Delete the handlers after the date below if that log stays empty.**
+
+| Route | Status | Delete after | Use instead |
+|---|---|---|---|
+| `/api/members/create-free` | 410 Gone | 2026-08-21 | Create members with POST /api/admin/members (admin-gated), or many at once with POST /api/admin/members/bulk. |
+| `/api/members/create-paid` | 410 Gone | 2026-08-21 | Paid grants arrive through api/stripe/webhook.ts. To provision by hand use POST /api/admin/members with the membership_tier you want. |
+| `/api/members/invite-beta` | 410 Gone | 2026-08-21 | Use POST /api/admin/members with membership_tier "beta"; it issues the same 7-day invite. |
+| `/api/members/resume` | 410 Gone | 2026-08-21 | Use PATCH /api/admin/members/[id] with { "status": "active" }. |
+| `/api/members/suspend` | 410 Gone | 2026-08-21 | Use PATCH /api/admin/members/[id] with { "status": "suspended" }. |
+
+`WEBHOOK_SECRET` is read by **nothing** in this codebase as of 2026-08-07.
 
 ## Scope
 

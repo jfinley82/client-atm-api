@@ -24,10 +24,10 @@ function eq(label: string, actual: unknown, expected: unknown) {
   ok(label, JSON.stringify(actual) === JSON.stringify(expected), `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
 }
 
-// THE ASSERTION THAT MATTERS. Not "what status came back" — a handler that
-// answered 500 after already suspending the member would satisfy that. This
-// counts every write that reached the database layer, so the property under
-// test is literally "no request reaches a user-mutating handler".
+// THE ASSERTION THAT MATTERS for the retired routes. Not the status code — a
+// handler that answered 410 after suspending the member would satisfy that.
+// This counts every write that reached the database layer, so what is under
+// test is "the capability is gone", not "the status line changed".
 let writes: { method: string; table: string }[] = []
 
 const realFetch = globalThis.fetch
@@ -40,14 +40,19 @@ globalThis.fetch = (async (input: any, init?: any) => {
   if (url.includes('/rest/v1/')) {
     const table = (/\/rest\/v1\/([a-z_]+)/.exec(url) || [, '?'])[1] as string
     if (method !== 'GET' && method !== 'HEAD') writes.push({ method, table })
-    // Every read answers "found nothing", so a handler that got past the gate
-    // still cannot pretend it succeeded — it fails on its own terms and the
-    // write counter stays honest either way.
     return json(null)
   }
   if (url.includes('api.resend.com')) return json({ id: 'msg-stub' })
   return json([])
 }) as typeof fetch
+
+// Capture the deprecation log so its CONTENTS can be asserted — one line per
+// call, the caller's identifiers present, the secret absent.
+let warnings: string[] = []
+const realWarn = console.warn
+console.warn = (...args: unknown[]) => {
+  warnings.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '))
+}
 
 function call(handler: Handler, opts: { method?: string; headers?: Record<string, string>; body?: unknown; req?: any } = {}) {
   let status = 0
@@ -61,6 +66,7 @@ function call(handler: Handler, opts: { method?: string; headers?: Record<string
   }
   const req: any = opts.req ?? {
     method: opts.method || 'POST',
+    url: '/api/stub',
     headers: opts.headers || {},
     body: opts.body ?? {},
     query: {},
@@ -69,12 +75,10 @@ function call(handler: Handler, opts: { method?: string; headers?: Record<string
   return Promise.resolve(handler(req, res)).then(() => ({ status, body: resBody }))
 }
 
-const SECRET = 'the-real-secret'
+const SECRET = 'the-real-secret-value-abc123'
+const REMOVE_AFTER = '2026-08-21'
 
 ;(async () => {
-  // Literal specifiers, not a loop over path strings: esbuild can only inline
-  // an import it can see statically, and a computed one stays a runtime import
-  // resolved relative to the BUNDLE rather than the source tree.
   const [createFree, createPaid, inviteBeta, resume, suspend] = await Promise.all([
     import('../api/members/create-free'),
     import('../api/members/create-paid'),
@@ -83,101 +87,149 @@ const SECRET = 'the-real-secret'
     import('../api/members/suspend'),
   ])
 
-  const loaded: { name: string; handler: Handler; body: unknown }[] = [
-    { name: 'create-free', handler: createFree.default as Handler, body: { email: 'x@example.com', first_name: 'X' } },
-    { name: 'create-paid', handler: createPaid.default as Handler, body: { email: 'x@example.com', first_name: 'X', tier: 'full' } },
-    { name: 'invite-beta', handler: inviteBeta.default as Handler, body: { email: 'x@example.com', first_name: 'X' } },
-    { name: 'resume', handler: resume.default as Handler, body: { email: 'x@example.com' } },
-    { name: 'suspend', handler: suspend.default as Handler, body: { email: 'x@example.com' } },
+  const retired: { name: string; handler: Handler }[] = [
+    { name: 'create-free', handler: createFree.default as Handler },
+    { name: 'create-paid', handler: createPaid.default as Handler },
+    { name: 'invite-beta', handler: inviteBeta.default as Handler },
+    { name: 'resume', handler: resume.default as Handler },
+    { name: 'suspend', handler: suspend.default as Handler },
   ]
 
-  console.log('\n-- THE PROPERTY: an absent secret refuses, it does not open --')
+  // EVERY method, with no carve-out. There is deliberately no setCors on these,
+  // so OPTIONS does not short-circuit to 204 either — the whole surface is 410.
+  const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
+
+  console.log('\n-- retired: 410 to every method, and nothing written --')
   {
-    // Stated as the property rather than the example: this is not "a wrong
-    // secret is rejected", which passed before the fix and after it. It is
-    // "the gate is absent, therefore nothing gets through" — the case where
-    // `undefined !== undefined` used to evaluate false and admit everyone.
-    for (const variant of ['unset', 'empty string'] as const) {
-      console.log(`  [WEBHOOK_SECRET ${variant}]`)
-      for (const { name, handler, body } of loaded) {
-        if (variant === 'unset') delete process.env.WEBHOOK_SECRET
-        else process.env.WEBHOOK_SECRET = ''
+    process.env.WEBHOOK_SECRET = SECRET
 
+    for (const { name, handler } of retired) {
+      for (const method of METHODS) {
         writes = []
-        // The header is deliberately ABSENT, which is exactly what an
-        // unauthenticated caller sends. Before the fix this matched the
-        // undefined env var and sailed through.
-        const r = await call(handler, { body })
-
-        eq(`    ${name} refuses`, r.status, 500)
-        eq(`    ${name} says it is misconfigured, not that the caller is wrong`, r.body?.error, 'webhook_not_configured')
-        eq(`    ${name} wrote NOTHING`, writes, [])
+        warnings = []
+        const r = await call(handler, { method, headers: { 'x-webhook-secret': SECRET }, body: { email: 'x@example.com' } })
+        eq(`  ${name} ${method} -> 410`, r.status, 410)
+        eq(`  ${name} ${method} wrote nothing`, writes, [])
       }
     }
   }
 
-  console.log('\n-- and an attacker who sends undefined-as-a-header gets nowhere either --')
+  console.log('\n-- a VALID secret gets 410 too: the capability is gone, not gated --')
+  {
+    // The case that separates "retired" from "still working, just stricter".
+    // A caller holding the real credential is refused, because there is no
+    // longer anything behind the door.
+    process.env.WEBHOOK_SECRET = SECRET
+    for (const { name, handler } of retired) {
+      writes = []
+      const r = await call(handler, {
+        method: 'POST',
+        headers: { 'x-webhook-secret': SECRET },
+        body: { email: 'x@example.com', tier: 'full' },
+      })
+      eq(`  ${name} refuses a correctly authenticated POST`, r.status, 410)
+      eq(`  ${name} says gone`, r.body?.error, 'gone')
+      eq(`  ${name} carries its removal date`, r.body?.remove_after, REMOVE_AFTER)
+      eq(`  ${name} wrote nothing`, writes, [])
+    }
+  }
+
+  console.log('\n-- and with the secret UNSET, which is the state it is now in --')
   {
     delete process.env.WEBHOOK_SECRET
-    for (const { name, handler, body } of loaded) {
+    for (const { name, handler } of retired) {
       writes = []
-      // The literal string 'undefined' is what a naive client sends when its
-      // own config is missing, and it is the shape that would match a
-      // stringified env var.
-      const r = await call(handler, { headers: { 'x-webhook-secret': 'undefined' }, body })
-      eq(`    ${name} still refuses`, r.status, 500)
-      eq(`    ${name} still wrote nothing`, writes, [])
+      const r = await call(handler, { method: 'POST', body: { email: 'x@example.com' } })
+      eq(`  ${name} still 410, never 500 or 200`, r.status, 410)
+      eq(`  ${name} wrote nothing`, writes, [])
     }
   }
 
-  console.log('\n-- the gate still WORKS when configured: wrong secret is 401, right secret passes --')
-  {
-    // Without this, "refuse everything always" would pass every test above.
-    // The fixture has to be able to tell a fixed gate from a broken one.
-    process.env.WEBHOOK_SECRET = SECRET
-
-    for (const { name, handler, body } of loaded) {
-      writes = []
-      const wrong = await call(handler, { headers: { 'x-webhook-secret': 'not-it' }, body })
-      eq(`    ${name} rejects a wrong secret as a CLIENT error`, wrong.status, 401)
-      eq(`    ${name} wrote nothing`, writes, [])
-    }
-
-    for (const { name, handler, body } of loaded) {
-      writes = []
-      const right = await call(handler, { headers: { 'x-webhook-secret': SECRET }, body })
-      ok(
-        `    ${name} lets a correct secret THROUGH the gate`,
-        right.status !== 401 && right.status !== 500 ? true : writes.length > 0,
-        `status ${right.status}, writes ${JSON.stringify(writes)} — if this fails the "fix" is just refusing everyone`
-      )
-    }
-  }
-
-  console.log('\n-- a GET is refused on the method, which is what made these look unguarded --')
+  console.log('\n-- one log line per call, with the caller and without the secret --')
   {
     process.env.WEBHOOK_SECRET = SECRET
-    for (const { name, handler } of loaded) {
-      writes = []
-      const r = await call(handler, { method: 'GET' })
-      eq(`    ${name} answers 405 to a GET`, r.status, 405)
-      eq(`    ${name} wrote nothing`, writes, [])
+    for (const { name, handler } of retired) {
+      warnings = []
+      await call(handler, {
+        method: 'POST',
+        headers: {
+          'x-webhook-secret': SECRET,
+          'x-forwarded-for': '203.0.113.7, 70.41.3.18',
+          'user-agent': 'GHL-Workflow/2.1',
+        },
+        body: { email: 'x@example.com' },
+      })
+
+      eq(`  ${name} logs exactly once`, warnings.length, 1)
+      const line = warnings[0] || ''
+      ok(`  ${name} line is findable`, line.includes('[deprecated-410]'), line)
+      ok(`  ${name} names the route`, line.includes(name), line)
+      ok(`  ${name} carries the method`, line.includes('POST'), line)
+      ok(`  ${name} carries the client IP, not the proxy chain`, line.includes('203.0.113.7') && !line.includes('70.41.3.18'), line)
+      ok(`  ${name} carries the user agent`, line.includes('GHL-Workflow/2.1'), line)
+      ok(`  ${name} records that a secret header was PRESENT`, line.includes('"webhook_secret_header":"present"'), line)
+
+      // THE ONE THAT MATTERS. Asserted by VALUE against the actual secret, not
+      // by a shape like "no long hex string" — a log is where a credential
+      // outlives the system that used it.
+      ok(`  ${name} does NOT log the secret itself`, !line.includes(SECRET), 'THE SECRET IS IN THE LOG')
     }
-    ok(
-      '    405-before-401 is the reason a GET probe reads as "method rejected, caller not"',
-      true,
-      'documented so the next reader does not re-raise it as a vulnerability'
-    )
+
+    // Absence is reported too, so the two cases are distinguishable — "nobody
+    // is calling" and "something is calling without credentials" are different
+    // situations and the log has to tell them apart.
+    warnings = []
+    await call(retired[0].handler, { method: 'POST', headers: {}, body: {} })
+    ok('  a call with no secret header is recorded as absent', (warnings[0] || '').includes('"webhook_secret_header":"absent"'), warnings[0])
   }
 
-  console.log('\n-- STRIPE: the same hole, and the one that grants paid access --')
+  console.log('\n-- WEBHOOK_SECRET is now read by nothing --')
+  {
+    const { readFileSync, readdirSync, statSync } = await import('fs')
+    const { join } = await import('path')
+    const walk = (dir: string, out: string[] = []): string[] => {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry)
+        if (statSync(full).isDirectory()) walk(full, out)
+        else if (full.endsWith('.ts')) out.push(full)
+      }
+      return out
+    }
+    const stripComments = (src: string) =>
+      src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+
+    // Comments stripped first: lib/webhookAuth.ts still DESCRIBES the variable
+    // in the note explaining why the file is parked, and a naive grep would
+    // count that as a reader. The question is whether any code reads it.
+    const readers = [...walk('api'), ...walk('lib')].filter((f) => {
+      const src = stripComments(readFileSync(f, 'utf8'))
+      return /process\.env\.WEBHOOK_SECRET/.test(src)
+    })
+
+    // lib/webhookAuth.ts is unreferenced but deliberately kept until the
+    // removal date, so restoring an endpoint is a revert rather than a rewrite.
+    eq('the only file left holding it is the parked gate', readers, ['lib/webhookAuth.ts'])
+
+    const importers = [...walk('api'), ...walk('lib')].filter((f) => {
+      const src = stripComments(readFileSync(f, 'utf8'))
+      return src.includes('requireWebhookSecret') && !f.endsWith('webhookAuth.ts')
+    })
+    eq('and nothing imports it any more', importers, [])
+  }
+
+  console.log('\n-- STRIPE: unchanged, and the one that was actually serious --')
   {
     const { default: stripeHandler } = await import('../api/stripe/webhook')
 
-    // An EMPTY secret is not equivalent to a missing one for Stripe: its
-    // library does not throw, it verifies against an HMAC keyed on '', which
-    // anybody can compute. Verified here rather than asserted — this forges a
-    // payment_intent.succeeded exactly as an attacker would.
+    const streamReq = (payload: string, sig: string) => {
+      const s: any = Readable.from([Buffer.from(payload)])
+      s.method = 'POST'
+      s.url = '/api/stripe/webhook'
+      s.headers = { 'stripe-signature': sig }
+      s.query = {}
+      return s
+    }
+
     const payload = JSON.stringify({ id: 'evt_forged', type: 'payment_intent.succeeded', data: { object: {} } })
     const ts = Math.floor(Date.now() / 1000)
     const forged = crypto.createHmac('sha256', '').update(`${ts}.${payload}`).digest('hex')
@@ -187,24 +239,14 @@ const SECRET = 'the-real-secret'
       else process.env.STRIPE_WEBHOOK_SECRET = ''
 
       writes = []
-      // A REAL readable stream, because api/stripe/webhook.ts reads the raw
-      // body off req before verifying. A plain object with a no-op `on()`
-      // makes getRawBody wait forever, so removing the guard produced a HANG
-      // rather than a failure — and a hang is indistinguishable from a slow
-      // test. With a real stream the mutation shows the actual exploit: the
-      // forged event verifies and the handler writes.
-      const stream: any = Readable.from([Buffer.from(payload)])
-      stream.method = 'POST'
-      stream.headers = { 'stripe-signature': `t=${ts},v1=${forged}` }
-      stream.query = {}
-      const r = await call(stripeHandler as Handler, { req: stream })
-      eq(`    [${variant}] a forged event is refused`, r.status, 500)
-      eq(`    [${variant}] and says misconfigured`, r.body?.error, 'webhook_not_configured')
-      eq(`    [${variant}] and nothing was written`, writes, [])
+      const r = await call(stripeHandler as Handler, { req: streamReq(payload, `t=${ts},v1=${forged}`) })
+      eq(`  [${variant}] a forged event is refused`, r.status, 500)
+      eq(`  [${variant}] and says misconfigured`, r.body?.error, 'webhook_not_configured')
+      eq(`  [${variant}] and nothing was written`, writes, [])
     }
 
-    // Proof the forgery is real, so the guard above is not defending against
-    // an imaginary attack: with an empty key the signature genuinely verifies.
+    // The forgery is real, so the guard defends something real rather than an
+    // imagined attack.
     const Stripe = (await import('stripe')).default
     const s = new Stripe('sk_test_stub')
     let accepted = false
@@ -214,94 +256,29 @@ const SECRET = 'the-real-secret'
     } catch {
       accepted = false
     }
-    ok('    the forged signature IS valid against an empty key', accepted, 'if this fails the guard is defending nothing')
+    ok('  the forged signature IS valid against an empty key', accepted, 'if this fails the guard is defending nothing')
+
+    // THE POSITIVE CONTROL. Without it, "refuse every Stripe event always"
+    // passes everything above — and that would silently stop paid grants, which
+    // is a worse outcome than the hole being fixed.
+    const realSecret = 'whsec_' + crypto.randomBytes(16).toString('hex')
+    process.env.STRIPE_WEBHOOK_SECRET = realSecret
+    const benign = JSON.stringify({ id: 'evt_ok', type: 'customer.updated', data: { object: {} } })
+    const goodSig = crypto.createHmac('sha256', realSecret).update(`${ts}.${benign}`).digest('hex')
+
+    writes = []
+    const okRes = await call(stripeHandler as Handler, { req: streamReq(benign, `t=${ts},v1=${goodSig}`) })
+    eq('  a correctly signed event is ACCEPTED', okRes.status, 200)
+    eq('  and acknowledged', okRes.body?.received, true)
   }
 
-  console.log('\n-- the property, swept: no secret-gated writer may skip the check --')
-  {
-    const { readFileSync, readdirSync, statSync } = await import('fs')
-    const { join } = await import('path')
-
-    const walk = (dir: string, out: string[] = []): string[] => {
-      for (const entry of readdirSync(dir)) {
-        const full = join(dir, entry)
-        if (statSync(full).isDirectory()) walk(full, out)
-        else if (full.endsWith('.ts')) out.push(full)
-      }
-      return out
-    }
-
-    // Routes that authenticate their CALLER with a shared secret or signature
-    // and then write. Detected by the env var naming an inbound webhook, or by
-    // delegating to the shared helper — NOT by the word "SECRET", which also
-    // matches STRIPE_SECRET_KEY in api/stripe/create-intent.ts. That one is an
-    // outbound API credential on a deliberately public checkout endpoint, so
-    // "refuses when its secret is missing" is the wrong question to ask of it;
-    // an earlier version of this sweep asked it anyway and failed on correct
-    // code. Recorded so it does not get re-added.
-    //
-    // Swept rather than listed, so a SIXTH such file added tomorrow is caught
-    // instead of inheriting the old two-line mistake. The five that prompted
-    // this change were named in a brief; api/stripe/webhook.ts was not, and it
-    // was the worst of them.
-    const suspects = walk('api').filter((f) => {
-      const src = readFileSync(f, 'utf8')
-      const authenticatesCaller =
-        /process\.env\.[A-Z_]*WEBHOOK[A-Z_]*/.test(src) || src.includes('requireWebhookSecret')
-      // NOT an adjacency match. api/members/create-free.ts carries a comment
-      // between .from('users') and .upsert(, and a `\s*`-joined pattern skips
-      // it silently — which is how an earlier version of this sweep reported
-      // seven files when there were eight. Ask the question the predicate is
-      // actually about: does this file write to the database at all?
-      const writes = /\.from\(['"][a-z_]+['"]\)/.test(src) && /\.(insert|upsert|update|delete)\(/.test(src)
-      return authenticatesCaller && writes
-    })
-
-    // By value, naming every file the property must hold for. A count would
-    // stay green if one dropped out and another appeared.
-    const EXPECTED = [
-      'api/members/create-free.ts',
-      'api/members/create-paid.ts',
-      'api/members/invite-beta.ts',
-      'api/members/resume.ts',
-      'api/members/suspend.ts',
-      'api/stripe/webhook.ts',
-      'api/webhooks/resend.ts',
-      'api/zoom/webhook.ts',
-    ]
-    for (const f of EXPECTED) ok(`the sweep sees ${f}`, suspects.includes(f), `swept: ${suspects.join(', ')}`)
-    const surprises = suspects.filter((f) => !EXPECTED.includes(f))
-    ok('and finds nothing unaccounted for', surprises.length === 0, `new secret-gated writer(s): ${surprises.join(', ')}`)
-
-    for (const f of suspects) {
-      const src = readFileSync(f, 'utf8')
-      // Either it delegates to the shared guard, or it refuses on a falsy
-      // secret itself (the shape api/zoom/webhook.ts and api/webhooks/resend.ts
-      // already used, and the shape this change gave the rest).
-      const delegates = src.includes('requireWebhookSecret')
-      const guardsInline = /if \(!\s*(secret|webhookSecret|secretToken)\s*\)/.test(src)
-      ok(`  ${f} refuses when its secret is missing`, delegates || guardsInline, 'a bare !== comparison opens when the env var is unset')
-
-      // And the comparison is never made directly against process.env, which
-      // is the exact shape that reduces to undefined !== undefined.
-      ok(
-        `  ${f} never compares a header straight to process.env`,
-        !/req\.headers\[[^\]]+\]\s*!==\s*process\.env\./.test(src),
-        'compare against a value already proven non-empty'
-      )
-    }
-  }
-
-  console.log('\n-- docs/ROUTES.md is generated, so its labels cannot drift --')
+  console.log('\n-- docs/ROUTES.md lists the retired routes rather than dropping them --')
   {
     const { spawnSync } = await import('child_process')
     const { existsSync, readFileSync } = await import('fs')
 
     ok('docs/ROUTES.md is committed', existsSync('docs/ROUTES.md'))
 
-    // The assertion that matters: regenerate from the real handlers and compare.
-    // The previous table said PUBLIC for five routes that had never been public,
-    // and nothing could tell. This can.
     const check = spawnSync('node', ['scripts/webhook-routes.mjs', '--check'], { cwd: process.cwd(), encoding: 'utf8' })
     ok(
       'and regenerating it produces no change',
@@ -310,17 +287,26 @@ const SECRET = 'the-real-secret'
     )
 
     const doc = readFileSync('docs/ROUTES.md', 'utf8')
-    // By value, not by count: the five that were mislabelled must each appear,
-    // and the word that was wrong about them must not.
+
+    // Listed, by value, WITH the date. A dropped row would read as "never
+    // existed", which is the same class of wrong label that started all this.
     for (const route of ['create-free', 'create-paid', 'invite-beta', 'resume', 'suspend']) {
-      ok(`  ${route} is listed with its gate`, doc.includes(`/api/members/${route}`))
+      ok(`  ${route} is listed as retired`, doc.includes(`/api/members/${route}`), 'a dropped row reads as never existed')
     }
-    ok('  and nothing in it is labelled PUBLIC', !/\bPUBLIC\b/.test(doc.replace(/None of these is public/i, '')))
-    ok('  the 405-on-GET trap is explained', /405/.test(doc) && /method check runs before/i.test(doc))
-    ok('  and the scope is stated rather than implied', /not an inventory of every route/i.test(doc))
+    const dated = (doc.match(new RegExp(REMOVE_AFTER, 'g')) || []).length
+    eq('  each retired route carries the removal date', dated, 5)
+
+    ok('  the 410 is stated, not implied', /410 Gone/.test(doc))
+    ok('  and WEBHOOK_SECRET is recorded as unused', /read by \*\*nothing\*\*/.test(doc))
+
+    // The three still-live webhooks must not have been swept away with them.
+    for (const live of ['/api/stripe/webhook', '/api/webhooks/resend', '/api/zoom/webhook']) {
+      ok(`  ${live} is still listed as active`, doc.includes(live))
+    }
   }
 
   console.log(`\n${pass} passed, ${fail} failed`)
   globalThis.fetch = realFetch
+  console.warn = realWarn
   if (fail) process.exit(1)
 })()

@@ -64,9 +64,27 @@ function classify(src) {
 }
 
 const routes = []
+const retired = []
 for (const file of walk(path.join(root, 'api'))) {
   const raw = fs.readFileSync(file, 'utf8')
   const src = stripComments(raw)
+  const rel0 = path.relative(root, file).replace(/\\/g, '/')
+
+  // RETIRED ROUTES ARE LISTED, NOT DROPPED. A route that answers 410 is a fact
+  // a caller needs; an absent row reads as "never existed", which is the same
+  // class of wrong label that started this. The removal date is read out of the
+  // handler so the document cannot claim a deadline the code does not carry.
+  if (src.includes('respondGone')) {
+    const m = /removeAfter:\s*'([0-9-]+)'/.exec(src)
+    const use = /useInstead:\s*'([^']+)'/.exec(src)
+    retired.push({
+      route: '/' + rel0.replace(/\.ts$/, '').replace(/\/index$/, ''),
+      removeAfter: m ? m[1] : 'UNDATED',
+      useInstead: use ? use[1] : '',
+    })
+    continue
+  }
+
   const authenticatesCaller = /process\.env\.[A-Z_]*WEBHOOK[A-Z_]*/.test(src) || src.includes('requireWebhookSecret')
   if (!authenticatesCaller) continue
 
@@ -86,6 +104,14 @@ for (const file of walk(path.join(root, 'api'))) {
     ...info,
     writes,
   })
+}
+
+for (const r of retired) {
+  if (r.removeAfter === 'UNDATED') {
+    console.error(`REFUSING TO WRITE: ${r.route} returns 410 with no removeAfter date.`)
+    console.error('A stub with no deadline is one nobody dares remove. Give it a date.')
+    process.exit(1)
+  }
 }
 
 const lines = []
@@ -110,6 +136,24 @@ for (const r of routes) {
   lines.push(`| \`${r.route}\` | ${r.gate} | ${r.guard} | ${r.writes ? 'yes' : 'no'} |`)
 }
 lines.push('')
+lines.push('## Retired')
+lines.push('')
+lines.push('These answered a shared secret until 2026-08-07. GoHighLevel is no longer')
+lines.push('connected, so they were retired to **410 Gone** rather than deleted: a 404 tells')
+lines.push('a surviving caller nothing, and for a paid-tier grant a silent failure means')
+lines.push('someone pays and gets nothing. The 410 is returned before any auth check, any')
+lines.push('body parse and any database access, so the capability is gone immediately, and')
+lines.push('each call logs `[deprecated-410]` with the caller\'s identifiers — never the')
+lines.push('secret. **Delete the handlers after the date below if that log stays empty.**')
+lines.push('')
+lines.push('| Route | Status | Delete after | Use instead |')
+lines.push('|---|---|---|---|')
+for (const r of retired) {
+  lines.push(`| \`${r.route}\` | 410 Gone | ${r.removeAfter} | ${r.useInstead} |`)
+}
+lines.push('')
+lines.push('`WEBHOOK_SECRET` is read by **nothing** in this codebase as of 2026-08-07.')
+lines.push('')
 lines.push('## Scope')
 lines.push('')
 lines.push('This file covers **caller-authenticated webhook routes only** — the surface that')
@@ -131,10 +175,10 @@ if (process.argv.includes('--check')) {
     console.error('docs/ROUTES.md is out of date. Run: node scripts/webhook-routes.mjs')
     process.exit(1)
   }
-  console.log(`docs/ROUTES.md is current (${routes.length} routes).`)
+  console.log(`docs/ROUTES.md is current (${routes.length} active, ${retired.length} retired).`)
   process.exit(0)
 }
 
 fs.mkdirSync(path.dirname(OUT), { recursive: true })
 fs.writeFileSync(OUT, out)
-console.log(`Wrote docs/ROUTES.md (${routes.length} routes).`)
+console.log(`Wrote docs/ROUTES.md (${routes.length} active, ${retired.length} retired).`)
