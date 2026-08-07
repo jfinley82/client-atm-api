@@ -4,6 +4,7 @@ import { setCors, noStore } from '../../lib/cors'
 import { requireFunnelBuilder } from '../../lib/funnels'
 import { loadUserAvailability } from '../../lib/availabilitySettings'
 import { WON_STATUSES, LOST_STATUS, bookingKey, funnelDisplayName } from '../../lib/contacts'
+import { loadOwnedActiveBookings } from '../../lib/coachBookings'
 
 // GET /api/calendar — the coach's whole calendar surface, across ALL their
 // funnels. Three arrays, each answering a different question:
@@ -18,12 +19,25 @@ import { WON_STATUSES, LOST_STATUS, bookingKey, funnelDisplayName } from '../../
 // and hiding it because the coach paged to a different month would defeat the
 // loop this endpoint exists to drive.
 //
-// Ownership is resolved ONCE (funnels.user_id = caller) and every query is
-// scoped to that id set — RLS is off by design here (API-layer auth), so this
-// scoping IS the access control. Same shape of guarantee as portfolio.ts.
+// Ownership is TWO facts, not one, and every query is scoped to one of them —
+// RLS is off by design here (API-layer auth), so this scoping IS the access
+// control. Same shape of guarantee as portfolio.ts.
 //
-// The upcoming-calls derivation is portfolio.ts's: bookings with status='active'
-// and start_time >= now, ascending. Canceled bookings never appear anywhere here.
+//   1. funnels.user_id = caller   -> bookings whose funnel_id is in that set
+//   2. bookings.coach_user_id = caller
+//
+// A booking made through a coach's own /book/:slug page has funnel_id NULL by
+// design — it came from no funnel — so fact 1 alone made it invisible to the
+// coach forever. That is not a marginal case: the coach link is the rebooking
+// path, handed to someone who already came through the funnel and needs another
+// call without re-applying. Those are precisely the calls a coach must not miss.
+//
+// TWO SCOPED READS, MERGED IN CODE, rather than one query with .or(). The two
+// arms are different predicates over different columns, and an .or() collapses
+// them into a single expression whose precedence is easy to widen by accident
+// and impossible to see the width of afterwards. Two `.eq`/`.in` reads each
+// state their own scope in isolation and cannot be silently broadened by a
+// change to the other.
 export const config = { maxDuration: 30 }
 
 const AGENDA_LIMIT = 200
@@ -120,34 +134,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const funnelIds = owned.map((f) => f.id as string)
     const timezone = availability.working_hours.timezone || 'UTC'
 
-    if (!funnelIds.length) {
-      return res.status(200).json({
-        timezone,
-        month: monthParam || null,
-        needs_outcome: [],
-        approved_not_booked: [],
-        agenda: [],
-      })
-    }
-
+    // NO EARLY RETURN ON ZERO FUNNELS. Owning no funnels is not the same as
+    // having no calendar: a coach with a booking page and no funnel used to get
+    // an empty calendar permanently, however many people booked them. The funnel
+    // arm is skipped instead — `.in('funnel_id', [])` is not a query worth
+    // sending, and PostgREST's handling of an empty list is not something to
+    // depend on either way.
     const nowIso = new Date().toISOString()
 
-    // One booking pull serves all three arrays. Filtering per-array in SQL would
-    // mean three round trips over the same rows for no gain at this size, and
-    // needs_outcome must span all time regardless of the month window anyway.
-    const [bookingsRes, leadsRes] = await Promise.all([
-      supabase
-        .from('bookings')
-        .select(BOOKING_COLUMNS)
-        .in('funnel_id', funnelIds)
-        .eq('status', 'active')
-        .order('start_time', { ascending: true }),
-      supabase.from('funnel_leads').select(LEAD_COLUMNS).in('funnel_id', funnelIds),
+    // Both ownership arms, deduplicated and sorted — see lib/coachBookings.ts.
+    // No status/window filter is passed: needs_outcome must span all time
+    // regardless of the month window, so one pull serves all three arrays.
+    const [bookings, leadsRes] = await Promise.all([
+      loadOwnedActiveBookings<BookingRow>({ userId, funnelIds, columns: BOOKING_COLUMNS }),
+      funnelIds.length
+        ? supabase.from('funnel_leads').select(LEAD_COLUMNS).in('funnel_id', funnelIds)
+        : Promise.resolve({ data: [] as unknown[], error: null }),
     ])
-    if (bookingsRes.error) throw bookingsRes.error
     if (leadsRes.error) throw leadsRes.error
 
-    const bookings = (bookingsRes.data || []) as BookingRow[]
     const leads = (leadsRes.data || []) as LeadRow[]
 
     const leadByKey = new Map<string, LeadRow>()
@@ -158,7 +163,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // attributes a booking.
       if (!leadByKey.has(key)) leadByKey.set(key, l)
     }
-    const bookedLeadKeys = new Set(bookings.map((b) => bookingKey(b.funnel_id, b.email)))
+    // Funnel bookings only. A coach-page booking keys to '::email', which no
+    // lead in this map can equal (see resolveLead below), so including it would
+    // be inert — but stating the scope beats relying on a coincidence two
+    // functions away.
+    //
+    // CONSEQUENCE, reported rather than silently changed: an approved lead who
+    // rebooks through the coach link is still counted as not-booked and stays in
+    // `approved_not_booked`. Since the coach link IS the rebooking path, that is
+    // likely to happen. Left as specified — approved_not_booked is a funnel
+    // recovery list — but see the report.
+    const bookedLeadKeys = new Set(bookings.filter((b) => b.funnel_id).map((b) => bookingKey(b.funnel_id, b.email)))
 
     // name falls back to email when null. Lead name first (what the coach knows
     // them as), then the booking form's name, then the address.
@@ -169,17 +184,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return email
     }
 
+    // A COACH-PAGE BOOKING CAN NEVER RESOLVE A LEAD, and that is structural
+    // rather than a gap to fill. `bookings` has no lead_id; the link is
+    // (funnel_id, lower(email)), so a row with funnel_id NULL has no left half
+    // to join on.
+    //
+    // It cannot accidentally match one either. funnel_leads.funnel_id is
+    // NULLABLE, and bookingKey maps a null funnel to '' — so a funnel-less lead
+    // would key identically to a coach-page booking. leadByKey is built only
+    // from `.in('funnel_id', funnelIds)`, and SQL `in` never matches NULL, so no
+    // such lead can enter the map. Zero exist today; this holds regardless.
+    //
+    // So lead_id is null on these rows BY CONSTRUCTION. Every consumer below
+    // states what it does about that rather than inheriting it by accident.
+    const resolveLead = (b: BookingRow): LeadRow | undefined =>
+      b.funnel_id ? leadByKey.get(bookingKey(b.funnel_id, b.email)) : undefined
+
     const shape = (b: BookingRow) => {
-      const key = bookingKey(b.funnel_id, b.email)
-      const lead = leadByKey.get(key)
-      const funnel = byFunnel.get(b.funnel_id as string)
+      const lead = resolveLead(b)
+      const funnel = b.funnel_id ? byFunnel.get(b.funnel_id) : undefined
       return {
         booking_id: b.id,
+        // null for every coach-page booking. There is no lead to link to.
         lead_id: lead?.id ?? null,
+        // Falls back to the booking form's name, then the address — a
+        // coach-page booking always has one of those.
         name: displayName(lead, b, b.email),
         email: b.email,
         funnel_id: b.funnel_id,
-        funnel_name: funnelDisplayName(funnel),
+        // NULL, not 'Unknown funnel'. Those mean different things: null is "this
+        // call came from no funnel", which is a normal coach-page booking, while
+        // 'Unknown funnel' is "there is a funnel_id we could not resolve", which
+        // is a fault. Collapsing them would print a fault label on a healthy row.
+        funnel_name: b.funnel_id ? funnelDisplayName(funnel) : null,
         start_time: b.start_time,
         end_time: b.end_time,
       }
@@ -204,13 +241,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     //
     // Deliberately NOT `attended is not null`: that conflates attendance with
     // outcome and would hide exactly the calls most in need of closing out.
+    //
+    // A WORK QUEUE MAY ONLY CONTAIN ROWS WHOSE ACTION TARGET EXISTS, so a row
+    // that cannot resolve a lead is excluded. Recording an outcome is
+    // POST /api/leads/[leadId]/outcome — it is addressed by lead id and writes
+    // funnel_leads.status, so a row with lead_id null has nothing to post to.
+    // Listing it would put a button in the coach's queue that fails on click.
+    //
+    // That deliberately keeps coach-page calls OUT of this queue for now. They
+    // are still owed an outcome and the gap is real; it is reported rather than
+    // guessed at, because missing from a work queue is recoverable and a queue
+    // that throws on click is not.
+    //
+    // It also closes a latent case that predates coach-page bookings: a FUNNEL
+    // booking whose email matches no lead was already listed here with lead_id
+    // null, and was already unusable. One predicate covers both.
     const needs_outcome = bookings
       .filter((b) => {
         if (!b.start_time) return false
         if (new Date(b.start_time).getTime() >= Date.now()) return false
         if (b.attended === 'no_show') return false
-        const lead = leadByKey.get(bookingKey(b.funnel_id, b.email))
-        return !TERMINAL.has(String(lead?.status ?? ''))
+        const lead = resolveLead(b)
+        if (!lead) return false
+        return !TERMINAL.has(String(lead.status ?? ''))
       })
       // Most overdue first — the oldest unclosed call is the most urgent.
       .sort((a, b) => String(a.start_time).localeCompare(String(b.start_time)))
