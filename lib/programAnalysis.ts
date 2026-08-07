@@ -10,6 +10,15 @@ export type WeeklyBreakdownEntry = {
   phase_name: string
   session_focus: string
   client_milestone: string
+  // Which framework steps this session covers, by FrameworkStep.id.
+  //
+  // OPTIONAL because every row generated before reshape existed has no step
+  // ids — the model wrote prose and nothing recorded which steps it meant.
+  // Written by lib/programReshape.ts, which places steps deterministically, and
+  // it is what makes "every step of the framework appears somewhere in the
+  // plan" a checkable property rather than a hope. A generated breakdown still
+  // omits it; do not infer absence means no steps were covered.
+  step_ids?: string[]
 }
 
 // The stored + returned shape. suggested_starting_price is deterministically
@@ -20,9 +29,17 @@ export type WeeklyBreakdownEntry = {
 export type ProgramAnalysis = {
   program_name: string
   session_type: string
+  // total_weeks is the CONTAINER the client is in; total_sessions is how many
+  // times they meet inside it. Every row written before reshape has these as the
+  // same number, because generation only ever produced weekly plans — which is
+  // exactly the condition under which two fields quietly become one. Twelve
+  // weeks bi-weekly is six sessions across twelve weeks, not six weeks.
   total_weeks: number
   total_sessions: number
   session_length_minutes: number
+  // Present only on a reshaped program. Absent means weekly, which is what every
+  // generated row is; see lib/programReshape.ts.
+  session_cadence?: 'weekly' | 'biweekly' | 'monthly'
   timeline_reasoning: string
   weekly_breakdown: WeeklyBreakdownEntry[]
   deliverables: string[]
