@@ -34,7 +34,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end()
 
   const sig = req.headers['stripe-signature'] as string
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!
+
+  // The `!` on process.env asserts to the compiler and does nothing at runtime.
+  // With STRIPE_WEBHOOK_SECRET set to an EMPTY STRING, constructEvent does not
+  // throw — it verifies against an HMAC keyed on '', which anyone can compute.
+  // Demonstrated: a forged payment_intent.succeeded was accepted. This handler
+  // creates users and grants paid tiers, so that is the worst endpoint in the
+  // codebase to leave depending on an env var being non-empty.
+  //
+  // Same rule as lib/webhookAuth.ts, api/zoom/webhook.ts and
+  // api/webhooks/resend.ts: a missing secret refuses everything rather than
+  // accepting everything.
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET
+  if (!webhookSecret) {
+    console.error('[stripe/webhook] STRIPE_WEBHOOK_SECRET not set — cannot verify')
+    return res.status(500).json({ error: 'webhook_not_configured' })
+  }
 
   let event: Stripe.Event
 
