@@ -46,7 +46,7 @@ const QUEUE_LIMIT = 200
 // bookings has no lead_id — the link is (funnel_id, lower(email)), the same join
 // lib/contacts.ts uses. Every row that needs a lead_id resolves through this.
 const LEAD_COLUMNS = 'id, funnel_id, email, name, first_name, status, application_status, application_submitted_at'
-const BOOKING_COLUMNS = 'id, funnel_id, email, name, start_time, end_time, attended, status, zoom_join_url, meeting_url'
+const BOOKING_COLUMNS = 'id, funnel_id, coach_user_id, email, name, start_time, end_time, attended, status, zoom_join_url, meeting_url'
 
 // A lead whose deal is already decided is off both work queues: a closed or
 // lost deal is not owed a call outcome and is not a recovery target.
@@ -62,6 +62,12 @@ const APPROVED = 'qualified'
 type BookingRow = {
   id: string
   funnel_id: string | null
+  // Selected so the coach-page arm below can test the THING (this booking names
+  // this coach) rather than a proxy for it. Every row in `bookings` is already
+  // owned by the caller one way or the other, so `funnel_id === null` happens to
+  // coincide with it today — and a guard shaped like a container passes until
+  // real data shares that container.
+  coach_user_id: string | null
   email: string
   name: string | null
   start_time: string | null
@@ -163,17 +169,45 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // attributes a booking.
       if (!leadByKey.has(key)) leadByKey.set(key, l)
     }
-    // Funnel bookings only. A coach-page booking keys to '::email', which no
-    // lead in this map can equal (see resolveLead below), so including it would
-    // be inert — but stating the scope beats relying on a coincidence two
-    // functions away.
+    // TWO SETS, TWO QUESTIONS. They are not one key with a wider shape:
     //
-    // CONSEQUENCE, reported rather than silently changed: an approved lead who
-    // rebooks through the coach link is still counted as not-booked and stays in
-    // `approved_not_booked`. Since the coach link IS the rebooking path, that is
-    // likely to happen. Left as specified — approved_not_booked is a funnel
-    // recovery list — but see the report.
+    //   bookedLeadKeys        "this lead booked through THIS funnel"
+    //   coachPageBookedEmails "this coach has this PERSON on their calendar"
+    //
+    // Collapsing them into one keyspace is how the next reader loses the
+    // distinction, and the distinction is load-bearing — see the funnel-A/B rule
+    // below.
     const bookedLeadKeys = new Set(bookings.filter((b) => b.funnel_id).map((b) => bookingKey(b.funnel_id, b.email)))
+
+    // The rebooking path. The coach link is handed to someone who already came
+    // through the funnel and needs another call without reapplying, so an
+    // approved lead who uses it is the CENTRAL case for this queue, not an edge
+    // one. A recovery list whose purpose is "people you approved who are not on
+    // your calendar" must not list people who are on your calendar.
+    //
+    // Keyed on email alone because there is no funnel to key on. Gated on
+    // coach_user_id EXPLICITLY rather than on `funnel_id === null`: the two
+    // coincide today only because every row here is already the caller's, and
+    // that is a coincidence, not the rule being asserted.
+    //
+    // SUPPRESSION, NOT ATTRIBUTION — and the neighbouring file does the
+    // opposite, so this is worth reading before assuming they match.
+    // lib/contacts.ts must pick ONE contact for a coach-page call, because a
+    // call has to land on a single row. Here nothing is being attributed: if
+    // that address is an approved lead in two of the caller's funnels, BOTH
+    // leave the queue, and both leaving is correct. The coach should not chase
+    // that person from either funnel, because that person is on their calendar.
+    //
+    // Cancellation comes free and is asserted rather than assumed:
+    // loadOwnedActiveBookings filters status='active', so a canceled coach-page
+    // booking is not in `bookings` at all and its lead stays a recovery target —
+    // identical to the funnel rule.
+    const coachPageBookedEmails = new Set(
+      bookings
+        .filter((b) => !b.funnel_id && b.coach_user_id === userId)
+        .map((b) => (b.email || '').trim().toLowerCase())
+        .filter(Boolean)
+    )
 
     // name falls back to email when null. Lead name first (what the coach knows
     // them as), then the booking form's name, then the address.
@@ -188,6 +222,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // rather than a gap to fill. `bookings` has no lead_id; the link is
     // (funnel_id, lower(email)), so a row with funnel_id NULL has no left half
     // to join on.
+    //
+    // THE PATTERN, not the instance. Three defects in two days have all been
+    // this one derived join failing on a row it structurally cannot reach: the
+    // call missing from the coach's calendar, the call missing from the contact
+    // it belongs to, and the approved lead who had already rebooked. Each was
+    // fixed with a second predicate. The next one will be too, until the link
+    // stops being derived — the real fix is `bookings.lead_id`, which makes it
+    // explicit instead of inferred from two columns that a whole class of rows
+    // does not carry.
+    //
+    // ONE HOLE IS ACCEPTED DELIBERATELY, HERE, TODAY: a coach-page call that
+    // HAPPENED is owed an outcome, and nothing will ever ask for it. needs_outcome
+    // excludes it (below) because the close-out write is addressed by lead id and
+    // would fail on click. Missing from a work queue beats a queue that throws —
+    // but it is missing, not handled, and a predicate cannot fix it.
     //
     // It cannot accidentally match one either. funnel_leads.funnel_id is
     // NULLABLE, and bookingKey maps a null funnel to '' — so a funnel-less lead
@@ -275,6 +324,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .filter((l) => {
         if (l.application_status !== APPROVED) return false
         if (TERMINAL.has(String(l.status ?? ''))) return false
+        // Either arm removes them. A funnel booking still only clears a lead in
+        // ITS OWN funnel: an approved lead in funnel A who books through funnel
+        // B stays in A's recovery list, which is today's behaviour and is not
+        // what this change touches. Only the funnel-LESS arm is email-keyed.
+        if (coachPageBookedEmails.has((l.email || '').trim().toLowerCase())) return false
         return !bookedLeadKeys.has(bookingKey(l.funnel_id, l.email))
       })
       .sort((a, b) => String(b.application_submitted_at || '').localeCompare(String(a.application_submitted_at || '')))

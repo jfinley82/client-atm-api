@@ -398,18 +398,28 @@ const funnelRow = (over: Partial<Record<string, any>> = {}) => ({
     ok('a past coach-page call is still visible in the month view', agendaIds(cal.body).includes('past-coachpage'), JSON.stringify(agendaIds(cal.body)))
   }
 
-  console.log('\n-- approved_not_booked stays funnel-only --')
+  console.log('\n-- a rebooked lead leaves the recovery list --')
   {
+    // REVERSED. This block used to assert the opposite, and the assertion was
+    // right about the code and wrong about the product: a queue meaning "people
+    // you approved who are NOT on your calendar" was listing someone who was.
+    // The full rules live in tests/approvedNotBooked.test.ts; this is the seam
+    // between the two changes, kept here because it is where the old decision
+    // was pinned.
     funnels = [{ id: F1, user_id: JAMAUL, subdomain: 'f1', problem_solution_label: 'Coaches', landing_page: null }]
     leads = [{ id: 'lead-appr', funnel_id: F1, email: 'approved@example.com', name: 'Approved', first_name: null, status: 'new', application_status: 'qualified', application_submitted_at: iso(NOW - DAY) }]
     // The same person books through the COACH page instead of the funnel.
     bookings = [coachPageRow({ id: 'cp-rebook', email: 'approved@example.com' })]
 
     const r = await call(handler, JAMAUL)
-    // Documented consequence rather than a silent choice: the coach link is the
-    // rebooking path, so this WILL happen. Left as specified; see the report.
-    eq('they remain in the recovery list', ((r.body?.approved_not_booked) || []).map((x: any) => x.lead_id), ['lead-appr'])
-    ok('while their call is on the calendar', agendaIds(r.body).includes('cp-rebook'))
+    eq('they are no longer a recovery target', ((r.body?.approved_not_booked) || []).map((x: any) => x.lead_id), [])
+    ok('because their call is on the calendar', agendaIds(r.body).includes('cp-rebook'))
+
+    // The pair. Cancel the same booking and they come back — otherwise "empty"
+    // above could equally mean the queue stopped working.
+    bookings = [coachPageRow({ id: 'cp-rebook', email: 'approved@example.com', status: 'canceled' })]
+    const afterCancel = await call(handler, JAMAUL)
+    eq('and a canceled rebooking restores them', ((afterCancel.body?.approved_not_booked) || []).map((x: any) => x.lead_id), ['lead-appr'])
   }
 
   console.log('\n-- canceled bookings still appear nowhere --')
