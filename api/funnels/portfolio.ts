@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { setCors, noStore } from '../../lib/cors'
 import { requireFunnelBuilder } from '../../lib/funnels'
+import { loadOwnedActiveBookings } from '../../lib/coachBookings'
 
 // GET /api/funnels/portfolio — the portfolio-home rollup: fleet-wide totals,
 // a per-funnel row for each funnel the caller owns, upcoming calls across the
@@ -52,6 +53,20 @@ function funnelDisplayName(f: Record<string, any>): string {
 type FunnelBucket = { visitors: number; opt_ins: number; booked: number; closed: number; revenue: number }
 const emptyBucket = (): FunnelBucket => ({ visitors: 0, opt_ins: 0, booked: 0, closed: 0, revenue: 0 })
 
+// The upcoming-calls panel, defined ONCE so the zero-funnel branch and the main
+// branch cannot answer differently. Both read the two ownership arms through
+// lib/coachBookings.ts.
+type UpcomingRow = { id: string; funnel_id: string | null; name: string | null; start_time: string }
+const UPCOMING_COLUMNS = 'id, funnel_id, name, start_time'
+const upcomingRefine = (nowIso: string) => (q: any) =>
+  q.gte('start_time', nowIso).order('start_time', { ascending: true }).limit(UPCOMING_CALLS_LIMIT)
+const toUpcoming = (row: UpcomingRow) => ({
+  booking_id: row.id,
+  funnel_id: row.funnel_id,
+  lead_name: row.name,
+  start_time: row.start_time,
+})
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
   if (req.method !== 'GET') return res.status(405).end()
@@ -71,18 +86,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const funnels = funnelRows || []
     const funnelIds = funnels.map((f) => f.id as string)
 
+    const nowIso = new Date().toISOString()
+
     if (funnelIds.length === 0) {
+      // No funnels genuinely means no FUNNEL analytics — those totals are zero
+      // and the funnel list is empty. It does NOT mean no calls: a coach with a
+      // booking page and no funnel still gets booked, and upcoming_calls is a
+      // list of calls rather than a statistic about a funnel. Returning it empty
+      // here was the dashboard's half of the same defect.
+      const rows = await loadOwnedActiveBookings<UpcomingRow>({
+        userId,
+        funnelIds,
+        columns: UPCOMING_COLUMNS,
+        refine: upcomingRefine(nowIso),
+      })
       return res.status(200).json({
         totals: { visitors: 0, leads: 0, calls_booked: 0, booked_rate: 0, closed: 0, revenue: 0 },
         funnels: [],
-        upcoming_calls: [],
+        upcoming_calls: rows.map(toUpcoming),
         recent_leads: [],
       })
     }
 
-    const nowIso = new Date().toISOString()
-
-    const [eventsRes, leadsRes, bookingsRes, upcomingRes, recentLeadsRes] = await Promise.all([
+    const [eventsRes, leadsRes, bookingsRes, upcomingRows, recentLeadsRes] = await Promise.all([
       // Per-funnel visitor bucketing needs the rows, not a head:true count —
       // one query serves both the fleet total (rows.length) and the per-funnel
       // split, instead of N+1 count queries.
@@ -95,14 +121,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // for why that event overcounts (a second writer with no calendar booking
       // behind it).
       supabase.from('bookings').select('funnel_id').in('funnel_id', funnelIds),
-      supabase
-        .from('bookings')
-        .select('id, funnel_id, name, start_time')
-        .in('funnel_id', funnelIds)
-        .eq('status', 'active')
-        .gte('start_time', nowIso)
-        .order('start_time', { ascending: true })
-        .limit(UPCOMING_CALLS_LIMIT),
+      // COACH-FACING LIST OF CALLS, so it is owned two ways — see
+      // lib/coachBookings.ts. Scoped on funnel_id alone this panel silently
+      // omitted every booking made through the coach's own /book/:slug page,
+      // exactly as GET /api/calendar did. The two counts above stay
+      // funnel-scoped on purpose: they are funnel analytics, and a call that
+      // came through no funnel is not a data point about one.
+      loadOwnedActiveBookings<UpcomingRow>({ userId, funnelIds, columns: UPCOMING_COLUMNS, refine: upcomingRefine(nowIso) }),
       supabase
         .from('funnel_leads')
         .select('id, funnel_id, first_name, email, opted_in_at, status')
@@ -113,7 +138,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (eventsRes.error) throw eventsRes.error
     if (leadsRes.error) throw leadsRes.error
     if (bookingsRes.error) throw bookingsRes.error
-    if (upcomingRes.error) throw upcomingRes.error
     if (recentLeadsRes.error) throw recentLeadsRes.error
 
     const buckets = new Map<string, FunnelBucket>()
@@ -171,13 +195,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     })
 
-    const upcoming_calls = ((upcomingRes.data || []) as { id: string; funnel_id: string | null; name: string | null; start_time: string }[]).map(
-      (row) => ({
-        booking_id: row.id,
-        funnel_id: row.funnel_id,
-        lead_name: row.name,
-        start_time: row.start_time,
-      })
+    const upcoming_calls = (upcomingRows || []).map(
+      toUpcoming
     )
 
     const recent_leads = (
