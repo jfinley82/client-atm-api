@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import crypto from 'crypto'
 import { supabase } from '../../lib/supabase'
 import { sendBetaWelcomeEmail } from '../../lib/email'
+import { INVITE_TTL_MS } from '../../lib/tokenLifetimes'
 
 // The API's own public base URL — the invite email's login link must hit the
 // BACKEND magic-token processor (GET /api/auth/callback), same as
@@ -48,13 +49,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (error) throw error
 
-    // Issue a login token (valid 7 days) so the invite link works without a password
+    // An INVITE, not a login link — this is the flow the kind column was added
+    // for, and it has minted 7-day tokens since before that column existed.
+    // The lifetime now comes from lib/tokenLifetimes.ts so it is tuned in one
+    // place alongside admin-issued invites.
     const token = crypto.randomBytes(32).toString('hex')
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+    const expiresAt = new Date(Date.now() + INVITE_TTL_MS).toISOString()
 
     const { error: tokenError } = await supabase
       .from('magic_link_tokens')
-      .insert({ user_id: user.id, token, expires_at: expiresAt })
+      .insert({ user_id: user.id, token, expires_at: expiresAt, kind: 'invite' })
 
     if (tokenError) throw tokenError
 

@@ -5,6 +5,7 @@ import { loadBusinessSettings, isValidHttpUrl } from './businessSettings'
 import { sanitizeBrandColor, DEFAULT_BRAND_PRIMARY } from './funnels'
 import { loadUserAvailability } from './availabilitySettings'
 import { APP_URL } from './appUrls'
+import { LOGIN_TTL_MS } from './tokenLifetimes'
 
 // Exported so api/webhooks/resend.ts can make the one follow-up call inbound
 // mail needs (fetching a received email's actual body) without constructing
@@ -56,8 +57,8 @@ const WELCOME_TEMPLATE_BY_TIER: Record<string, string> = {
 }
 
 // Tier welcome email with a one-click login button. Mints a fresh
-// single-use magic-link token (same shape as api/auth/send-magic-link — 15
-// minute expiry; opened later, the callback degrades cleanly to /login) and
+// single-use magic-link token (same shape as api/auth/send-magic-link — the
+// LOGIN lifetime; opened later, the callback degrades cleanly to /login) and
 // sends the tier's template with NAME (first name) + LOGIN_LINK.
 //
 // Best-effort BY CONTRACT: this function never throws. It runs inside the
@@ -76,10 +77,10 @@ export async function sendTierWelcomeEmail(
     if (!templateId) return
 
     const token = crypto.randomBytes(32).toString('hex')
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString()
+    const expiresAt = new Date(Date.now() + LOGIN_TTL_MS).toISOString()
     const { error: tokenError } = await supabase
       .from('magic_link_tokens')
-      .insert({ user_id: userId, token, expires_at: expiresAt })
+      .insert({ user_id: userId, token, expires_at: expiresAt, kind: 'login' })
     if (tokenError) throw tokenError
 
     const { error } = await resend.emails.send(
