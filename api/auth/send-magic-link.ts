@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { sendMagicLinkEmail } from '../../lib/email'
 import { hasCapability } from '../../lib/entitlements'
 import { setCors } from '../../lib/cors'
+import { LOGIN_TTL_MS } from '../../lib/tokenLifetimes'
 import crypto from 'crypto'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -40,11 +41,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const token = crypto.randomBytes(32).toString('hex')
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString() // 15 min
+    const expiresAt = new Date(Date.now() + LOGIN_TTL_MS).toISOString()
 
+    // kind: 'login' explicitly rather than by column default — this is the
+    // short lifetime, and which one a row carries should be readable here
+    // rather than inferred from the schema.
     const { error: tokenError } = await supabase
       .from('magic_link_tokens')
-      .insert({ user_id: user.id, token, expires_at: expiresAt })
+      .insert({ user_id: user.id, token, expires_at: expiresAt, kind: 'login' })
 
     if (tokenError) throw tokenError
 

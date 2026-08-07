@@ -11,7 +11,19 @@ import { supabase } from './supabase'
 // (add_ons.funnel_builder via lib/funnels.ts requireFunnelBuilder) — a
 // standalone purchase orthogonal to tier, unchanged.
 
-export type MembershipTier = 'free' | 'low_ticket' | 'full' | 'beta' | 'workshop'
+// The tier vocabulary as a VALUE, not only a type, because two endpoints have
+// to validate it at runtime (POST /api/admin/members and PATCH
+// /api/admin/members/[id]) and a hand-copied array in each is a list that can
+// disagree with this map. This matches users_membership_tier_check in
+// production; widening one without the other is how a legitimate tier starts
+// returning 400 — or worse, passes validation and is rejected by the database.
+export const MEMBERSHIP_TIERS = ['free', 'low_ticket', 'full', 'beta', 'workshop'] as const
+
+export type MembershipTier = (typeof MEMBERSHIP_TIERS)[number]
+
+export function isMembershipTier(value: unknown): value is MembershipTier {
+  return typeof value === 'string' && (MEMBERSHIP_TIERS as readonly string[]).includes(value)
+}
 
 export type Capability = 'app_login' | 'toolkits' | 'office_hours' | 'method_steps'
 

@@ -1,24 +1,25 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
-import { requireActiveUser } from '../../../lib/auth'
+import { requireAdmin } from '../../../lib/auth'
 import { setCors } from '../../../lib/cors'
+import { createMember } from '../../../lib/memberInvite'
 
+// GET  — list members (admin).
+// POST — create one member and, by default, invite them (admin).
+//
+// POST is the ONLY way a user row is created from a request in this codebase
+// (api/members/invite-beta.ts is a GHL webhook gated on WEBHOOK_SECRET, not a
+// request anyone can make). There is no sign-up endpoint and none is to be
+// added: api/auth/send-magic-link.ts stays lookup-only, and that is the guard
+// enforcing the product decision.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
-  if (req.method !== 'GET') return res.status(405).end()
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).end()
 
-  const userId = await requireActiveUser(req, res)
+  const userId = await requireAdmin(req, res)
   if (!userId) return
 
-  const { data: actingUser } = await supabase
-    .from('users')
-    .select('role')
-    .eq('id', userId)
-    .single()
-
-  if (!actingUser || actingUser.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden' })
-  }
+  if (req.method === 'POST') return createHandler(req, res)
 
   const rawTier = req.query.tier
   const rawStatus = req.query.status
@@ -41,5 +42,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } catch (err) {
     console.error('[admin/members] GET', err)
     return res.status(500).json({ error: 'Failed to load members' })
+  }
+}
+
+async function createHandler(req: VercelRequest, res: VercelResponse) {
+  const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
+
+  try {
+    const result = await createMember({
+      name: body.name,
+      email: body.email,
+      membership_tier: body.membership_tier,
+      add_ons: body.add_ons,
+      send_invite: body.send_invite,
+    })
+
+    if (result.outcome === 'rejected') {
+      const status = result.reason === 'write_failed' ? 500 : 400
+      return res.status(status).json({ error: result.reason, message: result.message, email: result.email })
+    }
+
+    // 409 with the EXISTING member named, rather than a duplicate row or a
+    // silent tier change. A workshop CSV re-importing a paying member must not
+    // quietly move them onto the workshop tier.
+    if (result.outcome === 'skipped_existing') {
+      return res.status(409).json({
+        error: 'member_exists',
+        message: `A member with ${result.existing.email} already exists (${result.existing.membership_tier}). Nothing was changed.`,
+        existing: result.existing,
+      })
+    }
+
+    // `invite` always states what happened — sent, or not sent and why. A
+    // `free` member is created and told plainly that no invite went out,
+    // because free has no app_login capability.
+    return res.status(201).json({ member: result.member, invite: result.invite })
+  } catch (err) {
+    console.error('[admin/members] POST', err)
+    return res.status(500).json({ error: 'Failed to create member' })
   }
 }

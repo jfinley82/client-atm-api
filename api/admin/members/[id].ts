@@ -1,31 +1,21 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
-import { requireActiveUser } from '../../../lib/auth'
+import { requireAdmin } from '../../../lib/auth'
 import { setCors } from '../../../lib/cors'
 import { getMtmSessionProgress } from '../../../lib/progress'
+import { MEMBERSHIP_TIERS } from '../../../lib/entitlements'
+// MEMBER_COLUMNS lives beside createMember so the row this endpoint returns and
+// the row POST /api/admin/members returns are the same shape by construction.
+// Two allowlists that must match are one allowlist that eventually does not.
+import { MEMBER_COLUMNS } from '../../../lib/memberInvite'
 
-const VALID_TIERS = ['free', 'low_ticket', 'full', 'beta', 'workshop']
 const VALID_STATUSES = ['active', 'suspended']
-
-// Safe user columns to expose to admins (never password_hash)
-const MEMBER_COLUMNS =
-  'id, email, name, profession, has_paid, quiz_completed, quiz_score, video_watched, membership_tier, status, role, add_ons, created_at'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return
 
-  const userId = await requireActiveUser(req, res)
+  const userId = await requireAdmin(req, res)
   if (!userId) return
-
-  const { data: actingUser } = await supabase
-    .from('users')
-    .select('role')
-    .eq('id', userId)
-    .single()
-
-  if (!actingUser || actingUser.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden' })
-  }
 
   const id = req.query.id as string
   if (!id) return res.status(400).json({ error: 'id required' })
@@ -57,8 +47,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const updates: Record<string, unknown> = {}
 
     if (membership_tier !== undefined) {
-      if (!VALID_TIERS.includes(membership_tier)) {
-        return res.status(400).json({ error: `membership_tier must be one of: ${VALID_TIERS.join(', ')}` })
+      if (!(MEMBERSHIP_TIERS as readonly string[]).includes(membership_tier)) {
+        return res.status(400).json({ error: `membership_tier must be one of: ${MEMBERSHIP_TIERS.join(', ')}` })
       }
       updates.membership_tier = membership_tier
     }
