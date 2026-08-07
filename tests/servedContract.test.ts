@@ -45,6 +45,34 @@ function ok(label: string, cond: boolean, extra?: string) {
     )
   }
 
+  console.log('\n-- the client-program serializers are in the contract, generated --')
+  {
+    const doc = readFileSync(docPath, 'utf8')
+    for (const route of ['GET /api/client-programs', 'GET /api/client-programs/[id]', 'GET /api/client/program?t=']) {
+      ok(`the contract documents ${route}`, doc.includes(`### \`${route}\``), 'run: node scripts/served-contract.mjs')
+    }
+
+    // Derived, not transcribed: a key only appears because the real serializer
+    // returned it. Spot-checked on the ones that carry a rule — if these were
+    // hand-written they could drift from the code silently, and the --check
+    // above is what makes that impossible.
+    for (const key of ['sessions_remaining', 'is_stalled', 'current_week', 'progress_pct', 'next_item.due_date']) {
+      ok(`\`${key}\` is described`, doc.includes(`\`${key}\``))
+    }
+
+    // THE PORTAL'S OMISSIONS ARE PART OF THE CONTRACT. Scoped to that route's
+    // table, because the coach routes legitimately carry some of these.
+    const start = doc.indexOf('### `GET /api/client/program?t=`')
+    const end = doc.indexOf('**The portal', start)
+    ok('the portal section is locatable', start > 0 && end > start)
+    const portalTable = doc.slice(start, end)
+    for (const forbidden of ['user_id', 'lead_id', 'program_snapshot', 'portal_token_version', 'client_email', 'visibility']) {
+      ok(`the portal contract does not list \`${forbidden}\``, !portalTable.includes(`\`${forbidden}\``), portalTable)
+    }
+    // Positive control: the portal table is not simply empty.
+    ok('while the portal table does describe the programme', portalTable.includes('`program.client_name`'), portalTable)
+  }
+
   console.log('\n-- every served key is documented, by value --')
   {
     const doc = readFileSync(docPath, 'utf8')
