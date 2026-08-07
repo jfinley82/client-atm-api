@@ -172,6 +172,27 @@ you expect to fail does not — so make the mutation, every time, and hold one
 variable at a time when building the fixture: same gender, same padding, same
 prefix. If two things differ between your fixtures, you are testing neither.
 
+### The file cited as the precedent is the one nobody has read
+
+"Follow the pattern in X" is a claim about X, and it inherits all the authority
+of a citation while having had none of the scrutiny. Being named as the example
+is what stops anyone opening it.
+
+`spec-member-provisioning.md` told the builder to rate-limit the new resend
+endpoint "same posture as `api/auth/send-magic-link.ts`, which is the
+precedent." That endpoint had no rate limit at all. It was public, minted a
+`magic_link_tokens` row and sent an email per request for any address that was
+a member — unbounded row growth and a way to bomb one inbox — and it stayed
+that way precisely because it was the thing everyone was told to copy. It was
+found by a sweep for the property, not by anyone reading the reference.
+
+So: **open the file you are citing, before you cite it.** And when a review
+turns up one instance of a defect, sweep for the class before fixing the
+instance — the reported example is rarely the worst one. The same sweep that
+found this also found `api/stripe/webhook.ts` accepting a forged
+`payment_intent.succeeded` when its secret was empty, which nobody had reported
+and which granted paid tiers.
+
 ### Assert the thing, not its proxy
 
 - A guard shaped like a container (bucket, host, path prefix) passes until real

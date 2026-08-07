@@ -187,15 +187,15 @@ function call(handler: Handler, opts: { ip?: string; method?: string; body?: unk
     // twice more than it would inconvenience anybody else.
     const EXEMPT = ['api/auth/callback.ts']
 
-    // KNOWN GAP, recorded rather than silently tolerated. send-magic-link is
-    // public, mints a magic_link_tokens row and SENDS AN EMAIL per request for
-    // any address that is a member — so it is both unbounded row growth and a
-    // way to bomb a specific person's inbox. It is not fixed here because it is
-    // a live login path and a badly chosen limit locks members out; that is a
-    // decision to make deliberately, not a line to slip into an adjacent
-    // change. Its own docstring cites it as the precedent OTHER endpoints
-    // should follow, which is how it went unnoticed.
-    const KNOWN_GAPS = ['api/auth/send-magic-link.ts']
+    // KNOWN_GAPS is empty, and that is the finished state rather than an
+    // oversight. api/auth/send-magic-link.ts sat here for exactly one commit:
+    // public, minting a magic_link_tokens row and sending an email per request
+    // for any address that is a member, so both unbounded row growth and a way
+    // to bomb one inbox. It is now throttled per IP and per email, and this
+    // assertion is what forced it off the list — the entry was written so that
+    // FIXING it failed the suite, rather than letting a recorded gap rot into a
+    // permanent one.
+    const KNOWN_GAPS: string[] = []
 
     for (const f of publicWriters) {
       const src = stripComments(readFileSync(f, 'utf8'))
