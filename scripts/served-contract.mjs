@@ -48,6 +48,21 @@ const { createRequire } = await import('node:module')
 const require_ = createRequire(import.meta.url)
 const { deriveAudienceDisplayFields } = require_(bundle)
 
+// The client-program serializers, bundled the same way and for the same reason:
+// the contract is emitted by RUNNING them, so a renamed key fails the gate
+// instead of reaching the frontend as a missing field.
+const programBundle = path.join(tmpDir, 'clientProgramSerializers.cjs')
+const buildPrograms = spawnSync(
+  'npx',
+  ['esbuild', 'lib/clientProgramSerializers.ts', '--bundle', '--platform=node', '--format=cjs', '--packages=external', `--outfile=${programBundle}`],
+  { cwd: root, stdio: 'inherit' }
+)
+if (buildPrograms.status !== 0) {
+  console.error('esbuild failed for lib/clientProgramSerializers.ts')
+  process.exit(1)
+}
+const programSerializers = require_(programBundle)
+
 // ---------------------------------------------------------------------------
 // 2. Discover which raw keys the deriver reads, by reading its source.
 //    Generated rather than listed, so a new `raw.something` is picked up.
@@ -427,6 +442,201 @@ for (const [tool, rows] of Object.entries(TOOL_SHAPES)) {
 
 md += `\`completed\`, \`confirmed\`, \`session_history\`, \`sync_snapshot\`, \`selected_id\`
 and \`selected_ids\` are bookkeeping the panel does not render.
+`
+
+
+// ---------------------------------------------------------------------------
+// 6. Client Programs — the shapes the three serializers ACTUALLY return.
+//
+//    Same mechanism as the Attract deriver above: run the real code over a
+//    synthetic probe and record what comes out. Nothing here is transcribed
+//    from the build brief, so the brief and this document can disagree and the
+//    document wins — it is the one derived from the code.
+//
+//    TWO PROBES, unioned. The "full" probe populates every branch so nested
+//    shapes appear; the "minimal" probe is a draft with nothing in it, which is
+//    what a programme looks like the moment it is created. A key that is null
+//    in either run is marked nullable, so "this can be absent" is a property
+//    read from behaviour rather than a guess about intent.
+// ---------------------------------------------------------------------------
+const {
+  serializeProgramSummary,
+  serializeProgramDetail,
+  serializeClientPortal,
+} = programSerializers
+
+const PROGRAM_FULL = {
+  id: 'p1',
+  user_id: 'u1',
+  lead_id: 'l1',
+  client_name: 'Probe Client',
+  client_email: 'probe@example.invalid',
+  client_timezone: 'America/New_York',
+  program_name: 'Probe Program',
+  total_weeks: 6,
+  sessions_allowed: 4,
+  start_date: '2026-01-01',
+  status: 'active',
+  portal_token_version: 1,
+  portal_last_opened_at: '2026-01-05T10:00:00Z',
+  activated_at: '2026-01-01T09:00:00Z',
+  completed_at: null,
+}
+const ITEMS_FULL = [
+  { id: 'i1', kind: 'week', sequence_position: 1, source_week: 1, sort_order: 0, title: 'Week one focus', detail: 'Detail', phase_name: 'Foundations', due_date: null, status: 'pending', completed_at: null, completed_by: null },
+  { id: 'i2', kind: 'milestone', sequence_position: 1, source_week: 1, sort_order: 1, title: 'First milestone', detail: null, phase_name: 'Foundations', due_date: '2026-01-07', status: 'completed', completed_at: '2026-01-06T12:00:00Z', completed_by: 'client' },
+  // EVERY POSITION HAS A WEEK ROW. There is no milestone-only position — the
+  // snapshot mapping inserts a `week` row at each one — so a probe without this
+  // row is an illegal shape, and it typed this_week.title/detail/phase_name as
+  // `null` for a field that is never null in real data.
+  { id: 'i3', kind: 'week', sequence_position: 2, source_week: 2, sort_order: 0, title: 'Week two focus', detail: 'Second detail', phase_name: 'Build', due_date: null, status: 'pending', completed_at: null, completed_by: null },
+  { id: 'i4', kind: 'task', sequence_position: 2, source_week: 2, sort_order: 1, title: 'A coach-added task', detail: 'Do the thing', phase_name: 'Build', due_date: '2026-01-14', status: 'pending', completed_at: null, completed_by: null },
+]
+const REQUESTS_FULL = [
+  { id: 'r1', item_id: 'i3', note: 'Any time Thursday', preferred_1: '2026-01-14T14:00:00Z', preferred_2: null, status: 'confirmed', booking_id: 'b1', decline_reason: null, created_at: '2026-01-08T09:00:00Z', resolved_at: '2026-01-08T10:00:00Z', booking: { start_time: '2026-01-14T14:00:00Z', end_time: '2026-01-14T14:30:00Z' } },
+  { id: 'r2', item_id: null, note: 'Could we talk this week?', preferred_1: '2026-01-16T15:00:00Z', preferred_2: '2026-01-17T15:00:00Z', status: 'requested', booking_id: null, decline_reason: null, created_at: '2026-01-09T09:00:00Z', resolved_at: null, booking: null },
+]
+// A client can ask for a call without naming a time or leaving a note, so those
+// three are nullable — observed here rather than asserted.
+const REQUESTS_BARE = [{ ...REQUESTS_FULL[1], note: null, preferred_1: null, preferred_2: null }]
+const NOTES_FULL = [
+  { id: 'n1', body: 'Shared note', visibility: 'coach_and_client', created_at: '2026-01-05T10:00:00Z' },
+  { id: 'n2', body: 'Private note', visibility: 'coach_only', created_at: '2026-01-05T11:00:00Z' },
+]
+const BOOKINGS_FULL = [
+  { id: 'b1', status: 'active', start_time: '2026-01-14T14:00:00Z', canceled_at: null },
+  { id: 'b2', status: 'canceled', start_time: '2026-01-20T14:00:00Z', canceled_at: '2026-01-10T09:00:00Z' },
+]
+const TODAY = '2026-01-08'
+
+const summaryFull = { program: PROGRAM_FULL, items: ITEMS_FULL, bookings: BOOKINGS_FULL, openSessionRequests: 1, today: TODAY }
+// A FINISHED programme, so completed_at has a value to report. Probing only the
+// active and draft states would type it `null` and tell a renderer nothing about
+// what it holds when it holds something.
+const summaryDone = {
+  ...summaryFull,
+  program: { ...PROGRAM_FULL, status: 'completed', completed_at: '2026-02-12T17:00:00Z' },
+}
+// Only UNDATED pending work, which is what a coach-added task looks like before
+// anyone sets a date. nextPendingItem falls back to these when nothing dated is
+// pending, so this is the only state in which next_item.due_date is null — and
+// without it the contract would claim that field always has a value.
+const summaryUndated = {
+  ...summaryFull,
+  items: [{ ...ITEMS_FULL[3], id: 'i9', due_date: null }],
+}
+const summaryMin = {
+  program: { ...PROGRAM_FULL, status: 'draft', lead_id: null, client_timezone: null, portal_last_opened_at: null, activated_at: null },
+  items: [], bookings: [], openSessionRequests: 0, today: TODAY,
+}
+
+const detail = (base, extra) => serializeProgramDetail({ ...base, portalUrl: 'https://example.invalid/p/token', ...extra })
+const portal = (base, extra) => serializeClientPortal({ ...base, coachFirstName: 'Dana', ...extra })
+
+const PROGRAM_SHAPES = [
+  [
+    'GET /api/client-programs',
+    '(one array element)',
+    [serializeProgramSummary(summaryFull), serializeProgramSummary(summaryDone), serializeProgramSummary(summaryUndated), serializeProgramSummary(summaryMin)],
+  ],
+  [
+    'GET /api/client-programs/[id]',
+    'coach detail — notes at BOTH visibilities',
+    [
+      detail(summaryFull, { notes: NOTES_FULL, sessionRequests: REQUESTS_FULL, discoveryCallCount: 2 }),
+      detail(summaryDone, { notes: NOTES_FULL, sessionRequests: REQUESTS_FULL, discoveryCallCount: 2 }),
+      detail(summaryUndated, { notes: NOTES_FULL, sessionRequests: REQUESTS_FULL, discoveryCallCount: 2 }),
+      detail(summaryMin, { notes: [], sessionRequests: [], discoveryCallCount: 0 }),
+    ],
+  ],
+  [
+    'GET /api/client/program?t=',
+    'the CLIENT portal — coach_only notes are absent by construction',
+    [
+      portal(summaryFull, { notes: NOTES_FULL, sessionRequests: REQUESTS_FULL, brand: { '<supplied by lib/brandKit.ts>': true } }),
+      portal(summaryFull, { notes: NOTES_FULL, sessionRequests: REQUESTS_BARE, brand: {} }),
+      portal(summaryMin, { notes: [], sessionRequests: [], brand: {} }),
+    ],
+  ],
+]
+
+// Walk an output value into path -> type rows. Arrays descend into their first
+// element and are reported as `path[]`, so an inner rename is a diff rather than
+// a silently unchanged line.
+function describe(value, prefix, out) {
+  if (Array.isArray(value)) {
+    out.set(prefix, 'array')
+    // EVERY element, not just [0]. The first item in `items` is a `week` row
+    // with no completion and no due date, so describing only that one types
+    // completed_at, completed_by and due_date as `null` and tells a renderer
+    // nothing about what they carry when they carry something.
+    for (const el of value) {
+      if (!el || typeof el !== 'object' || Array.isArray(el)) continue
+      for (const [k, v] of Object.entries(el)) {
+        const key = `${prefix}[].${k}`
+        const prior = out.get(key)
+        const before = new Map()
+        describe(v, key, before)
+        for (const [pk, pv] of before) {
+          // A concrete type beats a null seen on another element.
+          if (out.get(pk) === undefined || out.get(pk) === 'null') out.set(pk, pv)
+          else if (pv === 'null') out.set(`${pk}\u0000null`, 'null')
+        }
+        if (prior === 'null' && out.get(key) !== 'null') out.set(`${key}\u0000null`, 'null')
+      }
+    }
+    return
+  }
+  if (value && typeof value === 'object') {
+    out.set(prefix, 'object')
+    for (const [k, v] of Object.entries(value)) describe(v, `${prefix}.${k}`, out)
+    return
+  }
+  out.set(prefix, value === null ? 'null' : typeof value)
+}
+
+md += `
+---
+
+## Client Programs — generated from the serializers
+
+Emitted by running \`lib/clientProgramSerializers.ts\` over a synthetic probe, the
+same way the Attract table above runs the real deriver. **The code is the
+contract**; if the build brief and this table disagree, this table is the one
+derived from what ships.
+
+Two probes are unioned: a populated programme, and a \`draft\` with nothing in it.
+A key marked **nullable** came back \`null\` in one of them — that is behaviour,
+not intent.
+
+No customer data. Every value is a synthetic probe.
+
+`
+for (const [route, note, runs] of PROGRAM_SHAPES) {
+  const maps = runs.map((r) => { const m = new Map(); describe(r, '', m); return m })
+
+  md += `### \`${route}\`\n\n${note}\n\n| path | type | nullable |\n|---|---|---|\n`
+  const paths = [...new Set(maps.flatMap((m) => [...m.keys()]))].filter((k) => k && !k.includes('\u0000')).sort()
+  for (const pth of paths) {
+    const seen = maps.map((m) => m.get(pth))
+    // NULLABLE means a run actually returned null for THIS path. Absent because
+    // a parent was null is not the same claim — marking `next_item.id` nullable
+    // because `next_item` itself can be null would describe a field that is
+    // never null when it exists. The \u0000null sentinel records "some ELEMENT of
+    // this array had null here", which a single winning type would otherwise hide.
+    const nullable = seen.includes('null') || maps.some((m) => m.has(`${pth}\u0000null`))
+    const type = seen.find((t) => t && t !== 'null') || 'null'
+    md += `| \`${pth.replace(/^\./, '')}\` | ${type} | ${nullable ? 'yes' : ''} |\n`
+  }
+  md += '\n'
+}
+
+md += `**The portal's omissions are the contract too.** \`user_id\`, \`lead_id\`,
+\`program_snapshot\`, \`portal_token_version\`, \`client_email\` and every
+\`coach_only\` note are absent from \`GET /api/client/program\` above because the
+shape is built key by key — a new column on \`client_programs\` cannot reach the
+client by being added upstream.
+
 `
 
 const existing = fs.existsSync(outPath) ? fs.readFileSync(outPath, 'utf8') : null

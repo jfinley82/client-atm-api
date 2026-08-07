@@ -292,3 +292,171 @@ Key names below are read from production `saved_outputs` via
 
 `completed`, `confirmed`, `session_history`, `sync_snapshot`, `selected_id`
 and `selected_ids` are bookkeeping the panel does not render.
+
+---
+
+## Client Programs — generated from the serializers
+
+Emitted by running `lib/clientProgramSerializers.ts` over a synthetic probe, the
+same way the Attract table above runs the real deriver. **The code is the
+contract**; if the build brief and this table disagree, this table is the one
+derived from what ships.
+
+Two probes are unioned: a populated programme, and a `draft` with nothing in it.
+A key marked **nullable** came back `null` in one of them — that is behaviour,
+not intent.
+
+No customer data. Every value is a synthetic probe.
+
+### `GET /api/client-programs`
+
+(one array element)
+
+| path | type | nullable |
+|---|---|---|
+| `activated_at` | string | yes |
+| `client_email` | string |  |
+| `client_name` | string |  |
+| `completed_at` | string | yes |
+| `current_week` | number | yes |
+| `id` | string |  |
+| `is_stalled` | boolean |  |
+| `items_completed` | number |  |
+| `items_total` | number |  |
+| `next_item` | object | yes |
+| `next_item.due_date` | string | yes |
+| `next_item.id` | string |  |
+| `next_item.title` | string |  |
+| `open_session_requests` | number |  |
+| `portal_last_opened_at` | string | yes |
+| `program_name` | string |  |
+| `progress_pct` | number |  |
+| `sessions_allowed` | number |  |
+| `sessions_remaining` | number |  |
+| `sessions_used` | number |  |
+| `start_date` | string |  |
+| `status` | string |  |
+| `total_weeks` | number |  |
+
+### `GET /api/client-programs/[id]`
+
+coach detail — notes at BOTH visibilities
+
+| path | type | nullable |
+|---|---|---|
+| `discovery_call_count` | number |  |
+| `items` | array |  |
+| `items[].completed_at` | string | yes |
+| `items[].completed_by` | string | yes |
+| `items[].detail` | string | yes |
+| `items[].due_date` | string | yes |
+| `items[].id` | string |  |
+| `items[].kind` | string |  |
+| `items[].phase_name` | string |  |
+| `items[].sequence_position` | number |  |
+| `items[].sort_order` | number |  |
+| `items[].source_week` | number |  |
+| `items[].status` | string |  |
+| `items[].title` | string |  |
+| `notes` | array |  |
+| `notes[].body` | string |  |
+| `notes[].created_at` | string |  |
+| `notes[].id` | string |  |
+| `notes[].visibility` | string |  |
+| `program` | object |  |
+| `program.activated_at` | string | yes |
+| `program.client_email` | string |  |
+| `program.client_name` | string |  |
+| `program.client_timezone` | string | yes |
+| `program.completed_at` | string | yes |
+| `program.current_week` | number | yes |
+| `program.id` | string |  |
+| `program.is_stalled` | boolean |  |
+| `program.items_completed` | number |  |
+| `program.items_total` | number |  |
+| `program.next_item` | object | yes |
+| `program.next_item.due_date` | string | yes |
+| `program.next_item.id` | string |  |
+| `program.next_item.title` | string |  |
+| `program.open_session_requests` | number |  |
+| `program.portal_last_opened_at` | string | yes |
+| `program.portal_url` | string |  |
+| `program.program_name` | string |  |
+| `program.progress_pct` | number |  |
+| `program.sessions_allowed` | number |  |
+| `program.sessions_remaining` | number |  |
+| `program.sessions_used` | number |  |
+| `program.start_date` | string |  |
+| `program.status` | string |  |
+| `program.total_weeks` | number |  |
+| `session_requests` | array |  |
+| `session_requests[].booking` | object | yes |
+| `session_requests[].booking.end_time` | string |  |
+| `session_requests[].booking.start_time` | string |  |
+| `session_requests[].booking_id` | string | yes |
+| `session_requests[].created_at` | string |  |
+| `session_requests[].decline_reason` | null | yes |
+| `session_requests[].id` | string |  |
+| `session_requests[].note` | string |  |
+| `session_requests[].preferred_1` | string |  |
+| `session_requests[].preferred_2` | string | yes |
+| `session_requests[].resolved_at` | string | yes |
+| `session_requests[].status` | string |  |
+
+### `GET /api/client/program?t=`
+
+the CLIENT portal — coach_only notes are absent by construction
+
+| path | type | nullable |
+|---|---|---|
+| `brand` | object |  |
+| `brand.<supplied by lib/brandKit.ts>` | boolean |  |
+| `notes` | array |  |
+| `notes[].body` | string |  |
+| `notes[].created_at` | string |  |
+| `notes[].id` | string |  |
+| `open_request` | object | yes |
+| `open_request.created_at` | string |  |
+| `open_request.id` | string |  |
+| `open_request.note` | string | yes |
+| `open_request.preferred_1` | string | yes |
+| `open_request.preferred_2` | string | yes |
+| `phases` | array |  |
+| `phases[].first_position` | number |  |
+| `phases[].last_position` | number |  |
+| `phases[].phase_name` | string |  |
+| `phases[].state` | string |  |
+| `program` | object |  |
+| `program.client_name` | string |  |
+| `program.current_week` | number | yes |
+| `program.program_name` | string |  |
+| `program.progress_pct` | number |  |
+| `program.sessions_allowed` | number |  |
+| `program.sessions_remaining` | number |  |
+| `program.sessions_used` | number |  |
+| `program.total_weeks` | number |  |
+| `this_week` | object | yes |
+| `this_week.detail` | string |  |
+| `this_week.items` | array |  |
+| `this_week.items[].detail` | string |  |
+| `this_week.items[].due_date` | string |  |
+| `this_week.items[].id` | string |  |
+| `this_week.items[].kind` | string |  |
+| `this_week.items[].status` | string |  |
+| `this_week.items[].title` | string |  |
+| `this_week.phase_name` | string |  |
+| `this_week.sequence_position` | number |  |
+| `this_week.source_week` | number |  |
+| `this_week.title` | string |  |
+| `upcoming` | array |  |
+| `upcoming[].at` | string |  |
+| `upcoming[].sequence_position` | number |  |
+| `upcoming[].title` | string |  |
+| `upcoming[].type` | string |  |
+
+**The portal's omissions are the contract too.** `user_id`, `lead_id`,
+`program_snapshot`, `portal_token_version`, `client_email` and every
+`coach_only` note are absent from `GET /api/client/program` above because the
+shape is built key by key — a new column on `client_programs` cannot reach the
+client by being added upstream.
+
