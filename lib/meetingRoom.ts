@@ -8,6 +8,12 @@ import { isZoomConfigured } from './zoom'
 // from nothing else:
 //
 //   1. The host IS the Zoom-integrated account  -> create a real Zoom meeting
+//      EVERY BOOKING ON THIS BRANCH SHARES ONE ROOM. createZoomMeeting books on
+//      the account's personal meeting room, so the join URLs differ only by the
+//      appended meeting id (us02web.zoom.us/j/<pmi>?...&omn=<id>). Correct while
+//      rule 1 means "this one account" and its host genuinely is that room; the
+//      moment rule 1 widens past a single account, two coaches' clients land in
+//      the same room and that assumption goes with it.
 //   2. The host has a zoom_link                 -> use it
 //   3. The host has Google connected            -> create a fresh Meet
 //   4. Otherwise                                -> not bookable
