@@ -1,7 +1,13 @@
 import crypto from 'crypto'
 
-// Signed, purpose-scoped tokens that NAME a (funnel, lead) pair for public
-// funnel flows — never a session credential and never granting access.
+// Signed, purpose-scoped tokens for public flows — never a session credential
+// and never granting access on their own.
+//
+// Most NAME a (funnel, lead) pair. Two do not: `manage` names a booking and
+// `program` names a client program, because neither necessarily has a funnel or
+// a lead behind it. The file's name is narrower than its contents for that
+// reason; what every token here shares is the derivation discipline below, which
+// is the thing worth keeping in one place.
 //
 // Each purpose derives its OWN key from JWT_SECRET with a distinct HMAC label
 // (the discipline googleCalendar's STATE_SECRET uses). Distinct keys mean a
@@ -23,6 +29,7 @@ const UNSUB_SECRET = deriveSecret('funnel-lead-unsub-v1')
 const MANAGE_SECRET = deriveSecret('funnel-booking-manage-v1')
 const OFFER_SECRET = deriveSecret('funnel-offer-ref-v1')
 const COACH_SECRET = deriveSecret('funnel-lead-coach-v1')
+const PROGRAM_SECRET = deriveSecret('client-program-portal-v1')
 
 const WATCH_TTL_MS = 24 * 60 * 60 * 1000
 const UNSUB_TTL_MS = 365 * 24 * 60 * 60 * 1000
@@ -34,6 +41,18 @@ const COACH_TTL_MS = 30 * 24 * 60 * 60 * 1000
 // A lead who clicks the offer today may buy in a month; the sale still belongs
 // to this funnel. Long enough to cover a real consideration window.
 const OFFER_TTL_MS = 90 * 24 * 60 * 60 * 1000
+// A YEAR, deliberately. This link is mailed once and is the client's only door
+// to their program. A 16-week program, a coach who pauses it for a month, and a
+// client who comes back to it in the new year must all still work — an expired
+// door with no self-service way through it is a support ticket at best and a
+// lost client at worst.
+//
+// The bound on this token is REVOCATION, not time: portal_token_version is
+// stamped into the payload, so bumping the column kills every link ever issued,
+// immediately. A short TTL would be a worse version of that control — it
+// punishes the honest client on a schedule while doing nothing the version bump
+// does not already do on demand.
+export const PROGRAM_TTL_MS = 365 * 24 * 60 * 60 * 1000
 
 function b64url(buf: Buffer): string {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
@@ -146,6 +165,87 @@ export function signCoachToken(funnelId: string, leadId: string, nowMs: number =
 // wrong-purpose. The caller re-reads both rows rather than trusting the pair.
 export function verifyCoachToken(token: unknown, nowMs: number = Date.now()): { funnelId: string; leadId: string } | null {
   return verifyWith(COACH_SECRET, token, nowMs)
+}
+
+// ---- client program portal token --------------------------------------------
+// Names a PROGRAM and the version of its portal link. Follows the single-id
+// shape of signManageToken rather than the (funnel, lead) helpers, because a
+// program may have neither: a coach can start one for a client who never came
+// through a funnel.
+//
+// Payload is "programId.version.expMs". Same three-segment arity as the
+// funnel/lead payloads, which is deliberate and is precisely why the derived-key
+// rule at the top of this file is load-bearing rather than decorative here — a
+// watch token for lead "1" is structurally indistinguishable from a program
+// token at version 1, and ONLY the distinct key stops one verifying as the
+// other. tests/clientProgramToken.test.ts pins that with exactly that fixture.
+//
+// A verified token means WELL-FORMED AND UNEXPIRED, NOTHING MORE. It is not
+// authorization. The caller loads the program and compares `version` against
+// portal_token_version (stale => 404), and a draft program is a 404 regardless —
+// this function cannot know either of those things and must not be read as
+// having checked them.
+
+// The payload is split on '.', so every segment must be dot-free or the token
+// decodes into the wrong fields. A uuid and an integer both satisfy that; a
+// FRACTIONAL version does not — 1.5 would produce a four-segment payload that
+// fails to parse, minting a link that can never work and giving no clue why.
+//
+// So this throws rather than coercing. A bad version is a programming error at
+// the call site, and the alternative is a client holding a dead door. Callers
+// pass portal_token_version straight from the row, where the column is
+// `integer not null default 1`.
+function assertTokenVersion(version: number): void {
+  if (!Number.isSafeInteger(version) || version < 1) {
+    throw new Error(`signProgramToken: version must be a positive safe integer, got ${String(version)}`)
+  }
+}
+
+export function signProgramToken(programId: string, version: number, nowMs: number = Date.now()): string {
+  assertTokenVersion(version)
+  const payload = `${programId}.${version}.${nowMs + PROGRAM_TTL_MS}`
+  const sig = b64url(crypto.createHmac('sha256', PROGRAM_SECRET).update(payload).digest())
+  return `${b64url(Buffer.from(payload, 'utf8'))}.${sig}`
+}
+
+// Returns { programId, version } for a valid, unexpired, correctly-signed token,
+// else null (tampered, expired, malformed, or minted for another purpose).
+//
+// version comes back as a NUMBER. Returning the raw segment would be a string,
+// and `decoded.version !== program.portal_token_version` would then be true for
+// every token ever issued — every client locked out, with a revocation check
+// that looks like it is working.
+export function verifyProgramToken(token: unknown, nowMs: number = Date.now()): { programId: string; version: number } | null {
+  if (typeof token !== 'string' || !token) return null
+  const parts = token.split('.')
+  if (parts.length !== 2) return null
+
+  let payload: string
+  try {
+    payload = fromB64url(parts[0]).toString('utf8')
+  } catch {
+    return null
+  }
+
+  const expected = b64url(crypto.createHmac('sha256', PROGRAM_SECRET).update(payload).digest())
+  const a = Buffer.from(parts[1])
+  const b = Buffer.from(expected)
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null
+
+  const segs = payload.split('.')
+  if (segs.length !== 3) return null
+  const [programId, versionStr, expStr] = segs
+  const exp = Number(expStr)
+  if (!Number.isFinite(exp) || nowMs >= exp) return null
+  if (!programId) return null
+
+  // Re-validated on the way out, not just on the way in. A signature proves WE
+  // minted it, not that the code that minted it was the current code — a token
+  // signed before assertTokenVersion existed is still perfectly valid crypto.
+  const version = Number(versionStr)
+  if (!Number.isSafeInteger(version) || version < 1) return null
+
+  return { programId, version }
 }
 
 // ---- booking manage token (Phase 3b follow-up) ------------------------------
