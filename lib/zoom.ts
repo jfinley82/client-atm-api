@@ -125,16 +125,41 @@ export async function listSchedules(): Promise<Array<Record<string, unknown>>> {
   return rawList as Array<Record<string, unknown>>
 }
 
-// Creates a scheduled Zoom meeting at the chosen UTC start. Host defaults to
-// the account owner ('me' resolves to the S2S app owner); override with
-// ZOOM_HOST_EMAIL to book on a specific user. Returns the fields the booking
-// row and the customer confirmation need.
+// Creates a scheduled Zoom meeting at the chosen UTC start. Returns the fields
+// the booking row and the customer confirmation need.
+//
+// ZOOM_HOST_EMAIL is the ZOOM-SIDE IDENTITY: it goes into the Zoom API path and
+// must be a real user IN THE ZOOM ACCOUNT. Anything else is a 404
+// `User does not exist`. It is NOT our users.email — which of OUR accounts is
+// the host is a separate fact, and lives in ZOOM_HOST_MTM_USER_ID
+// (lib/meetingRoom.ts). One variable answered both questions for months and no
+// single value could satisfy them.
+//
+// 'me' resolves to the S2S app owner, which is correct-by-accident on a
+// single-user Zoom account and is why the conflation stayed invisible. Kept,
+// because it is the right default — but logged, so an unconfigured deployment
+// is visible in logs instead of quietly working until it doesn't.
+// Once per instance, not once per booking: the point is that the condition is
+// discoverable in logs, and one line per request would bury it in the noise it
+// is trying to stand out from.
+let warnedImplicitZoomHost = false
+function warnImplicitZoomHost(): void {
+  if (warnedImplicitZoomHost) return
+  warnedImplicitZoomHost = true
+  console.warn(
+    "[zoom] ZOOM_HOST_EMAIL is unset — creating meetings as 'me' (the S2S app owner). " +
+      'This works on a single-user Zoom account and silently books the wrong host on any other. Set it explicitly.'
+  )
+}
+
 export async function createZoomMeeting(topic: string, startUtcISO: string): Promise<{
   id: string
   join_url: string
   start_time: string
 }> {
-  const host = process.env.ZOOM_HOST_EMAIL || 'me'
+  const configuredHost = (process.env.ZOOM_HOST_EMAIL || '').trim()
+  if (!configuredHost) warnImplicitZoomHost()
+  const host = configuredHost || 'me'
   const res = await zoomFetch(`/users/${encodeURIComponent(host)}/meetings`, {
     method: 'POST',
     body: JSON.stringify({

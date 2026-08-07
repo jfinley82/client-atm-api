@@ -4,7 +4,7 @@ import { getSessionFromRequest, verifySessionToken } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { isZoomConfigured, createZoomMeeting, slotMinutes } from '../../lib/zoom'
 import { isSchedulerSlotOpen } from '../../lib/schedulerSlots'
-import { buildBookingIcs } from '../../lib/ics'
+import { buildBookingIcs, FALLBACK_ORGANIZER_EMAIL } from '../../lib/ics'
 import { resolveBookingBrand, sendBookingConfirmationEmail, sendCoachBookingNotification } from '../../lib/email'
 import { validateBookingAnswers, bookingQuestionErrorMessage, resolveBookingType, resolveBookingRequirements, normalizeLeadPhone, ValidatedAnswer } from '../../lib/bookingQuestions'
 import { bookingTimeLabel, normalizeTimeZone } from '../../lib/bookingTimezone'
@@ -370,7 +370,10 @@ async function bookCoachPath(
   // Confirmation + .ics to the lead (organizer = the coach's connected calendar),
   // and a best-effort notification to the coach. Never fail the booking on email.
   const startLabel = bookingTimeLabel(startIso, timezone)
-  const organizerEmail = conn?.calendar_email || process.env.ZOOM_HOST_EMAIL || 'noreply@mail.microtrainingmethod.com'
+  // NOT ZOOM_HOST_EMAIL. That is the Zoom API's idea of the host and must be a
+  // real user in the Zoom account; putting it here would print that address on
+  // the calendar invite of every client who books.
+  const organizerEmail = conn?.calendar_email || FALLBACK_ORGANIZER_EMAIL
   const ics = buildBookingIcs({
     uid: `booking-${reserved.id}@microtrainingmethod.com`,
     startUtcISO: startIso,
@@ -587,7 +590,8 @@ async function bookMtmPath(
     summary: 'Micro-Training Method call',
     description: `Your call is booked. Join here: ${meeting.join_url}`,
     joinUrl: meeting.join_url,
-    organizerEmail: process.env.ZOOM_HOST_EMAIL || 'noreply@mail.microtrainingmethod.com',
+    // MTM's own page has no coach and therefore no connected calendar address.
+    organizerEmail: FALLBACK_ORGANIZER_EMAIL,
     attendeeEmail: email,
   })
   await sendBookingConfirmationEmail({

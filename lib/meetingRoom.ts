@@ -1,4 +1,3 @@
-import { supabase } from './supabase'
 import { loadBusinessSettings } from './businessSettings'
 import { isZoomConfigured } from './zoom'
 
@@ -42,17 +41,27 @@ export type MeetingRoom =
 /**
  * Is this user the account MTM's Zoom integration actually belongs to?
  *
- * Matched on email against ZOOM_HOST_EMAIL, case-insensitively, because that env
- * var is what the Zoom API calls are made as. If the integration is not
- * configured at all, nobody is that host.
+ * MTM-SIDE IDENTITY: a `users.id` in OUR database. It answers "which of our
+ * accounts is the host", and nothing else.
+ *
+ * It is deliberately NOT ZOOM_HOST_EMAIL. That variable is the ZOOM-SIDE
+ * identity — the user the Zoom API creates meetings as — and the two are
+ * different people in practice: the Zoom account owner and the MTM admin who
+ * owns the booking page are separate records in separate systems. One variable
+ * serving both had no satisfiable value; setting it for Zoom broke MTM's own
+ * booking page, and setting it for MTM broke every meeting create.
+ *
+ * An id rather than an email, because an email is a value two systems can both
+ * plausibly claim, and that is precisely how they got conflated. A users.id
+ * cannot be mistaken for a Zoom login.
+ *
+ * Unset => nobody is the host, so the coach path is simply unavailable rather
+ * than misrouted. Same outcome production had before this variable existed.
  */
-export async function isZoomIntegrationHost(userId: string): Promise<boolean> {
-  const hostEmail = (process.env.ZOOM_HOST_EMAIL || '').trim().toLowerCase()
-  if (!hostEmail || !isZoomConfigured()) return false
-
-  const { data } = await supabase.from('users').select('email').eq('id', userId).maybeSingle()
-  const email = (data as { email?: unknown } | null)?.email
-  return typeof email === 'string' && email.trim().toLowerCase() === hostEmail
+export function isZoomIntegrationHost(userId: string): boolean {
+  const hostUserId = (process.env.ZOOM_HOST_MTM_USER_ID || '').trim()
+  if (!hostUserId || !isZoomConfigured()) return false
+  return userId === hostUserId
 }
 
 /**
@@ -73,7 +82,7 @@ export async function resolveMeetingRoom(
     return isZoomConfigured() ? { kind: 'zoom_integration' } : { kind: 'none' }
   }
 
-  if (await isZoomIntegrationHost(hostUserId)) return { kind: 'zoom_integration' }
+  if (isZoomIntegrationHost(hostUserId)) return { kind: 'zoom_integration' }
 
   const biz = await loadBusinessSettings(hostUserId)
   if (biz.zoom_link) return { kind: 'zoom_link', url: biz.zoom_link }
