@@ -40,9 +40,22 @@ const warned = new Set<string>()
  * Log once per instance when `value` is a URL on a raw deployment host and this
  * is production.
  *
- * The message names the VARIABLE and its VALUE. A warning that says a URL is
+ * The message names the VARIABLE, its VALUE, and WHERE THE VALUE CAME FROM.
+ *
+ * The first two were the original point: a warning that says a URL is
  * misconfigured without saying which one costs the next reader the same search
- * that produced this function.
+ * that produced this function. The third was missing, and the gap is the same
+ * shape one level down. Printing a value cannot tell you whether the variable is
+ * set to that string or absent and falling back to it — and those send the
+ * reader to different places in the Vercel dashboard. One is "edit this
+ * variable", the other is "this variable does not exist yet". Guessing wrong
+ * costs exactly the search the line exists to save.
+ *
+ * `name` is read back out of the environment to answer it, which is sound
+ * because every call site passes the real variable name. A value that is present
+ * but different from what the caller resolved is reported as its own case rather
+ * than smoothed over: that can only happen if a caller transformed the value, and
+ * silently calling it "set" would misdescribe it.
  */
 export function warnIfDeploymentHost(name: string, value: string | null | undefined): void {
   if (warned.has(name)) return
@@ -60,9 +73,18 @@ export function warnIfDeploymentHost(name: string, value: string | null | undefi
   }
   if (!host.endsWith(DEPLOYMENT_HOST_SUFFIX)) return
 
+  const fromEnv = process.env[name]
+  const origin =
+    typeof fromEnv === 'string' && fromEnv
+      ? fromEnv === value
+        ? `${name} IS SET to this value — edit the existing variable`
+        : `${name} IS SET to ${fromEnv}, which the caller resolved to the value above`
+      : `${name} IS NOT SET — this is the built-in fallback, so the variable has to be added, not edited`
+
   warned.add(name)
   console.warn(
     `[config] ${name} points at a raw deployment host on PRODUCTION: ${value}\n` +
+      `  ${origin}.\n` +
       '  This host is derived from the Vercel account and project name, is not stable, and is visible to ' +
       'customers — on the Google consent screen, and permanently in any email built from it. ' +
       'Set it to the stable domain; leave the deployment URL registered wherever previews need it.'
