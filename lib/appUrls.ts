@@ -30,10 +30,24 @@ export const APP_URL = process.env.APP_URL || 'https://app.microtrainingmethod.c
  * link on a deployment host is permanent in an inbox and still clicked months
  * later, and the host is derived from a Vercel account and project name.
  *
- * The default is now the stable domain, so an unset variable degrades to correct
- * rather than to a preview host.
+ * THE DEFAULT IS A DEPLOYMENT HOST ON PURPOSE, and it is the one thing in this
+ * file that is not what it looks like.
+ *
+ * This was briefly `https://api.microtrainingmethod.com`, on the reasoning that
+ * a stable domain is obviously better than a Vercel-derived one. That host DOES
+ * NOT EXIST — no A record, and not among the project's domains, which are
+ * freeminiworkshop.com, *.freeminiworkshop.com and the *.vercel.app aliases. So
+ * the "fix" would have replaced an ugly-but-working login link with a dead one,
+ * which is exactly the trade warnIfDeploymentHost refuses to make. A stable
+ * default cannot be invented; it has to be a domain someone has pointed at this
+ * project.
+ *
+ * So the default stays on the host that actually serves this project, and the
+ * warning below is what keeps it visible. Set API_URL, or add an api.* domain to
+ * the project and change this line — either way the log line stops.
  */
-export const API_URL = process.env.API_URL || 'https://api.microtrainingmethod.com'
+export const API_URL =
+  process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
 
 /**
  * The base the LEAD-facing AI coach shell is served from.

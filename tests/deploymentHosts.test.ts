@@ -115,22 +115,39 @@ function run(vercelEnv: string | undefined, entries: Array<[string, string | nul
     eq('a deployment host with no path does warn', run('production', [['X', 'https://foo-bar.vercel.app']]).length, 1)
   }
 
-  console.log('\n-- the API_URL default no longer points at a deployment host --')
+  console.log('\n-- API_URL has one owner, and that owner is checked --')
   {
     // THE LIVE RISK, and the reason this widened past GOOGLE_REDIRECT_URI:
     // API_URL builds the magic-link login URL and the nurture unsubscribe link,
-    // and its default was hardcoded to the Vercel deployment URL in three files.
-    // An email is permanent in a way a consent screen is not.
+    // and it was declared three times, each defaulting to the raw deployment
+    // URL. An email is permanent in a way a consent screen is not.
     const { readFileSync } = await import('fs')
-    for (const f of ['lib/appUrls.ts', 'lib/email.ts', 'lib/funnelNurture.ts', 'lib/avatars.ts']) {
-      ok(`${f} hardcodes no deployment URL`, !/client-atm-api-[a-z0-9-]*\.vercel\.app/.test(readFileSync(f, 'utf8')), 'a preview host is baked into source')
-    }
+
     // ONE OWNER. Three copies of the same const is how the defaults drifted.
     const copies = ['lib/email.ts', 'lib/funnelNurture.ts', 'lib/avatars.ts'].filter((f) =>
       /const API_URL\s*=/.test(readFileSync(f, 'utf8'))
     )
     eq('API_URL is declared in exactly one place', copies, [])
     ok('and that place is lib/appUrls.ts', /export const API_URL/.test(readFileSync('lib/appUrls.ts', 'utf8')))
+    for (const f of ['lib/email.ts', 'lib/funnelNurture.ts', 'lib/avatars.ts']) {
+      ok(`${f} hardcodes no deployment URL`, !/client-atm-api-[a-z0-9-]*\.vercel\.app/.test(readFileSync(f, 'utf8')), 'a preview host is baked into source')
+    }
+
+    // NOT "the owner's default is a stable domain". That assertion existed for
+    // one commit and was wrong: the stable-looking host it demanded,
+    // api.microtrainingmethod.com, has no A record and is not on the Vercel
+    // project, so satisfying it would have pointed every magic-link login at a
+    // dead host. A test cannot check that a hostname resolves, and a default
+    // that merely LOOKS stable is worse than an ugly one that works.
+    //
+    // What is checkable, and what actually matters, is that the value does not
+    // escape the check. Every consumer imports it from here, and here calls
+    // warnIfDeploymentHost on it — so the deployment-host default announces
+    // itself on production rather than sitting in an inbox unnoticed.
+    const owner = readFileSync('lib/appUrls.ts', 'utf8')
+    for (const v of ['APP_URL', 'API_URL', 'COACH_SHELL_URL']) {
+      ok(`${v} passes through warnIfDeploymentHost`, new RegExp(`warnIfDeploymentHost\\('${v}',`).test(owner))
+    }
   }
 
   console.warn = realWarn
