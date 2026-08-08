@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
 import { setCors, noStore } from '../../../lib/cors'
+import { API_URL } from '../../../lib/appUrls'
 import {
   requireFunnelBuilder,
   getOwnedFunnel,
@@ -53,7 +54,6 @@ function optionalUrl(v: unknown): { ok: true; value: string | null } | { ok: fal
   }
 }
 
-const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
 
 // The conversion pixel the coach pastes onto their checkout's thank-you page.
 //

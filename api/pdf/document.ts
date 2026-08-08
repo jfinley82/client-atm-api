@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { requireActiveUser, getSessionFromRequest } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
+import { API_URL } from '../../lib/appUrls'
 import { buildCoverPage } from '../../lib/pdf/cover'
 import { DocType } from '../../lib/pdf/assets'
 import { paginate, buildDocument, assembleSteps } from '../../lib/pdf/shell'
@@ -23,9 +24,6 @@ import { buildGuideHtml } from '../../lib/pdf/guideRender'
 // (see vercel.json includeFiles); it does NOT launch chromium itself.
 export const config = { maxDuration: 60 }
 
-// The API's own public base URL, for the internal results + render calls. Same
-// pattern lib/email.ts / lib/funnelNurture.ts use.
-const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
 
 const DOC_LABEL: Record<DocType, string> = { framework: 'Framework', guide: 'Guide', script: 'Script' }
 

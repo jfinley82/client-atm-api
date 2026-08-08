@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import { signManageToken } from './funnelLeadToken'
+import { API_URL } from './appUrls'
 
 // Shared resolution for the lead-side booking manage flow (Phase 3b follow-up).
 // bookings has no funnel_id / lead_id column, so the funnel + lead are resolved
@@ -97,9 +98,6 @@ export async function resolveFunnelAndLead(
   return { funnel: liveFunnels[0], leadId: null }
 }
 
-// Where the API actually serves from, for a booking with no funnel domain to
-// borrow. Same default as lib/funnelNurture.ts.
-const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
 
 // The manage link that goes in the booking emails.
 //

@@ -121,17 +121,39 @@ function run(vercelEnv: string | undefined, entries: Array<[string, string | nul
     // API_URL builds the magic-link login URL and the nurture unsubscribe link,
     // and it was declared three times, each defaulting to the raw deployment
     // URL. An email is permanent in a way a consent screen is not.
-    const { readFileSync } = await import('fs')
+    const { readFileSync, readdirSync } = await import('fs')
 
-    // ONE OWNER. Three copies of the same const is how the defaults drifted.
-    const copies = ['lib/email.ts', 'lib/funnelNurture.ts', 'lib/avatars.ts'].filter((f) =>
-      /const API_URL\s*=/.test(readFileSync(f, 'utf8'))
-    )
-    eq('API_URL is declared in exactly one place', copies, [])
-    ok('and that place is lib/appUrls.ts', /export const API_URL/.test(readFileSync('lib/appUrls.ts', 'utf8')))
-    for (const f of ['lib/email.ts', 'lib/funnelNurture.ts', 'lib/avatars.ts']) {
-      ok(`${f} hardcodes no deployment URL`, !/client-atm-api-[a-z0-9-]*\.vercel\.app/.test(readFileSync(f, 'utf8')), 'a preview host is baked into source')
+    // ONE OWNER, ASSERTED BY SWEEP RATHER THAN BY LIST.
+    //
+    // The first version of this named three files — lib/email.ts,
+    // lib/funnelNurture.ts, lib/avatars.ts — which were the three I had found.
+    // There were SEVEN. api/funnels/[id]/settings.ts, api/guide/refresh.ts,
+    // api/pdf/document.ts and lib/bookingManage.ts each declared their own, and
+    // a test that enumerates the instances it knows about is a census, not a
+    // property: it goes green on the fix and stays green on the next copy.
+    //
+    // So walk the tree. The owner is allowed to declare it; nothing else is.
+    const OWNER = 'lib/appUrls.ts'
+    const sources: string[] = []
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = `${dir}/${e.name}`
+        if (e.isDirectory()) walk(p)
+        else if (e.name.endsWith('.ts')) sources.push(p)
+      }
     }
+    walk('api'); walk('lib')
+
+    const declarers = sources.filter((f) => /\bconst API_URL\s*=/.test(readFileSync(f, 'utf8')))
+    eq('API_URL is declared in exactly one place', declarers, [OWNER])
+    ok('and it is exported from there', /export const API_URL/.test(readFileSync(OWNER, 'utf8')))
+
+    // And the value it defaults to appears nowhere else, so a future copy
+    // pasting the literal is caught even if it names the const something else.
+    const bakers = sources.filter(
+      (f) => f !== OWNER && /client-atm-api-[a-z0-9-]*\.vercel\.app/.test(readFileSync(f, 'utf8'))
+    )
+    eq('and the deployment host is baked into no other source file', bakers, [])
 
     // NOT "the owner's default is a stable domain". That assertion existed for
     // one commit and was wrong: the stable-looking host it demanded,
