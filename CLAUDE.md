@@ -535,6 +535,21 @@ control are the ones that rot. Where the invariant matters, write a test that
 compares the two artifacts against each other — `tests/ctaSeam.test.ts` and the
 one-resolver assertion in `tests/bookingPage.test.ts` both exist for this.
 
+The sharpest version is a measurement of **external infrastructure** — DNS, a
+domain listing, which env vars are set. It rots with no code change, no caller
+change and nothing to notice it, so no test can catch it. Three of these went
+into one comment in `lib/appUrls.ts` on 2026-08-08 and all three were false
+within hours: "that host has no A record", "it is not among the project's
+domains", and "API_URL is unset on Production". Each was measured with a tool
+and correct when taken. **A measured fact has a timestamp; a comment does not,
+so putting one in the other strips it.** Measurements belong in the commit
+message, where they are dated and inert. Two rules that follow: never repeat a
+measurement as a current fact without re-taking it (a report written four hours
+later needs a fresh check, not a memory), and when the answer genuinely matters
+at runtime, print it at runtime — the `[config]` line in `lib/deploymentHosts.ts`
+names the variable, the value, AND whether it is set or falling back, which
+cannot go stale because it is produced at the moment it is asked.
+
 **An endpoint that 502s "intermittently" on a parameter the caller controls.**
 `GET /api/calendar/availability` forwarded `from`/`to` from the query string
 unbounded; Zoom's `available_times` rejects any window over 45 days with a 400,

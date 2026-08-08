@@ -30,28 +30,31 @@ export const APP_URL = process.env.APP_URL || 'https://app.microtrainingmethod.c
  * link on a deployment host is permanent in an inbox and still clicked months
  * later, and the host is derived from a Vercel account and project name.
  *
- * THE DEFAULT IS A DEPLOYMENT HOST, AND THAT IS NOW A LAG RATHER THAN A CHOICE.
+ * THE DEFAULT IS A DEPLOYMENT HOST, WHICH IS A FALLBACK RATHER THAN AN INTENT.
  *
- * This was briefly `https://api.microtrainingmethod.com`, on the reasoning that
- * a stable domain beats a Vercel-derived one. It was reverted on 2026-08-08
- * because that host had no A record at the time — measured at 13:20 UTC, and
- * true then. It was pointed at this project later the same day, and at 17:35 it
- * resolves to 216.150.1.193 / 216.150.16.193 and answers authenticated API
- * requests. The earlier sentence in this comment asserted it did not exist,
- * which stopped being true a few hours after it was written: a claim about the
- * world is a snapshot with no expiry date, including one made honestly.
+ * Set API_URL and this value is never used. It is deliberately not changed to a
+ * nicer-looking host, because a default that resolves nowhere is worse than an
+ * ugly one that works, and moving it would change the host inside magic-link
+ * login emails — coach-visible, and somebody else's call.
  *
- * So the default is no longer justified by "there is nowhere better to point".
- * It stays only because moving it changes the host in magic-link login emails,
- * which is a coach-visible change and somebody else's call. The cheaper route
- * needs no code at all: set API_URL on Production and the warning below stops.
+ * NO CLAIM HERE ABOUT WHICH HOSTS EXIST OR WHAT PRODUCTION IS SET TO. Three
+ * sentences of exactly that kind were written into this comment on 2026-08-08
+ * and all three were false within hours: "that host has no A record" (it was
+ * pointed at this project later the same day), "it is not among the project's
+ * domains" (it is now), and by implication "API_URL is unset on Production"
+ * (it is set — the warning below stopped firing). Each was measured, correct
+ * when taken, and rotted on its own without anything in the repo changing.
  *
- * NOTE FOR WHOEVER CHECKS: Vercel's project API does not list api.* among this
- * project's domains, while it does list app.* for client-atm-frontend. The
- * behaviour is unambiguous and outranks the listing — a request for a
- * frontend-only route returns this project's 404, not the SPA — but the listing
- * is worth a glance in the dashboard, and it is why a domain check here should
- * be a request rather than an API read.
+ * External state does not belong in a comment at all. It has no expiry date
+ * here, nobody re-checks it, and the next reader acts on it. Measurements go in
+ * the commit message, where they are timestamped and inert. What belongs here is
+ * what the code does and why — which is the sentence above, and it stays true
+ * whoever owns which domain.
+ *
+ * If you need to know where this points today, read the `[config]` line from
+ * lib/deploymentHosts.ts in the production logs. It says the variable, the
+ * value, and whether it is set or falling back, which is the whole question, and
+ * it cannot go stale because it is printed at the moment it is asked.
  */
 export const API_URL =
   process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
