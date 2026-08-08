@@ -3,7 +3,13 @@ import { supabase } from '../../lib/supabase'
 import { setCors, noStore } from '../../lib/cors'
 import { requireFunnelBuilder } from '../../lib/funnels'
 import { loadUserAvailability } from '../../lib/availabilitySettings'
-import { WON_STATUSES, LOST_STATUS, bookingKey, funnelDisplayName } from '../../lib/contacts'
+import { bookingKey, funnelDisplayName } from '../../lib/contacts'
+import {
+  TERMINAL_LEAD_STATUSES as TERMINAL,
+  APPROVED_APPLICATION_STATUS as APPROVED,
+  needsOutcome,
+  approvedNotBooked,
+} from '../../lib/coachQueues'
 import { loadOwnedActiveBookings } from '../../lib/coachBookings'
 
 // GET /api/calendar — the coach's whole calendar surface, across ALL their
@@ -48,16 +54,10 @@ const QUEUE_LIMIT = 200
 const LEAD_COLUMNS = 'id, funnel_id, email, name, first_name, status, application_status, application_submitted_at'
 const BOOKING_COLUMNS = 'id, funnel_id, coach_user_id, email, name, start_time, end_time, attended, status, zoom_join_url, meeting_url'
 
-// A lead whose deal is already decided is off both work queues: a closed or
-// lost deal is not owed a call outcome and is not a recovery target.
-const TERMINAL = new Set<string>([...WON_STATUSES, LOST_STATUS])
+// TERMINAL and APPROVED now live in lib/coachQueues.ts alongside the predicates
+// that use them — the My Business dashboard reads the same rules, and a fan-in is
+// where a fifth copy would otherwise be written.
 
-// The gate writes application_status ∈ ('applied'|'qualified'|'disqualified')
-// — see api/funnel/application.ts and the funnel_leads_application_status_check
-// constraint. There is no 'approved' value in the schema; 'qualified' IS the
-// approved state. qualification_status is the older parallel column, also
-// carrying 'qualified', so both are accepted.
-const APPROVED = 'qualified'
 
 type BookingRow = {
   id: string
@@ -272,66 +272,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // ---- needs_outcome ----------------------------------------------------
-    // A past call still owed a DEAL outcome. What clears it is the deal being
-    // decided, never the mere presence of an attendance mark:
-    //
-    //   won / lost        -> cleared. The lead's status is the record of the
-    //                        decision. (Recording one leaves bookings.attended
-    //                        alone by design, so keying off attendance here
-    //                        would leave closed calls in the loop forever.)
-    //   no_show           -> cleared. The call never happened, so there is no
-    //                        deal outcome to record; the lead goes back to
-    //                        nurture instead.
-    //   showed, undecided -> STILL LISTED. Marking attendance is not recording
-    //                        an outcome, and a call the lead showed up to with
-    //                        no win or loss against it is the single most
-    //                        important row in this list.
-    //   unmarked, undecided -> still listed.
-    //
-    // Deliberately NOT `attended is not null`: that conflates attendance with
-    // outcome and would hide exactly the calls most in need of closing out.
-    //
-    // A WORK QUEUE MAY ONLY CONTAIN ROWS WHOSE ACTION TARGET EXISTS, so a row
-    // that cannot resolve a lead is excluded. Recording an outcome is
-    // POST /api/leads/[leadId]/outcome — it is addressed by lead id and writes
-    // funnel_leads.status, so a row with lead_id null has nothing to post to.
-    // Listing it would put a button in the coach's queue that fails on click.
-    //
-    // That deliberately keeps coach-page calls OUT of this queue for now. They
-    // are still owed an outcome and the gap is real; it is reported rather than
-    // guessed at, because missing from a work queue is recoverable and a queue
-    // that throws on click is not.
-    //
-    // It also closes a latent case that predates coach-page bookings: a FUNNEL
-    // booking whose email matches no lead was already listed here with lead_id
-    // null, and was already unusable. One predicate covers both.
-    const needs_outcome = bookings
-      .filter((b) => {
-        if (!b.start_time) return false
-        if (new Date(b.start_time).getTime() >= Date.now()) return false
-        if (b.attended === 'no_show') return false
-        const lead = resolveLead(b)
-        if (!lead) return false
-        return !TERMINAL.has(String(lead.status ?? ''))
-      })
-      // Most overdue first — the oldest unclosed call is the most urgent.
-      .sort((a, b) => String(a.start_time).localeCompare(String(b.start_time)))
+    // The rule, with all of its reasoning, is lib/coachQueues.ts. It moved there
+    // when the My Business dashboard became a second reader of it.
+    const needs_outcome = needsOutcome(bookings, resolveLead, Date.now())
       .slice(0, QUEUE_LIMIT)
       .map(shape)
 
     // ---- approved_not_booked ----------------------------------------------
-    const approved_not_booked = leads
-      .filter((l) => {
-        if (l.application_status !== APPROVED) return false
-        if (TERMINAL.has(String(l.status ?? ''))) return false
-        // Either arm removes them. A funnel booking still only clears a lead in
-        // ITS OWN funnel: an approved lead in funnel A who books through funnel
-        // B stays in A's recovery list, which is today's behaviour and is not
-        // what this change touches. Only the funnel-LESS arm is email-keyed.
-        if (coachPageBookedEmails.has((l.email || '').trim().toLowerCase())) return false
-        return !bookedLeadKeys.has(bookingKey(l.funnel_id, l.email))
-      })
-      .sort((a, b) => String(b.application_submitted_at || '').localeCompare(String(a.application_submitted_at || '')))
+    // Also lib/coachQueues.ts — including why two sets are kept rather than one.
+    const approved_not_booked = approvedNotBooked(leads, bookings, userId)
       .slice(0, QUEUE_LIMIT)
       .map((l) => ({
         lead_id: l.id,
