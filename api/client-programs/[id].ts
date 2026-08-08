@@ -4,8 +4,8 @@ import { setCors, noStore } from '../../lib/cors'
 import { requireFunnelBuilder } from '../../lib/funnels'
 import { redriveDueDates, isValidStartDate } from '../../lib/clientProgramPlan'
 import { serializeProgramDetail, type ProgramRow, type ItemRow, type NoteRow, type SessionRequestRow, type ProgramBookingRow } from '../../lib/clientProgramSerializers'
-import { signProgramToken } from '../../lib/funnelLeadToken'
-import { APP_URL } from '../../lib/appUrls'
+import { programPortalUrl } from '../../lib/clientProgramPortal'
+import { syncAllReminders, syncChangedReminders, type ReminderItem } from '../../lib/clientProgramEmail'
 
 // GET    /api/client-programs/[id] — the whole programme, in one call.
 // PATCH  /api/client-programs/[id] — edit a program.
@@ -124,7 +124,7 @@ async function getProgram(res: VercelResponse, program: ProgramRow) {
     .ilike('email', program.client_email)
     .is('program_id', null)
 
-  const portalUrl = `${APP_URL}/p/${signProgramToken(program.id, program.portal_token_version)}`
+  const portalUrl = programPortalUrl(program)
 
   return res.status(200).json(
     serializeProgramDetail({
@@ -230,29 +230,64 @@ async function patchProgram(req: VercelRequest, res: VercelResponse, program: Pr
   // MOVING start_date RE-DERIVES DATES, and only on rows the coach did not set
   // by hand. A date they typed is a decision; recomputing it silently overwrites
   // that decision with no way to tell which ones were theirs.
+  // THE QUEUE FOLLOWS THE ROW, and the two edits that reach it are different
+  // shapes. Re-synced from the UPDATED row in both cases, because the decision
+  // "may this programme mail anyone" reads program.status.
+  const next = updated as unknown as ProgramRow
+
+  // A moved start_date re-derives dates on the rows the coach did not set by
+  // hand, so only those rows' reminders move — a manual date survives the move
+  // and so does the reminder built from it.
   if ('start_date' in updates) {
-    await redriveProgramDates(program.id, updates.start_date as string)
+    const changed = await redriveProgramDates(program.id, updates.start_date as string)
+    await syncChangedReminders(next, changed.before, changed.after)
+  }
+
+  // A status change decides whether this programme may mail at all, so it is
+  // every row or none. Paused must go quiet: a client told their programme is on
+  // hold and then nudged about a task the next morning has been told two
+  // different things by the same system.
+  if ('status' in updates) {
+    await syncAllReminders(next)
   }
 
   return res.status(200).json({ program: updated })
 }
 
-async function redriveProgramDates(programId: string, startDate: string) {
+/**
+ * Returns what moved, so the caller can re-queue exactly those reminders.
+ *
+ * The before/after pair rather than a boolean: a reminder is keyed on the due
+ * date, so "which dates changed" is the only question the queue needs answered,
+ * and computing it twice — once here and once from a re-read — is how the two
+ * answers start disagreeing.
+ */
+async function redriveProgramDates(
+  programId: string,
+  startDate: string
+): Promise<{ before: Array<{ id: string; due_date: string | null }>; after: ReminderItem[] }> {
   const { data: items, error } = await supabase
     .from('client_program_items')
-    .select('id, sequence_position, due_date, due_date_source')
+    .select('id, kind, title, sequence_position, due_date, due_date_source, status, reminder_message_id')
     .eq('program_id', programId)
   if (error) {
     console.error('[client-programs/[id]] could not re-derive due dates', error)
-    return
+    return { before: [], after: [] }
   }
-  const rows = (items || []) as { id: string; sequence_position: number; due_date: string | null; due_date_source: 'derived' | 'manual' }[]
+  const rows = (items || []) as unknown as (ReminderItem & { sequence_position: number; due_date_source: 'derived' | 'manual' })[]
+  const before = rows.map((r) => ({ id: r.id, due_date: r.due_date }))
+
   // Only rows whose date actually moves, and only derived ones. A no-op update
   // per item would rewrite updated_at across the whole plan for nothing.
-  const next = redriveDueDates(rows, startDate).filter((r, n) => r.due_date !== rows[n].due_date)
-  for (const r of next) {
+  const redriven = redriveDueDates(rows, startDate)
+  const after: ReminderItem[] = []
+  for (let n = 0; n < redriven.length; n++) {
+    const r = redriven[n]
+    after.push({ ...rows[n], due_date: r.due_date })
+    if (r.due_date === rows[n].due_date) continue
     // `week` rows carry a null derived date and stay null; nothing here special-
     // cases them because derivedDueDate is keyed on position, not on kind.
     await supabase.from('client_program_items').update({ due_date: r.due_date }).eq('id', r.id)
   }
+  return { before, after }
 }

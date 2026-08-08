@@ -4,6 +4,8 @@ import { setCors, noStore } from '../../lib/cors'
 import { requireFunnelBuilder } from '../../lib/funnels'
 import { planFromSnapshot, resolveSessionsAllowed, isValidStartDate } from '../../lib/clientProgramPlan'
 import { serializeProgramSummary, type ItemRow, type ProgramRow, type ProgramBookingRow } from '../../lib/clientProgramSerializers'
+import { normalizeTimeZone } from '../../lib/bookingTimezone'
+import { loadUserAvailability } from '../../lib/availabilitySettings'
 
 // GET  /api/client-programs — the coach's programs.
 // POST /api/client-programs — create one, as a DRAFT. Sends nothing.
@@ -184,7 +186,7 @@ async function createProgram(req: VercelRequest, res: VercelResponse, userId: st
         lead_id: leadId,
         client_name: clientName,
         client_email: clientEmail,
-        client_timezone: typeof body.client_timezone === 'string' && body.client_timezone.trim() ? body.client_timezone.trim() : null,
+        client_timezone: await resolveClientTimezone(userId, clientEmail, body.client_timezone),
         // SNAPSHOT, not a reference. saved_outputs holds one program row per
         // coach, so reading it live would let one edit rewrite the plan of every
         // client already running on the old one, mid-flight.
@@ -230,6 +232,67 @@ async function createProgram(req: VercelRequest, res: VercelResponse, userId: st
     console.error('[client-programs] POST', err)
     return res.status(500).json({ error: 'Failed to create program' })
   }
+}
+
+/**
+ * WHERE THE CLIENT IS, for a 09:00-local reminder.
+ *
+ * Three sources, in order, and the last one is null rather than a guess:
+ *
+ *   1. What the coach typed. An explicit answer beats every inference.
+ *   2. The zone this person last BOOKED in. The booking page captures it from
+ *      the visitor's own browser, so it is the client's own answer to the same
+ *      question, given earlier.
+ *   3. The coach's working-hours zone. Wrong for a client on another continent,
+ *      right far more often than UTC for the common case where both are in one
+ *      country.
+ *
+ * NULL IS A REAL ANSWER, and it means UTC downstream. Nothing here invents a
+ * zone: `client_timezone` is nullable precisely so "we do not know" can be
+ * stored, and a fabricated zone is worse than a known-unknown because it looks
+ * like a fact the coach can rely on.
+ *
+ * SOURCE 2 USES THE (coach, email) MATCH §5.1 CALLS A TRAP, and it is correct
+ * here for the reason it is wrong there: a bad match sends an email an hour off,
+ * while a bad match in `sessions_used` takes away a call the client paid for.
+ * Same query, opposite blast radius. It must never migrate into the allowance.
+ */
+async function resolveClientTimezone(userId: string, clientEmail: string, supplied: unknown): Promise<string | null> {
+  const explicit = normalizeTimeZone(supplied)
+  if (explicit) return explicit
+
+  try {
+    const { data } = await supabase
+      .from('bookings')
+      .select('timezone, created_at')
+      .eq('coach_user_id', userId)
+      .ilike('email', escapeLike(clientEmail))
+      .order('created_at', { ascending: false })
+      .limit(5)
+    for (const row of ((data || []) as { timezone: string | null }[])) {
+      const zone = normalizeTimeZone(row.timezone)
+      // Most recent FIRST, and rows with no zone are skipped rather than
+      // treated as an answer — a booking made before the page captured one says
+      // nothing about where they are.
+      if (zone) return zone
+    }
+  } catch (err) {
+    console.error('[client-programs] timezone seed lookup failed', err)
+  }
+
+  try {
+    const availability = await loadUserAvailability(userId)
+    return normalizeTimeZone(availability.working_hours.timezone)
+  } catch (err) {
+    console.error('[client-programs] coach timezone lookup failed', err)
+    return null
+  }
+}
+
+// `ilike` is a pattern: a `%` or `_` in a stored address would widen the match
+// to rows belonging to someone else. Same escaping as the public recovery route.
+function escapeLike(v: string): string {
+  return v.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
 }
 
 // Lead name first (what the coach knows them as), then the address's local part.

@@ -3,6 +3,7 @@ import { supabase } from '../../../lib/supabase'
 import { setCors, noStore } from '../../../lib/cors'
 import { requireFunnelBuilder } from '../../../lib/funnels'
 import type { ProgramRow } from '../../../lib/clientProgramSerializers'
+import { sendProgramWelcome, syncAllReminders } from '../../../lib/clientProgramEmail'
 
 // POST /api/client-programs/[id]/send — draft -> active.
 //
@@ -52,12 +53,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const rows = (updated || []) as unknown as ProgramRow[]
     if (!rows.length) return res.status(409).json({ error: 'not_draft', status: 'active' })
 
-    // program_welcome AND the reminder schedule land with the email step, which
-    // the build order sequences separately because both need the client's
-    // timezone resolved and the brand extracted. This endpoint owns the state
-    // machine; nothing here pretends to have mailed anyone, and the portal token
-    // starts resolving the moment the row reads `active`.
-    return res.status(200).json({ program: rows[0] })
+    // THE STATE CHANGE IS ALREADY COMMITTED. Both of these are best-effort by
+    // contract and neither may fail the response: a programme that is active with
+    // an unsent welcome is recoverable (the coach resends the link), while a
+    // programme that 500s after flipping to active leaves the coach believing it
+    // is still a draft when the client can already open it.
+    //
+    // Reminders are scheduled HERE rather than at item creation, because until
+    // this moment there was nothing to remind anyone about — wantsReminder
+    // refuses a draft, so an item created earlier deliberately queued nothing.
+    const active = rows[0]
+    await sendProgramWelcome(active)
+    await syncAllReminders(active)
+
+    return res.status(200).json({ program: active })
   } catch (err) {
     console.error('[client-programs/[id]/send]', err)
     return res.status(500).json({ error: 'Failed to send program' })

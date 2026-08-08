@@ -3,6 +3,7 @@ import { supabase } from '../../../../lib/supabase'
 import { setCors, noStore } from '../../../../lib/cors'
 import { requireFunnelBuilder } from '../../../../lib/funnels'
 import { loadOwnedProgram, ITEM_COLUMNS } from '../../../../lib/clientProgramAccess'
+import { syncItemReminder, type ReminderItem } from '../../../../lib/clientProgramEmail'
 import { derivedDueDate } from '../../../../lib/clientProgramPlan'
 
 // POST /api/client-programs/[id]/items — add work to a client's plan.
@@ -73,6 +74,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .select(ITEM_COLUMNS)
       .single()
     if (error) throw error
+
+    // Scheduled only if the programme is already live — wantsReminder refuses a
+    // draft, so a task added during review queues nothing and POST .../send
+    // picks it up with everything else.
+    await syncItemReminder(program, created as unknown as ReminderItem)
 
     return res.status(201).json({ item: created })
   } catch (err) {

@@ -333,10 +333,18 @@ const positions = () => items().map((i) => `${i.id}@${i.sequence_position}`)
     // The whole position goes, not just the heading.
     eq('both rows at position 2 are gone', tables.client_program_items.filter((i: any) => ['w2', 'm2'].includes(i.id)).length, 0)
 
-    // A deleted task whose reminder is still queued emails the client about work
-    // that no longer exists — and once the row is gone there is no message id
-    // left to find.
-    eq('its reminder was cancelled at Resend', resendCancels, ['msg-2'])
+    // TWO REASONS A MESSAGE COMES OFF THE QUEUE HERE, and both are the same
+    // property: a queued reminder must never name a date the plan no longer has.
+    //
+    //   msg-2  the row was DELETED. Cancelled before the delete, because once
+    //          the row is gone there is no message id left to find.
+    //   msg-3  the row SURVIVED but moved from position 3 to 2, so its derived
+    //          due date moved with it and the old reminder is now wrong.
+    //
+    // msg-1 is absent on purpose: position 1 did not move, its date did not
+    // change, and re-queueing it would swap a correct scheduled message for an
+    // identical one — churn that reads exactly like a real change.
+    eq('the deleted row and the moved row both come off the queue', resendCancels, ['msg-2', 'msg-3'])
 
     // NO GAP. 1,2,3,4,6,7 is a state resequence's own contiguity rule rejects —
     // reachable through the API and refused by the API.

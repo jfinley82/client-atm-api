@@ -2,8 +2,9 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 
 const FUNNEL_PUBLIC_DOMAIN = process.env.FUNNEL_PUBLIC_DOMAIN || 'freeminiworkshop.com'
-import { sanitizeBrandColor, sanitizeBrandFont, sanitizeTracking, Tracking, DEFAULT_BRAND_PRIMARY, DEFAULT_BRAND_SECONDARY } from '../../lib/funnels'
-import { loadBusinessSettings, isValidHttpUrl, BusinessSettings, Legal } from '../../lib/businessSettings'
+import { sanitizeTracking, Tracking } from '../../lib/funnels'
+import { loadBusinessSettings, isValidHttpUrl, Legal } from '../../lib/businessSettings'
+import { brandKit, firstUrl, type Brand } from '../../lib/brandKit'
 import { funnelBookingQuestions, BookingQuestion } from '../../lib/bookingQuestions'
 import { gateApplies } from '../../lib/applicationGate'
 
@@ -123,39 +124,11 @@ function logEvent(funnelId: string, eventType: string): void {
 
 // ---- rendering ----------------------------------------------------------
 
-type Brand = { primary: string; secondary: string; isDark: boolean; text: string; bg: string; muted: string; card: string; font: string }
+// brandKit and firstUrl live in lib/brandKit.ts. They moved there when the
+// client portal became a third surface painting the same coach's colours; a
+// funnel page and a portal that disagree about a background is a bug with no
+// obvious owner.
 export type Branding = { brand: Brand; head: string; logoUrl: string | null; headshotUrl: string | null; businessName: string | null; legal: Legal; cookieNotice: boolean }
-
-// First value that is a usable http(s) URL. Used for the logo/headshot precedence
-// chain; re-validating here means a per-funnel value written before the URL check
-// existed still can't render a javascript: src.
-function firstUrl(...candidates: unknown[]): string | null {
-  for (const c of candidates) {
-    if (typeof c === 'string' && c.trim() && isValidHttpUrl(c.trim())) return c.trim()
-  }
-  return null
-}
-
-function brandKit(settings: BusinessSettings): Brand {
-  // Business-global brand — one set of colors/font/theme for every funnel this
-  // owner has. Sanitize on read — every value is emitted into <style>/<script>,
-  // so it must be a validated color / allowlisted font or fall back to a safe
-  // default, whether or not it already passed validation on write.
-  const primary = sanitizeBrandColor(settings.brand_primary_color, DEFAULT_BRAND_PRIMARY)
-  const secondary = sanitizeBrandColor(settings.brand_secondary_color, DEFAULT_BRAND_SECONDARY)
-  const isDark = settings.theme_mode !== 'light'
-  const font = sanitizeBrandFont(settings.brand_font)
-  return {
-    primary,
-    secondary,
-    isDark,
-    font,
-    text: isDark ? '#ffffff' : primary,
-    bg: isDark ? primary : '#ffffff',
-    muted: isDark ? 'rgba(255,255,255,.72)' : 'rgba(2,12,49,.72)',
-    card: isDark ? 'rgba(255,255,255,.06)' : 'rgba(2,12,49,.04)',
-  }
-}
 
 // Ad-pixel <head> injection. Every interpolated ID comes from sanitizeTracking,
 // so it matches a strict prefix + [A-Z0-9]/digits charset with no quote, angle

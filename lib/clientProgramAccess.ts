@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import type { ProgramRow } from './clientProgramSerializers'
+import { verifyProgramToken } from './funnelLeadToken'
 
 // ONE OWNERSHIP CHECK for every client-program route.
 //
@@ -34,6 +35,45 @@ export async function loadOwnedProgram(userId: string, programId: string): Promi
  * URL is the only thing being authorized. Same shape as the item-completion
  * rule: the parent authorizes, the child must prove it belongs to that parent.
  */
+/**
+ * THE CLIENT'S SIDE OF THE SAME QUESTION.
+ *
+ * `api/client/**` has no session and no user id — the token IS the credential,
+ * and it names exactly one program. Every client route resolves it here so the
+ * four checks below cannot be spelled differently in four files:
+ *
+ * 1. The signature verifies and the token has not expired  -> otherwise 401.
+ * 2. A program with that id exists.
+ * 3. Its `portal_token_version` still equals the version in the payload. This
+ *    is the revocation: bumping the column invalidates every link ever mailed,
+ *    including one captured out of an email months ago.
+ * 4. Its status is `active`. A draft was never sent; a canceled program is not
+ *    the client's any more.
+ *
+ * 2, 3 and 4 all answer 404, deliberately and identically. A 403 on a stale
+ * token would confirm the program is real to whoever presented it, and
+ * distinguishing "revoked" from "never existed" tells an attacker which ids to
+ * keep trying.
+ *
+ * A verified token is NOT authorization on its own — it names a program, so a
+ * child row reached through it must still prove it belongs to that program.
+ * `loadOwnedChild` does that half, with the token's programId as the parent.
+ */
+export type TokenLoad = { ok: true; program: ProgramRow } | { ok: false; status: 401 | 404; error: string }
+
+export async function loadTokenProgram(token: unknown): Promise<TokenLoad> {
+  const claim = verifyProgramToken(token)
+  if (!claim) return { ok: false, status: 401, error: 'invalid_token' }
+
+  const { data } = await supabase.from('client_programs').select(PROGRAM_COLUMNS).eq('id', claim.programId).maybeSingle()
+  if (!data) return { ok: false, status: 404, error: 'not_found' }
+  const program = data as unknown as ProgramRow
+
+  if (program.portal_token_version !== claim.version) return { ok: false, status: 404, error: 'not_found' }
+  if (program.status !== 'active') return { ok: false, status: 404, error: 'not_found' }
+  return { ok: true, program }
+}
+
 export async function loadOwnedChild<T extends { program_id?: string }>(
   table: string,
   columns: string,
