@@ -3,6 +3,7 @@ import { SignJWT, jwtVerify } from 'jose'
 import { supabase } from './supabase'
 import { encryptToken, decryptToken } from './cryptoTokens'
 import { warnIfDeploymentHost } from './deploymentHosts'
+import { InvalidReason, blocksRefresh, isInvalidReason } from './calendarConnectionHealth'
 import type { Interval } from './availability'
 
 // Google Calendar OAuth (server-side auth-code flow) + token refresh + free/busy.
@@ -102,16 +103,70 @@ type TokenResponse = {
   error_description?: string
 }
 
+/**
+ * A token-endpoint failure, carrying WHY rather than a sentence about why.
+ *
+ * This used to be `new Error('google token 400: invalid_grant …')` and the
+ * caller caught everything — including the fetch rejection — into one
+ * `return null`. Nothing downstream could tell "this coach revoked us" from
+ * "Google was briefly down", and a column that says invalid_grant when Google
+ * was merely down is worse than no column at all: it tells a working coach to
+ * reconnect, and teaches them to ignore the next warning.
+ *
+ * `code` is Google's own `error` field. It is NULL for a transport failure —
+ * timeout, DNS, connection reset — because there was no response to read one
+ * from, and null is the value that means "no evidence about the connection".
+ */
+export class GoogleTokenError extends Error {
+  readonly code: string | null
+  readonly status: number | null
+  constructor(message: string, opts: { code: string | null; status: number | null }) {
+    super(message)
+    this.name = 'GoogleTokenError'
+    this.code = opts.code
+    this.status = opts.status
+  }
+}
+
 async function tokenRequest(body: Record<string, string>): Promise<TokenResponse> {
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(body).toString(),
-    signal: AbortSignal.timeout(15_000),
-  })
+  let res: Response
+  try {
+    res = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(body).toString(),
+      signal: AbortSignal.timeout(15_000),
+    })
+  } catch (err) {
+    // Never reached the server, so we learned nothing about the grant.
+    throw new GoogleTokenError(`google token transport: ${(err as Error)?.message || err}`, {
+      code: null,
+      status: null,
+    })
+  }
   const data = (await res.json().catch(() => ({}))) as TokenResponse
-  if (!res.ok) throw new Error(`google token ${res.status}: ${data.error || ''} ${data.error_description || ''}`)
+  if (!res.ok) {
+    throw new GoogleTokenError(
+      `google token ${res.status}: ${data.error || ''} ${data.error_description || ''}`,
+      { code: typeof data.error === 'string' ? data.error : null, status: res.status }
+    )
+  }
   return data
+}
+
+/**
+ * Which stored reason a failure justifies, or null to record nothing.
+ *
+ * Only the two codes that are actually evidence about the connection map to a
+ * reason. A 500, a timeout, a malformed request, an unrecognised code — all
+ * record nothing, because the column has to stay trustworthy or the notification
+ * built on it is noise.
+ */
+export function invalidReasonForTokenError(err: unknown): InvalidReason | null {
+  if (!(err instanceof GoogleTokenError)) return null
+  if (err.code === 'invalid_grant') return 'invalid_grant'
+  if (err.code === 'invalid_client') return 'invalid_client'
+  return null
 }
 
 export async function exchangeCode(code: string): Promise<TokenResponse> {
@@ -198,6 +253,16 @@ export async function saveGoogleConnection(
     scope: tokens.scope ?? GOOGLE_SCOPES.join(' '),
     connected_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
+    // RECONNECTING CLEARS THE HEALTH COLUMNS, AND THIS WILL NOT HAPPEN BY
+    // ACCIDENT. PostgREST's merge upsert updates only the columns present in the
+    // payload — every column it does not name keeps its old value. Omit these
+    // two and a coach who reconnects successfully keeps invalid_since from the
+    // previous failure, so their freshly-working calendar reports
+    // needs_reconnect forever and the only fix they have is the one they just
+    // did. tests/calendarConnectionHealth.test.ts drives the real upsert path
+    // for exactly this reason.
+    invalid_since: null,
+    invalid_reason: null,
   }
   const { error } = await supabase.from('calendar_connections').upsert(row, { onConflict: 'user_id,provider' })
   if (error) throw error
@@ -208,10 +273,41 @@ export async function saveGoogleConnection(
 // when the coach has no connection or the refresh fails.
 export type ValidToken = { access_token: string; calendar_id: string; calendar_email: string | null }
 
+/**
+ * Record that this connection is unusable — ONCE, on the null -> value
+ * transition, and never again until something clears it.
+ *
+ * `.is('invalid_since', null)` is what makes it a transition rather than a
+ * write. Two reasons it has to be:
+ *
+ *   1. invalid_since is a timestamp so it can answer HOW LONG this has been
+ *      broken. Re-stamping it on every failure turns that into "when did you
+ *      last look at it" — and since status is now a discoverer, a coach
+ *      reloading the page would be the thing overwriting it.
+ *   2. The transition is the trigger a notification wants. Making the write
+ *      naturally once means the email is naturally once, with no second
+ *      mechanism to keep in sync.
+ *
+ * UPDATED_AT IS DELIBERATELY NOT TOUCHED. It tracks successful token work, and
+ * `updated_at > connected_at` is the only evidence we have that a refresh has
+ * ever succeeded for a connection — it is how the Google OAuth client identity
+ * was confirmed from production data alone on 2026-08-08. Bumping it on a
+ * FAILURE would destroy that inference silently.
+ */
+async function markConnectionInvalid(userId: string, reason: InvalidReason): Promise<void> {
+  const { error } = await supabase
+    .from('calendar_connections')
+    .update({ invalid_since: new Date().toISOString(), invalid_reason: reason })
+    .eq('user_id', userId)
+    .eq('provider', 'google')
+    .is('invalid_since', null)
+  if (error) console.error('[googleCalendar] could not record connection failure', error)
+}
+
 export async function getValidAccessToken(userId: string): Promise<ValidToken | null> {
   const { data: conn } = await supabase
     .from('calendar_connections')
-    .select('access_token, refresh_token, expires_at, calendar_id, calendar_email')
+    .select('access_token, refresh_token, expires_at, calendar_id, calendar_email, invalid_since, invalid_reason')
     .eq('user_id', userId)
     .eq('provider', 'google')
     .maybeSingle()
@@ -219,6 +315,18 @@ export async function getValidAccessToken(userId: string): Promise<ValidToken | 
   if (!conn) return null
   const calendarId = conn.calendar_id || 'primary'
   const calendarEmail = (conn.calendar_email as string | null) ?? null
+
+  // KNOWN BROKEN, AND ONLY A RECONNECT CAN FIX IT — so do not call out.
+  //
+  // Before the health columns, every settings load and every lead hitting the
+  // booking page fired a refresh that was going to fail again for the same
+  // reason. Returning the cached access token instead is not an option either:
+  // invalid_grant means the whole grant is revoked, so that token is dead too,
+  // and handing it out moves the failure one layer out to where nothing records
+  // it. saveGoogleConnection clears these columns, so a reconnect is the way
+  // back and there is no state a coach cannot escape.
+  const storedReason = conn.invalid_reason
+  if (isInvalidReason(storedReason) && blocksRefresh(storedReason)) return null
 
   // Use the stored access token if it's still valid and decryptable.
   const notExpired = conn.access_token && conn.expires_at && new Date(conn.expires_at).getTime() > Date.now() + 60_000
@@ -228,7 +336,14 @@ export async function getValidAccessToken(userId: string): Promise<ValidToken | 
   }
 
   const refreshToken = decryptToken(conn.refresh_token as string | null)
-  if (!refreshToken) return null
+  if (!refreshToken) {
+    // A refresh token we cannot decrypt is unusable for the same reason a
+    // revoked one is: the key rotated, or the ciphertext is damaged. No network
+    // call is made or could help. Only recorded when a refresh token is actually
+    // stored — a row with none was never usable and has nothing to break.
+    if (conn.refresh_token) await markConnectionInvalid(userId, 'decrypt_failed')
+    return null
+  }
 
   try {
     const refreshed = await refreshAccessToken(refreshToken)
@@ -237,6 +352,11 @@ export async function getValidAccessToken(userId: string): Promise<ValidToken | 
       access_token: encryptToken(refreshed.access_token),
       expires_at: refreshed.expires_in ? new Date(Date.now() + refreshed.expires_in * 1000).toISOString() : null,
       updated_at: new Date().toISOString(),
+      // CLEARED IN THE SAME UPDATE, not a second write. Two writes can disagree,
+      // and the window between them is exactly when a concurrent read reports a
+      // working connection as broken.
+      invalid_since: null,
+      invalid_reason: null,
     }
     // Refresh tokens can rotate — persist the new one (encrypted) if present.
     if (refreshed.refresh_token) update.refresh_token = encryptToken(refreshed.refresh_token)
@@ -244,6 +364,10 @@ export async function getValidAccessToken(userId: string): Promise<ValidToken | 
     return { access_token: refreshed.access_token, calendar_id: calendarId, calendar_email: calendarEmail }
   } catch (err) {
     console.error('[googleCalendar] refresh failed', err)
+    // Only failures that are EVIDENCE about the connection are written down. A
+    // timeout or a 500 records nothing and leaves both columns as they were.
+    const reason = invalidReasonForTokenError(err)
+    if (reason) await markConnectionInvalid(userId, reason)
     return null
   }
 }
