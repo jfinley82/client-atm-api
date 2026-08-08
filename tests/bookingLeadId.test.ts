@@ -109,6 +109,13 @@ const MIGRATION = 'supabase/migrations/096_bookings_lead_id.sql'
 
     // Named explicitly, because a COUNT stays right while the wrong file is the
     // one writing. A count of two is satisfied by contacts.ts plus one.
+    //
+    // THIS LIST IS A CENSUS, DELIBERATELY, and that is the one case where a
+    // census is the right guard — the property being protected IS the size and
+    // membership of this set. So read a failure here as a PROMPT, not a
+    // breakage: a third writer is a decision about what lead_id means, and the
+    // argument to make is that the meaning changed, not that the list was
+    // out of date.
     for (const f of EXPECTED) ok(`${f} is one of them`, writers.includes(f))
 
     // The one that must never be.

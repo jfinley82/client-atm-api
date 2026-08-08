@@ -152,6 +152,11 @@ const MUST_FAIL: Array<[string, string]> = [
     // And the EIGHT that did exist now import the one owner. Named, because a
     // count stays right while the wrong file is the one that kept its copy.
     //
+    // A CENSUS ON PURPOSE. A ninth file legitimately needing to validate an
+    // address should be ADDED to this list, not cause the list to be deleted —
+    // read the red as a prompt to add it, and check while you are there that it
+    // imports rather than re-spelling the rule.
+    //
     // Eight, not six: my first grep looked for `[^@` and missed
     // lib/coachContacts.ts and lib/memberInvite.ts, which spell the same rule
     // `[^\s@,;]`. The broader predicate above is what found them — which is the

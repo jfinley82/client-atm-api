@@ -281,6 +281,46 @@ constraint the real thing imposes — the projection, the UNIQUE index, the CHEC
 - If every fixture already satisfies a guard, the mutation that guard exists to
   catch is untested. Add the fixture that violates it.
 
+### Pin the property, not the census
+
+**An assertion about the current state of the codebase passes until that state
+changes, and then fails for the wrong reason.** It is the stale-comment defect
+wearing a green check, and it is worse than the comment version for two reasons:
+a comment is read by someone who can weigh it, while a test is read as an
+invariant — and the entry above recommends *writing a test* as the cure for a
+stale comment, so the cure carries the disease.
+
+**The tell is the direction of the failure: it goes red on the FIX, not on a
+regression.** A guard that only ever fails when someone does correct work was
+never guarding anything.
+
+Two on 2026-08-08, both true when written:
+
+- `tests/clientProgramsMigration` asserted **"095 is the highest-numbered
+  migration"**. It went red the moment `096` landed, which is the one event it
+  should have been indifferent to. The property it was reaching for is that
+  numbers are **unique and contiguous** — two branches cannot both claim one, and
+  a gap cannot hide a file that was never applied. That stays true however many
+  arrive.
+- `tests/pgFilters` asserted **"the public opt-in validator accepts `%`"** as the
+  premise justifying `escapeLike`. Closing that hole in `lib/emailAddress.ts`
+  made the premise false, so the assertion failed on the fix. The premise that
+  actually survives is `foo_bar@example.com` — a real address that is *also* a
+  LIKE pattern, which no validator can reject without rejecting a real person.
+  Re-aimed there, it can never be closed, which is the point.
+
+The distinction, stated: **"there are five public writers" is a census.
+"every public writer is throttled" is a property.** Both can be checked by a
+sweep; only the second survives a sixth writer being added for good reason. When
+a census genuinely is the guard — as with the named writer sets in
+`publicWriteRateLimit` and `bookingLeadId` — say in the test that adding to the
+list is a decision, so the red is read as a prompt rather than a breakage.
+
+Not the same failure as a decorative fixture (`a@192.168.1.1` claiming to test an
+all-digits rule while actually being refused for label length). That one is
+"can this fixture tell the difference?" above, and only mutation finds it. This
+one is found by the calendar.
+
 ### Stale comments are defects
 
 A comment that was true of the previous design is a lie the next reader will act
