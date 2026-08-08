@@ -1,3 +1,4 @@
+import { isEmailAddress } from './emailAddress'
 import { Resend } from 'resend'
 import crypto from 'crypto'
 import { supabase } from './supabase'
@@ -191,7 +192,7 @@ export async function loadCoachBrand(userId: string): Promise<CoachBrand> {
   const firstName = rawName ? rawName.split(/\s+/)[0] : ''
   const businessName = settings.business_name || rawName || 'Your coach'
   const coachName = rawName || 'Your coach'
-  const replyTo = typeof user.email === 'string' && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(user.email) ? user.email : null
+  const replyTo = isEmailAddress(user.email) ? user.email : null
   return {
     // From display = the coach's first name, then business name, then a safe
     // default (sanitizeDisplayName returns 'Your coach' when its input is empty).

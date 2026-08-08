@@ -17,6 +17,7 @@ process.env.RESEND_API_KEY = 'stub-resend'
 
 import { projectSelect, ilikeMatches, countHeaders } from './support/postgrest'
 import { escapeLike, escapeForOr } from '../lib/pgFilters'
+import { isEmailAddress } from '../lib/emailAddress'
 import { createSessionToken } from '../lib/auth'
 
 type Handler = (req: any, res: any) => Promise<void>
@@ -45,6 +46,11 @@ const F1 = 'funnel-1'
 // As a LIKE pattern it matches every address in the table.
 const PLANTED = '%@%.%'
 const REAL = 'dana@example.invalid'
+// A REAL address that is also a LIKE pattern. `_` is legal atext and a wildcard,
+// so this passes every validator that does not reject real people — and matches
+// the victim below. This pair is why the escape outlives the validator.
+const PATTERNED = 'foo_bar@example.com'
+const PATTERNED_VICTIM = 'fooXbar@example.com'
 const PLANTED_LEAD = 'lead-planted'
 const REAL_LEAD = 'lead-real'
 const REAL_BOOKING = 'booking-real'
@@ -207,18 +213,30 @@ async function coach(handler: Handler, opts: { method?: string; query?: Record<s
     eq('and does NOT touch LIKE wildcards', escapeForOr('a%b_c'), 'a%b_c')
   }
 
-  console.log('\n-- THE FACT THIS ALL RESTS ON: a public validator that accepts `%` --')
+  console.log('\n-- THE FACT THIS ALL RESTS ON: a REAL address that is still a PATTERN --')
   {
-    // If this ever stops being true, the escaping above looks unnecessary and
-    // somebody removes it. Pinned against the real file so the premise cannot
-    // quietly become false.
-    const src = readFileSync('api/funnel/lead.ts', 'utf8')
-    const m = /!\/(\^[^/]+\$)\/\.test\(email\)/.exec(src)
-    ok('the opt-in email validator is where it was', m !== null, 'validator moved — re-derive this test')
-    const re = new RegExp(m![1])
-    ok('and it ACCEPTS the planted address', re.test(PLANTED), `${PLANTED} is no longer accepted — good, but re-check the readers`)
-    ok('as it does an ordinary one', re.test(REAL))
-    ok('while still rejecting junk', !re.test('not-an-email'))
+    // THIS BLOCK USED TO PIN A DIFFERENT PREMISE — that the public opt-in
+    // validator accepted `%`, which is why `%@%.%` could be planted through a
+    // form. lib/emailAddress.ts closed that door, so the old assertion would now
+    // fail on the fix rather than on a regression.
+    //
+    // The premise it was really protecting is the one below, and it survives the
+    // validator by construction: `_` is a LIKE wildcard AND legal in a local
+    // part, so a genuinely real address is simultaneously a pattern. No
+    // validator can reject `foo_bar@example.com` without rejecting a real
+    // person, which is exactly why escapeLike cannot be deleted on the grounds
+    // that "the input is validated now."
+    ok('a real address is accepted by the validator', isEmailAddress(PATTERNED))
+    ok('and it is a PATTERN that matches a different address', ilikeMatches(PATTERNED, PATTERNED_VICTIM))
+    ok('escaped, it matches only itself', !ilikeMatches(escapeLike(PATTERNED), PATTERNED_VICTIM))
+    ok('and still matches itself', ilikeMatches(escapeLike(PATTERNED), PATTERNED))
+
+    // The wildcard address is no longer creatable through a public form — that
+    // is the validator's whole contribution — but rows written before it, and
+    // any future path that does not validate, still reach the readers. The
+    // escape is what makes those safe, so the fixtures below keep using it.
+    ok('the wildcard address is now REFUSED at the door', !isEmailAddress(PLANTED))
+    ok('but it is still a pattern if it is already in the table', ilikeMatches(PLANTED, REAL))
   }
 
   console.log('\n-- THE WRITE: an outcome on a planted lead must not touch a real booking --')

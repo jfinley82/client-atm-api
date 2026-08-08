@@ -1,3 +1,4 @@
+import { isImportableEmailAddress } from './emailAddress'
 import { supabase } from './supabase'
 
 // The coach's own list. Account-level, deliberately not funnel_leads — see the
@@ -18,7 +19,14 @@ export type ParseResult = {
 // Deliberately permissive: this validates that an address is worth attempting,
 // not that it exists. Resend and the bounce webhook are the real filter, and a
 // stricter regex would silently drop deliverable addresses.
-const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/
+//
+// The rule itself moved to lib/emailAddress.ts. It was one of EIGHT copies of
+// the same regex, in three slightly different spellings — this one required
+// exactly one dot in the domain, lib/memberInvite.ts required one or more, and
+// the other six were a fourth variant. Nothing anywhere said they were meant to
+// agree, which is how a tightening in one place leaves the rest answering the
+// old question.
+
 
 const EMAIL_HEADERS = ['email', 'email address', 'e-mail', 'email_address']
 const NAME_HEADERS = ['first_name', 'first name', 'firstname', 'name', 'given name']
@@ -79,7 +87,7 @@ export function parseContactsCsv(raw: string): ParseResult {
   if (!headerHasEmail) {
     // No recognisable header — find the column holding an address in row one.
     const first = splitCsvLine(lines[0])
-    emailIdx = first.findIndex((c) => EMAIL_RE.test(c))
+    emailIdx = first.findIndex((c) => isImportableEmailAddress(c))
     nameIdx = -1
   }
 
@@ -92,10 +100,10 @@ export function parseContactsCsv(raw: string): ParseResult {
     const cells = splitCsvLine(line)
     // Fall back to scanning the row: exports move the email column around.
     const rawEmail =
-      (emailIdx >= 0 ? cells[emailIdx] : undefined) ?? cells.find((c) => EMAIL_RE.test(c)) ?? ''
+      (emailIdx >= 0 ? cells[emailIdx] : undefined) ?? cells.find((c) => isImportableEmailAddress(c)) ?? ''
     const email = rawEmail.trim().toLowerCase()
 
-    if (!EMAIL_RE.test(email)) {
+    if (!isImportableEmailAddress(email)) {
       invalid++
       continue
     }

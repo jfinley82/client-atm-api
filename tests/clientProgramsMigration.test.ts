@@ -44,14 +44,24 @@ const strip = (s: string) => s.replace(/--[^\n]*/g, '')
 const sql = strip(raw095)
 const sql094 = strip(raw094)
 
-console.log('\n-- numbering: 095 is next, and alone --')
+console.log('\n-- numbering: unique and contiguous, and 094 comes before 095 --')
 {
   eq('exactly one 095', files.filter((f) => f.startsWith('095_')).length, 1)
   eq('exactly one 094', files.filter((f) => f.startsWith('094_')).length, 1)
-  // Derived from the directory, never a literal: a hardcoded count above a
-  // table of a different size is one of this repo's recorded defects.
-  const highest = files[files.length - 1]
-  eq('095 is the highest-numbered migration', highest, '095_client_programs.sql')
+
+  // THIS USED TO ASSERT "095 IS THE HIGHEST", which was true when written and
+  // became false the moment 096 landed. A claim about the world with no expiry
+  // date — the exact shape CLAUDE.md warns about, and it cost a red gate on a
+  // legitimate migration rather than catching anything.
+  //
+  // The property it was reaching for is that numbers are UNIQUE and CONTIGUOUS,
+  // so two branches cannot both claim one and a gap cannot hide a file that was
+  // never applied. That stays true however many migrations arrive.
+  const numbers = files.map((f) => Number(f.slice(0, 3))).filter((n) => Number.isFinite(n))
+  eq('every migration number is unique', numbers.length, new Set(numbers).size)
+  const gaps = numbers.filter((n, i) => i > 0 && n !== numbers[i - 1] + 1)
+  eq('and the sequence has no gaps', gaps, [])
+  ok('094 sorts before 095', numbers.indexOf(94) < numbers.indexOf(95))
 }
 
 console.log('\n-- the two artifacts that decide program length must agree --')

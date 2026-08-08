@@ -406,6 +406,24 @@ to the pre-squash commit, so the branch reads as diverged. Nothing is at risk.
 Resync with `git checkout -B <branch> origin/main` then push
 `--force-with-lease`.
 
+**FIRST MOVE IS `git ls-remote origin <branch> main`, not a push.** It reads the
+remote directly and answers the only question that matters — has the remote
+already got this — before you touch anything.
+
+**And the resync must fetch the BRANCH ref, not just `main`.** This entry has
+now cost time twice, the second time for a reason it did not mention:
+`git fetch --force origin refs/heads/main:refs/remotes/origin/main` updates
+`origin/main` and leaves `origin/<branch>` pointing at the pre-squash commit.
+`git status` then compares HEAD against that stale pointer and reports
+"22 commits ahead" of a branch that had already moved to exactly the same SHA as
+HEAD. Nothing was unpushed; the local *pointer* was old. Fetch both refs, or
+just `git fetch --force origin` and let it update everything.
+
+The general shape, which is the reusable part: **a remote-tracking ref is a
+cached claim about the remote, not the remote.** When git says a branch is ahead,
+behind or diverged, the first question is whether the cache is current — and
+`ls-remote` is the only thing in this list that asks the server.
+
 **A member's emailed reply arrives with our whole quoted email appended.**
 Gmail wraps the sender address onto its own line mid-header:
 `On Mon, … Micro-Training Method <\nnoreply@…> wrote:`. A `/On .* wrote:/`

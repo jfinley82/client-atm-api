@@ -1,3 +1,4 @@
+import { isEmailAddress } from './emailAddress'
 import { supabase } from './supabase'
 import { loadBusinessSettings } from './businessSettings'
 import { brandKit, firstUrl, type Brand } from './brandKit'
@@ -76,5 +77,5 @@ export async function loadPortalBrand(userId: string): Promise<PortalCoach> {
 }
 
 function isEmail(v: unknown): boolean {
-  return typeof v === 'string' && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)
+  return isEmailAddress(v)
 }

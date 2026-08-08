@@ -1,3 +1,4 @@
+import { isImportableEmailAddress } from './emailAddress'
 import crypto from 'crypto'
 import { supabase } from './supabase'
 import { sendMagicLinkEmail } from './email'
@@ -32,13 +33,17 @@ export function normalizeMemberEmail(raw: string): string {
 // a trailing comma, "jane at example dot com" — without rejecting a real
 // address for being unusual. A false reject in a bulk import is a row the admin
 // has to chase; a false accept is one bounced email.
-const EMAIL_SHAPE = /^[^\s@,;]+@[^\s@.,;]+(\.[^\s@.,;]+)+$/
-
+//
+// The rule moved to lib/emailAddress.ts (isImportableEmailAddress), which is the
+// same reasoning applied once instead of eight times. This file's copy differed
+// from lib/coachContacts.ts's in whether the domain could carry more than one
+// dot — two importers, two answers, no reason.
+//
 // Returns a plain boolean, NOT a `value is string` predicate: narrowing here
 // would type the negative branch of an already-string caller as `never`, and
 // the rejection path needs to echo the offending value back to the admin.
 export function isPlausibleEmail(value: unknown): boolean {
-  return typeof value === 'string' && EMAIL_SHAPE.test(value.trim())
+  return isImportableEmailAddress(typeof value === 'string' ? value.trim() : value)
 }
 
 // ── Invites ──────────────────────────────────────────────────────────────────

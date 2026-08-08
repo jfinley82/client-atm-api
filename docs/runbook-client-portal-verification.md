@@ -191,6 +191,27 @@ Pick an item id out of `this_week.items`.
   email** — expect `404`. Read the new `portal_url` from the coach detail
   endpoint — expect `200`.
 
+### 8b. The email validator — two POSTs, no side effects
+
+Not part of the portal, but it is the other thing that cannot be driven from a
+build machine: both public entry points are POST-only, so nothing outside a
+human's terminal can exercise them.
+
+`POST /api/funnel/lead` with `{ "subdomain": "<a live funnel>", "email": "%@%.%" }`
+
+- **Expect `400 {"error":"valid email required"}`.** Before this change it was a
+  `201` and a junk lead row.
+- Repeat with `{ "email": "foo_bar@example.com" }` — **expect `201`.** That
+  address is real, and it is also a LIKE pattern, which is exactly why the
+  escaping stays. If this one 400s, the validator is too strict and is costing
+  real signups.
+- Repeat with `{ "email": "foo%bar@example.com" }` — **expect `201`** for the
+  same reason.
+- Delete the two leads it creates.
+
+`POST /api/calendar/book` with `%@%.%` should likewise **400** rather than
+reserving a slot. It is the second public door and writes `bookings.email`.
+
 ### 9. Clean up
 
 `PATCH /api/client-programs/<id>` with `{ "status": "canceled" }`, then delete

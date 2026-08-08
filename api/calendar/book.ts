@@ -1,5 +1,7 @@
+import { isEmailAddress } from '../../lib/emailAddress'
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
+import { escapeLike } from '../../lib/pgFilters'
 import { getSessionFromRequest, verifySessionToken } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
 import { isZoomConfigured, createZoomMeeting, slotMinutes } from '../../lib/zoom'
@@ -58,7 +60,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'slot_start (ISO datetime) required' })
   }
   if (!name) return res.status(400).json({ error: 'first_name and last_name required' })
-  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+  if (!isEmailAddress(email)) {
     return res.status(400).json({ error: 'valid email required' })
   }
 
@@ -139,22 +141,46 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 // Log the server-side 'booked' funnel event, attributing to the lead by matching
 // email on that funnel (a client-supplied lead_id is never trusted). Best-effort.
 // Returns the resolved lead id (or null) so the caller can attribute the
-// confirmation email's opens/clicks to the same lead (Phase 5a).
-async function logFunnelBooked(funnelId: string, email: string): Promise<string | null> {
+// confirmation email's opens/clicks to the same lead (Phase 5a) AND so the
+// booking row can RECORD it — see bookings.lead_id (096).
+//
+// CASE-INSENSITIVE, because bookingKey is. This used to be `.eq('email', email)`
+// while every reader lowercased, so a lead who typed `Dana@` on the form and
+// `dana@` on the booking resolved to null here and to a real lead everywhere
+// else. Invisible only because production holds no mixed-case addresses — a
+// guard shaped like a container, passing until real data shares it. With 096
+// the two answers are no longer merely inconsistent: one of them is written
+// down.
+//
+// escapeLike, because ilike takes a PATTERN and this address came off a public
+// form — the same reason api/leads/[leadId]/outcome.ts escapes it.
+async function resolveFunnelLead(funnelId: string, email: string): Promise<string | null> {
   try {
     const { data: lead } = await supabase
       .from('funnel_leads')
       .select('id')
       .eq('funnel_id', funnelId)
-      .eq('email', email)
+      .ilike('email', escapeLike(email.trim()))
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
-    await supabase.from('funnel_events').insert({ funnel_id: funnelId, lead_id: lead?.id ?? null, event_type: 'booked' })
     return (lead?.id as string) ?? null
   } catch (err) {
-    console.error('[calendar/book] funnel booked event', err)
+    console.error('[calendar/book] resolve funnel lead', err)
     return null
+  }
+}
+
+// SPLIT FROM THE LOOKUP ABOVE, because they now happen at different moments.
+// The lead has to be RESOLVED before the booking row is inserted (096 records it
+// on the row); the 'booked' EVENT must not be logged until the reservation has
+// actually succeeded, or a slot_taken refusal leaves an event saying a call was
+// booked that never was. One lookup, two call sites, in the right order.
+async function logFunnelBooked(funnelId: string, leadId: string | null): Promise<void> {
+  try {
+    await supabase.from('funnel_events').insert({ funnel_id: funnelId, lead_id: leadId, event_type: 'booked' })
+  } catch (err) {
+    console.error('[calendar/book] funnel booked event', err)
   }
 }
 
@@ -265,6 +291,12 @@ async function bookCoachPath(
   // Reaching here, false means exactly one thing again.
   if (!(await isSlotOpen(owner, startIso))) return res.status(409).json({ error: 'slot_taken' })
 
+  // RESOLVED BEFORE THE INSERT, because the booking row records it (096).
+  // Best-effort and null-tolerant: a lookup failure must not refuse a booking,
+  // it just leaves the provenance unrecorded, which is the same state every row
+  // written before 096 is in.
+  const leadId = funnelRow ? await resolveFunnelLead(funnelRow.id as string, email) : null
+
   // Reserve first (per-coach unique index is the concurrency backstop), then
   // create the event — release the reservation if the event create fails.
   const { data: reserved, error: reserveErr } = await supabase
@@ -278,6 +310,15 @@ async function bookCoachPath(
       // Which funnel this call came from — the Upcoming Calls panel filters on
       // it. Absent for a coach-page booking, which came from no funnel.
       ...(funnelRow ? { funnel_id: funnelRow.id as string } : {}),
+      // RECORDED, not reconstructed (096). Already resolved above by
+      // logFunnelBooked; every reader used to rebuild it from
+      // (funnel_id, lower(email)) instead.
+      //
+      // NULL on a coach-page booking, permanently and correctly: there is no
+      // funnel to resolve from, and this call was created from no lead. The
+      // person may be a lead elsewhere in this coach's funnels — lib/contacts.ts
+      // attributes it there — but the column records PROVENANCE, not identity.
+      lead_id: leadId,
       name,
       email,
       start_time: startIso,
@@ -364,8 +405,8 @@ async function bookCoachPath(
     await supabase.from('bookings').update({ google_event_id: event.eventId, meeting_url: meetingUrl }).eq('id', reserved.id)
   }
 
-  // Funnel attribution only exists when a funnel does.
-  const leadId = funnelRow ? await logFunnelBooked(funnelRow.id as string, email) : null
+  // The reservation held, so the call really was booked — log it now.
+  if (funnelRow) await logFunnelBooked(funnelRow.id as string, leadId)
 
   // Confirmation + .ics to the lead (organizer = the coach's connected calendar),
   // and a best-effort notification to the coach. Never fail the booking on email.

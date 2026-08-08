@@ -1,3 +1,4 @@
+import { isEmailAddress } from '../../lib/emailAddress'
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { setCors } from '../../lib/cors'
@@ -31,7 +32,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const subdomain = typeof body.subdomain === 'string' ? body.subdomain.trim() : ''
   const funnelId = typeof body.funnel_id === 'string' ? body.funnel_id.trim() : ''
 
-  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+  if (!isEmailAddress(email)) {
     return res.status(400).json({ error: 'valid email required' })
   }
   if (!subdomain && !funnelId) {
