@@ -1,4 +1,5 @@
 import { API_URL } from './appUrls'
+import { funnelUrl } from './funnelDomain'
 import { isEmailAddress } from './emailAddress'
 import { Resend } from 'resend'
 import crypto from 'crypto'
@@ -683,8 +684,6 @@ export function composeEmailBody(raw: string, links: EmailLinks, buttonColor: st
   return { bodyHtml, cta, buttonRendered: primary?.emitted === true }
 }
 
-const PREVIEW_FUNNEL_DOMAIN = process.env.FUNNEL_PUBLIC_DOMAIN || 'freeminiworkshop.com'
-
 /**
  * The EmailLinks a PREVIEW should compose against — the Build wizard's email
  * pane and the "send a test" action both need the same ones, and they have to
@@ -712,7 +711,7 @@ const PREVIEW_FUNNEL_DOMAIN = process.env.FUNNEL_PUBLIC_DOMAIN || 'freeminiworks
 export async function resolvePreviewEmailLinks(
   userId: string
 ): Promise<{ links: EmailLinks; resolved: { base: string; has_funnel: boolean; guide_published: boolean } }> {
-  let base = `https://${PREVIEW_FUNNEL_DOMAIN}`
+  let base = funnelUrl()
   let hasFunnel = false
   try {
     const { data } = await supabase
@@ -723,7 +722,7 @@ export async function resolvePreviewEmailLinks(
       .limit(1)
     const subdomain = (data?.[0] as { subdomain?: unknown } | undefined)?.subdomain
     if (typeof subdomain === 'string' && subdomain.trim()) {
-      base = `https://${subdomain.trim()}.${PREVIEW_FUNNEL_DOMAIN}`
+      base = funnelUrl(subdomain)
       hasFunnel = true
     }
   } catch (err) {

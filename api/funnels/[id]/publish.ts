@@ -4,9 +4,7 @@ import { setCors } from '../../../lib/cors'
 import { requireFunnelBuilder } from '../../../lib/funnels'
 import { landingPageHasCopy } from '../../../lib/funnelLanding'
 import { generateFunnelCovers } from '../../../lib/funnelCovers'
-
-// The public host funnels are served under.
-const FUNNEL_DOMAIN = 'microtrainingmethod.com'
+import { funnelUrl } from '../../../lib/funnelDomain'
 
 // generateFunnelCovers launches headless Chromium (api/pdf/render.ts's same
 // @sparticuz/chromium + puppeteer-core pair) — enough time for 3 sequential
@@ -72,7 +70,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.error('[funnels/[id]/publish] cover generation', coverErr)
     }
 
-    const url = `https://${data.subdomain}.${FUNNEL_DOMAIN}`
+    const url = funnelUrl(data.subdomain)
     return res.status(200).json({ funnel: data, url })
   } catch (err) {
     console.error('[funnels/[id]/publish] POST', err)

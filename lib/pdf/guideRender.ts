@@ -1,4 +1,5 @@
 import { supabase } from '../supabase'
+import { funnelUrl, FUNNEL_PUBLIC_DOMAIN } from '../funnelDomain'
 import { buildGuideDocument, GuideBrand, NEUTRAL_ACCENT, accentShades } from './guideDoc'
 import { bookingQrDataUri } from './qr'
 import { loadBusinessSettings } from '../businessSettings'
@@ -15,8 +16,6 @@ import { ensureGuideCopy } from '../guideCopy'
 // (same source the framework/script docs use). Returns null when the coach has no
 // generation for the card. Does NOT launch chromium — the caller POSTs `html` to
 // /api/pdf/render for the actual PDF bytes.
-
-const FUNNEL_DOMAIN = process.env.FUNNEL_PUBLIC_DOMAIN || 'freeminiworkshop.com'
 
 type Any = Record<string, unknown>
 const obj = (v: unknown): Any => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Any) : {})
@@ -60,7 +59,7 @@ export async function buildGuideHtml(opts: { userId: string; token: string; card
   // link only renders when the coach has a funnel (a real training page exists).
   // Never an MTM link, never a minted token.
   const ink = accentShades(accent).ink
-  let bookingUrl = `https://${FUNNEL_DOMAIN}`
+  let bookingUrl = funnelUrl()
   let trainingUrl = ''
   const funnelRes = await supabase
     .from('funnels')
@@ -70,11 +69,11 @@ export async function buildGuideHtml(opts: { userId: string; token: string; card
     .limit(1)
   const subdomain = funnelRes.data?.[0]?.subdomain
   if (typeof subdomain === 'string' && subdomain.trim()) {
-    const base = `https://${subdomain.trim()}.${FUNNEL_DOMAIN}`
+    const base = funnelUrl(subdomain)
     bookingUrl = `${base}/?page=book`
     trainingUrl = `${base}/?page=training`
   }
-  let bookingDisplay = FUNNEL_DOMAIN
+  let bookingDisplay = FUNNEL_PUBLIC_DOMAIN
   try {
     bookingDisplay = new URL(bookingUrl).host
   } catch {
