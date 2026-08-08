@@ -1,3 +1,4 @@
+import { escapeLike } from '../../../lib/pgFilters'
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
 import { setCors, noStore } from '../../../lib/cors'
@@ -62,19 +63,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   return res.status(200).json({ ok: true })
 }
 
-/**
- * `ilike` IS A PATTERN, NOT A COMPARISON.
- *
- * Case-insensitivity is why this endpoint uses ilike at all — a client who typed
- * their address with a capital must still find their programme. But the value
- * goes to SQL as a LIKE pattern, so an unescaped `%` from a public form matches
- * EVERY row and posts one arbitrary client's link to their own inbox: a stranger
- * typing `%` mails somebody a letter they did not ask for. Same class as the
- * `.or()` filter-syntax injection in api/admin/support/tickets.ts — user input
- * reaching a PostgREST filter as syntax rather than as a value.
- *
- * `\` first, or it re-escapes the backslashes the other two branches just added.
- */
-function escapeLike(v: string): string {
-  return v.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
-}

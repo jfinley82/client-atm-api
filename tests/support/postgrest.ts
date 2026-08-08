@@ -116,3 +116,50 @@ export function projectSelect<T>(url: string, body: T, status = 200): T {
   if (Array.isArray(body)) return body.map((r) => projectRow(r, cols)) as unknown as T
   return projectRow(body, cols) as unknown as T
 }
+
+/**
+ * `ilike`/`like` MODELLED AS A PATTERN, because that is what Postgres does.
+ *
+ * A stub that compares the value literally cannot see the defect this exists to
+ * catch: an unescaped `%` from a stored address matches every row, and a
+ * literal-comparison stub reports a clean bill of health on precisely the input
+ * that is broken. Same class as the projection helper above — a mock that cannot
+ * answer wrongly cannot test the code that depends on it answering rightly.
+ *
+ * `\` is the escape character, so `\%` is a literal per cent.
+ */
+export function ilikeMatches(pattern: string, value: unknown): boolean {
+  const special = /[.*+?^${}()|[\]\\]/g
+  let rx = ''
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i]
+    if (ch === '\\') {
+      const next = pattern[++i]
+      if (next !== undefined) rx += next.replace(special, '\\$&')
+      continue
+    }
+    if (ch === '%') rx += '.*'
+    else if (ch === '_') rx += '.'
+    else rx += ch.replace(special, '\\$&')
+  }
+  return new RegExp(`^${rx}$`, 'i').test(String(value ?? ''))
+}
+
+/**
+ * `count: 'exact'` LIVES IN A HEADER, not in the body.
+ *
+ * PostgREST answers a counted request with `Content-Range: 0-24/3573`, and
+ * supabase-js reads the total from there. A stub that returns only a body leaves
+ * `count` undefined, so `count ?? 0` is 0 on every path — and any assertion about
+ * a count passes whatever the query actually matched. Measured: the discovery
+ * -count guard could not fail until this existed.
+ *
+ * `head: true` additionally means the body is empty and only the count matters.
+ */
+export function countHeaders(url: string, init: any, total: number): Record<string, string> {
+  const h = init?.headers
+  const prefer = h && typeof h.get === 'function' ? h.get('Prefer') : h?.Prefer ?? h?.prefer
+  if (!/count=/.test(String(prefer || ''))) return {}
+  void url
+  return { 'Content-Range': total === 0 ? `*/0` : `0-${total - 1}/${total}` }
+}

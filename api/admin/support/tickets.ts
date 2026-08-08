@@ -1,3 +1,4 @@
+import { escapeForOr } from '../../../lib/pgFilters'
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
 import { setCors, noStore } from '../../../lib/cors'
@@ -27,9 +28,6 @@ function strParam(v: unknown): string {
 
 // PostgREST `or=` is comma-separated, so a comma in user input would be read as
 // another condition. Parens and backslashes end the value early the same way.
-function escapeForOr(s: string): string {
-  return s.replace(/[,()\\]/g, ' ')
-}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return

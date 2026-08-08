@@ -1,3 +1,4 @@
+import { escapeLike } from '../../lib/pgFilters'
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { setCors, noStore } from '../../lib/cors'
@@ -67,18 +68,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // BOTH ownership arms — see lib/coachBookings.ts. ilike, not eq, on the
       // address: a booking is taken from a form the lead retypes, so case can
       // drift from the opt-in row, and buildBookingIndex normalizes the same way.
+      //
+      // ESCAPED, because ilike takes a pattern. funnel_leads.email is written by
+      // a PUBLIC form whose validator accepts `%`, so an unescaped value here
+      // would show one planted lead every booking the coach owns.
       loadOwnedActiveBookings<BookingRow>({
         userId,
         funnelIds: ownedFunnelIds,
         columns: BOOKING_SELECT,
         status: 'any',
-        refine: (q) => q.ilike('email', (lead as any).email),
+        refine: (q) => q.ilike('email', escapeLike(String((lead as any).email || ''))),
       }),
       supabase
         .from('funnel_leads')
         .select('id, funnel_id, email, created_at')
         .in('funnel_id', ownedFunnelIds.length ? ownedFunnelIds : ['00000000-0000-0000-0000-000000000000'])
-        .ilike('email', (lead as any).email),
+        .ilike('email', escapeLike(String((lead as any).email || ''))),
       supabase
         .from('funnel_lead_notes')
         .select('id, body, created_at, author_user_id')
