@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { requireActiveUser, getSessionFromRequest } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
+import { API_URL } from '../../lib/appUrls'
 import { buildGuideHtml } from '../../lib/pdf/guideRender'
 import { storeGuidePdf } from '../../lib/guideStorage'
 
@@ -16,7 +17,6 @@ import { storeGuidePdf } from '../../lib/guideStorage'
 // A render + chromium call can stack, so this function gets 60s.
 export const config = { maxDuration: 60 }
 
-const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (setCors(req, res)) return

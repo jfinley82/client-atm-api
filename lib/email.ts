@@ -1,3 +1,4 @@
+import { API_URL } from './appUrls'
 import { isEmailAddress } from './emailAddress'
 import { Resend } from 'resend'
 import crypto from 'crypto'
@@ -17,7 +18,8 @@ export const resend = new Resend(process.env.RESEND_API_KEY!)
 // (GET /api/auth/callback), which validates the magic token and then
 // 302-redirects to the frontend's /auth-callback route with a session token.
 // Pointing the email at the frontend 404s: the SPA has no /auth/callback.
-const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
+// API_URL now has ONE owner — see lib/appUrls.ts. This was one of three
+// identical copies, each defaulting to the raw Vercel deployment URL.
 // The FRONTEND's own base URL — used for coach-notification links that point
 // INTO the builder (e.g. a specific lead), as opposed to API_URL above.
 

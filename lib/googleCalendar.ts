@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import { SignJWT, jwtVerify } from 'jose'
 import { supabase } from './supabase'
 import { encryptToken, decryptToken } from './cryptoTokens'
+import { warnIfDeploymentHost } from './deploymentHosts'
 import type { Interval } from './availability'
 
 // Google Calendar OAuth (server-side auth-code flow) + token refresh + free/busy.
@@ -71,9 +72,17 @@ export async function verifyOAuthState(state: string): Promise<{ userId: string;
 // ---- OAuth URLs / token exchange --------------------------------------------
 
 export function buildConsentUrl(state: string): string {
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI!
+  // Google prints this host on the consent screen and it sits in the address bar
+  // through the round trip, so a working-but-wrong value is visible to the coach
+  // and to nobody else. lib/deploymentHosts.ts carries the reasoning; checked
+  // here rather than at module load because this is the moment the value becomes
+  // customer-facing.
+  warnIfDeploymentHost('GOOGLE_REDIRECT_URI', redirectUri)
+
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID!,
-    redirect_uri: process.env.GOOGLE_REDIRECT_URI!,
+    redirect_uri: redirectUri,
     response_type: 'code',
     scope: GOOGLE_SCOPES.join(' '),
     access_type: 'offline', // ask for a refresh token

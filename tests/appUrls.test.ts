@@ -6,6 +6,14 @@
 
 import fs from 'fs'
 import path from 'path'
+// STATIC IMPORT, NOT `require(cwd + 'lib/appUrls.ts')`. That is what this line
+// used to be, and it worked only for as long as appUrls.ts had no relative
+// imports of its own. Node loads a .ts with `export` in it as ESM, and ESM
+// resolution rejects an extensionless specifier — so the moment appUrls.ts
+// gained `from './deploymentHosts'`, the require blew up with
+// ERR_MODULE_NOT_FOUND naming a file that is sitting right there. esbuild
+// bundles a static import, which is how every other test reaches a lib.
+import { appUrl } from '../lib/appUrls'
 
 let pass = 0, fail = 0
 function ok(label: string, cond: boolean, extra?: string) {
@@ -50,7 +58,6 @@ console.log('\n-- appUrl() joins without doubling or dropping the slash --')
 {
   // The handoff builds `<base>/coach?t=…`; a trailing slash on the env var
   // would otherwise produce //coach.
-  const { appUrl } = require(path.join(process.cwd(), 'lib/appUrls.ts')) as { appUrl: (b: string, p: string) => string }
   ok('plain base', appUrl('https://a.example', 'coach') === 'https://a.example/coach')
   ok('trailing slash on the base', appUrl('https://a.example/', 'coach') === 'https://a.example/coach')
   ok('several trailing slashes', appUrl('https://a.example///', 'coach') === 'https://a.example/coach')

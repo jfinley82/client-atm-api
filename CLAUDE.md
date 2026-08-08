@@ -476,6 +476,16 @@ cached claim about the remote, not the remote.** When git says a branch is ahead
 behind or diverged, the first question is whether the cache is current — and
 `ls-remote` is the only thing in this list that asks the server.
 
+**`ERR_MODULE_NOT_FOUND` in the gate, naming a lib file that is sitting right
+there.** A test reached a lib with `require(path.join(process.cwd(), 'lib/x.ts'))`
+instead of a static import. Node loads a `.ts` containing `export` as ESM, and
+ESM resolution rejects an extensionless relative specifier — so that require
+works right up until the lib gains its first `from './sibling'`, then fails
+naming the sibling. The failure is in the *importer*'s import, so the file named
+in the error is the innocent one. Reach a lib with a normal `import` and let
+esbuild bundle it, as every other test file does; `tests/appUrls.test.ts` is
+where this bit.
+
 **A member's emailed reply arrives with our whole quoted email appended.**
 Gmail wraps the sender address onto its own line mid-header:
 `On Mon, … Micro-Training Method <\nnoreply@…> wrote:`. A `/On .* wrote:/`

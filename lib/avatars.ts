@@ -14,9 +14,11 @@
 // picked deterministically from a stable seed, so the same persona always resolves
 // to the same face and the Audience band + Launch tile stay in sync.
 
+import { API_URL } from './appUrls'
 import avatarManifest from '../public/avatars/manifest.json'
 
-const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
+// API_URL now has ONE owner — see lib/appUrls.ts. This was one of three
+// identical copies, each defaulting to the raw Vercel deployment URL.
 
 export type AvatarGender = 'feminine' | 'masculine' | 'neutral'
 

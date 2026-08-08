@@ -1,3 +1,4 @@
+import { API_URL } from './appUrls'
 import { supabase } from './supabase'
 import { bookingTimeLabel } from './bookingTimezone'
 import {
@@ -52,7 +53,8 @@ const BOOK_A_CALL_OFFSETS = [0, 2 * DAY, 4 * DAY]
 // attendance is marked rather than from the call's start time.
 const POST_CALL_OFFSETS = [0, 1 * DAY, 4 * DAY]
 
-const API_URL = process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
+// API_URL now has ONE owner — see lib/appUrls.ts. This was one of three
+// identical copies, each defaulting to the raw Vercel deployment URL.
 
 const NURTURE_SUBJECTS = ['Your training is ready', 'Did you get a chance to watch?', 'Last chance to watch the training']
 const BOOK_SUBJECTS = ['Ready for the next step?', 'One quick thing', 'A final invitation']
