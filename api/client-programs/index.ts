@@ -1,3 +1,4 @@
+import { escapeLike } from '../../lib/pgFilters'
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { setCors, noStore } from '../../lib/cors'
@@ -289,11 +290,6 @@ async function resolveClientTimezone(userId: string, clientEmail: string, suppli
   }
 }
 
-// `ilike` is a pattern: a `%` or `_` in a stored address would widen the match
-// to rows belonging to someone else. Same escaping as the public recovery route.
-function escapeLike(v: string): string {
-  return v.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
-}
 
 // Lead name first (what the coach knows them as), then the address's local part.
 // Never empty — an unnamed client renders as a blank row the coach cannot read.

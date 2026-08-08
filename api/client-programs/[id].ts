@@ -1,3 +1,4 @@
+import { escapeLike } from '../../lib/pgFilters'
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { setCors, noStore } from '../../lib/cors'
@@ -121,7 +122,8 @@ async function getProgram(res: VercelResponse, program: ProgramRow) {
     .from('bookings')
     .select('id', { count: 'exact', head: true })
     .eq('coach_user_id', program.user_id)
-    .ilike('email', program.client_email)
+    // Escaped: ilike is a pattern, and client_email is caller-supplied on create.
+    .ilike('email', escapeLike(program.client_email))
     .is('program_id', null)
 
   const portalUrl = programPortalUrl(program)

@@ -1,3 +1,4 @@
+import { escapeLike } from '../../../lib/pgFilters'
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../../lib/supabase'
 import { setCors, noStore } from '../../../lib/cors'
@@ -117,8 +118,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .from('bookings')
       .select('id, funnel_id, email, name, start_time, attended, status, zoom_join_url, meeting_url, custom_answers, created_at')
       .eq('funnel_id', (lead as any).funnel_id)
-      // ilike — same case-insensitive match the list uses (bookingKey).
-      .ilike('email', (lead as any).email)
+      // ilike — same case-insensitive match the list uses (bookingKey) — and
+      // ESCAPED, because this read feeds a WRITE. `%@%.%` passes the public
+      // opt-in's own email validator and, unescaped, matches every booking on
+      // the funnel; pickBooking then hands the newest one to the `no_show`
+      // update below. Recording an outcome on a planted lead would stamp
+      // attendance on a real customer's upcoming call and quietly drop it out of
+      // the coach's needs_outcome queue.
+      .ilike('email', escapeLike(String((lead as any).email || '')))
     let bookings = (bookingRows || []) as BookingRow[]
     let booking = pickBooking(bookings)
 

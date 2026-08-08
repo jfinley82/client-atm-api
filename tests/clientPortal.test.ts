@@ -16,7 +16,7 @@ process.env.JWT_SECRET = 'stub-secret'
 process.env.RESEND_API_KEY = 'stub-resend'
 process.env.APP_URL = 'https://app.microtrainingmethod.com'
 
-import { projectSelect } from './support/postgrest'
+import { projectSelect, ilikeMatches } from './support/postgrest'
 import { checkWrite, applyDefaults, CLIENT_PROGRAM_CONSTRAINTS, PG_UNIQUE_VIOLATION } from './support/pgConstraints'
 import { createSessionToken } from '../lib/auth'
 import { signProgramToken } from '../lib/funnelLeadToken'
@@ -191,25 +191,6 @@ function wantsObject(init: any): boolean {
   const h = init?.headers
   const accept = h && typeof h.get === 'function' ? h.get('Accept') : h?.Accept ?? h?.accept
   return /vnd\.pgrst\.object/.test(String(accept || ''))
-}
-
-// `ilike` IS A PATTERN. Modelled as one here on purpose: a stub that compared
-// the value literally would accept an unescaped `%` from the resend endpoint and
-// report a clean bill of health on the exact input that matches every row.
-function ilikeMatches(pattern: string, value: unknown): boolean {
-  let rx = ''
-  for (let i = 0; i < pattern.length; i++) {
-    const ch = pattern[i]
-    if (ch === '\\') {
-      const next = pattern[++i]
-      if (next !== undefined) rx += next.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      continue
-    }
-    if (ch === '%') rx += '.*'
-    else if (ch === '_') rx += '.'
-    else rx += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  }
-  return new RegExp(`^${rx}$`, 'i').test(String(value ?? ''))
 }
 
 function matches(url: string, row: Record<string, any>): boolean {
