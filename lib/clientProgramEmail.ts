@@ -1,3 +1,4 @@
+import { isEmailAddress } from './emailAddress'
 import { supabase } from './supabase'
 import {
   loadCoachBrand,
@@ -333,7 +334,7 @@ export async function notifyCoachSessionRequested(
     const to = (coach as { email?: string } | null)?.email
     // No resolvable address is a skip, never an error: the request itself has
     // already been stored and the coach will see it on their programme page.
-    if (!to || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return
+    if (!isEmailAddress(to)) return
 
     const rows = [
       ['Client', program.client_name],

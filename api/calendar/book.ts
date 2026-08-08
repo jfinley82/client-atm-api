@@ -1,3 +1,4 @@
+import { isEmailAddress } from '../../lib/emailAddress'
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
 import { escapeLike } from '../../lib/pgFilters'
@@ -59,7 +60,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'slot_start (ISO datetime) required' })
   }
   if (!name) return res.status(400).json({ error: 'first_name and last_name required' })
-  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+  if (!isEmailAddress(email)) {
     return res.status(400).json({ error: 'valid email required' })
   }
 

@@ -1,3 +1,4 @@
+import { isEmailAddress } from '../../lib/emailAddress'
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { requireActiveUser } from '../../lib/auth'
 import { setCors } from '../../lib/cors'
@@ -20,7 +21,6 @@ export const config = { maxDuration: 15 }
 const FROM_ADDRESS = 'noreply@mail.microtrainingmethod.com'
 const BODY_MAX = 20_000
 const SUBJECT_MAX = 500
-const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
 // Merge the recipient's first name into any [name]/{{name}} token the copy uses,
 // exactly as a real send would resolve it (blank name -> a neutral "there"). A
@@ -49,7 +49,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const subject = typeof body.subject === 'string' ? body.subject : ''
   const emailBody = typeof body.body === 'string' ? body.body : ''
 
-  if (!EMAIL_RE.test(to)) return res.status(400).json({ error: 'A valid recipient email is required.' })
+  if (!isEmailAddress(to)) return res.status(400).json({ error: 'A valid recipient email is required.' })
   if (subject.trim().length === 0) return res.status(400).json({ error: 'Subject is required.' })
   if (subject.length > SUBJECT_MAX) return res.status(400).json({ error: `Subject is too long (max ${SUBJECT_MAX}).` })
   if (emailBody.trim().length === 0) return res.status(400).json({ error: 'Body is required.' })
