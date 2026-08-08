@@ -34,12 +34,24 @@ const realWarn = console.warn
 let captured: string[] = []
 console.warn = (...a: unknown[]) => { captured.push(a.map(String).join(' ')) }
 
-function run(vercelEnv: string | undefined, entries: Array<[string, string | null | undefined]>) {
+// `env` is what process.env holds for the variables under test, which is the
+// thing the origin sentence reports. It is cleared between runs so a case that
+// sets a variable cannot make the NEXT case read as "set" — the same reason the
+// warned-set is reset.
+function run(
+  vercelEnv: string | undefined,
+  entries: Array<[string, string | null | undefined]>,
+  env: Record<string, string | undefined> = {}
+) {
   captured = []
   _resetDeploymentHostWarningsForTests()
   if (vercelEnv === undefined) delete process.env.VERCEL_ENV
   else process.env.VERCEL_ENV = vercelEnv
+  const touched = new Set([...entries.map(([n]) => n), ...Object.keys(env)])
+  for (const k of touched) delete process.env[k]
+  for (const [k, v] of Object.entries(env)) if (v !== undefined) process.env[k] = v
   for (const [name, value] of entries) warnIfDeploymentHost(name, value)
+  for (const k of touched) delete process.env[k]
   return captured
 }
 
@@ -90,7 +102,35 @@ function run(vercelEnv: string | undefined, entries: Array<[string, string | nul
     eq('five calls, one warning', captured.length, 1)
   }
 
-  console.log('\n-- it never throws, whatever it is handed --')
+  console.log('\n-- the line says whether the variable is SET or FALLING BACK --')
+{
+  // A VALUE CANNOT ANSWER THIS, and the answer sends the reader to a different
+  // place in the dashboard: add a variable, or edit one. The two cases below are
+  // identical in every respect except whether process.env holds the name — hold
+  // one variable at a time, or neither assertion is about the thing it names.
+  const setLine = run('production', [['API_URL', DEPLOY]], { API_URL: DEPLOY })[0] || ''
+  const fallbackLine = run('production', [['API_URL', DEPLOY]], {})[0] || ''
+
+  ok('set: says IS SET', /API_URL IS SET to this value/.test(setLine), setLine)
+  ok('set: does not say unset', !/IS NOT SET/.test(setLine), setLine)
+  ok('fallback: says IS NOT SET', /API_URL IS NOT SET/.test(fallbackLine), fallbackLine)
+  ok('fallback: names it a fallback', /built-in fallback/.test(fallbackLine), fallbackLine)
+  ok('fallback: does not say it is set', !/IS SET to this value/.test(fallbackLine), fallbackLine)
+
+  // Both still carry the variable and the value, which is what the line was for
+  // in the first place.
+  for (const [label, line] of [['set', setLine], ['fallback', fallbackLine]] as const) {
+    ok(`${label}: still names the variable`, line.includes('API_URL'), line)
+    ok(`${label}: still names the value`, line.includes(DEPLOY), line)
+  }
+
+  // The third case, which exists because smoothing it into "set" would
+  // misdescribe a value the caller transformed.
+  const otherLine = run('production', [['API_URL', DEPLOY]], { API_URL: STABLE })[0] || ''
+  ok('a differing env value is reported as its own case', /IS SET to https:\/\/api\.microtrainingmethod\.com/.test(otherLine), otherLine)
+}
+
+console.log('\n-- it never throws, whatever it is handed --')
   {
     for (const v of ['not a url', '', null, undefined, 'ftp://x', 'https://']) {
       let threw = false

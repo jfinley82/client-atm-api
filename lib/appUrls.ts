@@ -30,21 +30,28 @@ export const APP_URL = process.env.APP_URL || 'https://app.microtrainingmethod.c
  * link on a deployment host is permanent in an inbox and still clicked months
  * later, and the host is derived from a Vercel account and project name.
  *
- * THE DEFAULT IS A DEPLOYMENT HOST ON PURPOSE, and it is the one thing in this
- * file that is not what it looks like.
+ * THE DEFAULT IS A DEPLOYMENT HOST, AND THAT IS NOW A LAG RATHER THAN A CHOICE.
  *
  * This was briefly `https://api.microtrainingmethod.com`, on the reasoning that
- * a stable domain is obviously better than a Vercel-derived one. That host DOES
- * NOT EXIST — no A record, and not among the project's domains, which are
- * freeminiworkshop.com, *.freeminiworkshop.com and the *.vercel.app aliases. So
- * the "fix" would have replaced an ugly-but-working login link with a dead one,
- * which is exactly the trade warnIfDeploymentHost refuses to make. A stable
- * default cannot be invented; it has to be a domain someone has pointed at this
- * project.
+ * a stable domain beats a Vercel-derived one. It was reverted on 2026-08-08
+ * because that host had no A record at the time — measured at 13:20 UTC, and
+ * true then. It was pointed at this project later the same day, and at 17:35 it
+ * resolves to 216.150.1.193 / 216.150.16.193 and answers authenticated API
+ * requests. The earlier sentence in this comment asserted it did not exist,
+ * which stopped being true a few hours after it was written: a claim about the
+ * world is a snapshot with no expiry date, including one made honestly.
  *
- * So the default stays on the host that actually serves this project, and the
- * warning below is what keeps it visible. Set API_URL, or add an api.* domain to
- * the project and change this line — either way the log line stops.
+ * So the default is no longer justified by "there is nowhere better to point".
+ * It stays only because moving it changes the host in magic-link login emails,
+ * which is a coach-visible change and somebody else's call. The cheaper route
+ * needs no code at all: set API_URL on Production and the warning below stops.
+ *
+ * NOTE FOR WHOEVER CHECKS: Vercel's project API does not list api.* among this
+ * project's domains, while it does list app.* for client-atm-frontend. The
+ * behaviour is unambiguous and outranks the listing — a request for a
+ * frontend-only route returns this project's 404, not the SPA — but the listing
+ * is worth a glance in the dashboard, and it is why a domain check here should
+ * be a request rather than an API read.
  */
 export const API_URL =
   process.env.API_URL || 'https://client-atm-api-workwithjamaul-4008s-projects.vercel.app'
