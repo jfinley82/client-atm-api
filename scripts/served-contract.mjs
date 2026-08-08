@@ -63,6 +63,21 @@ if (buildPrograms.status !== 0) {
 }
 const programSerializers = require_(programBundle)
 
+// The dashboard serializers, same mechanism. The My Business dashboard is one
+// endpoint the frontend builds an entire screen against, so its shape is
+// generated from the code rather than transcribed into a brief that then drifts.
+const dashBundle = path.join(tmpDir, 'dashboardSerializers.cjs')
+const buildDash = spawnSync(
+  'npx',
+  ['esbuild', 'lib/dashboardSerializers.ts', '--bundle', '--platform=node', '--format=cjs', '--packages=external', `--outfile=${dashBundle}`],
+  { cwd: root, stdio: 'inherit' }
+)
+if (buildDash.status !== 0) {
+  console.error('esbuild failed for lib/dashboardSerializers.ts')
+  process.exit(1)
+}
+const dashSerializers = require_(dashBundle)
+
 // ---------------------------------------------------------------------------
 // 2. Discover which raw keys the deriver reads, by reading its source.
 //    Generated rather than listed, so a new `raw.something` is picked up.
@@ -636,6 +651,109 @@ md += `**The portal's omissions are the contract too.** \`user_id\`, \`lead_id\`
 \`coach_only\` note are absent from \`GET /api/client/program\` above because the
 shape is built key by key — a new column on \`client_programs\` cannot reach the
 client by being added upstream.
+
+`
+
+// ---------------------------------------------------------------------------
+// The My Business dashboard, generated the same way.
+// ---------------------------------------------------------------------------
+const { attentionStrip, bookRate, callsReconciliation, serializeClients, serializeMethod, relativeDay, ATTENTION_ORDER } = dashSerializers
+
+const DASH_NOW = Date.parse(`${TODAY}T12:00:00Z`)
+const dashProgram = (over = {}) => ({ ...PROGRAM_FULL, ...over })
+
+// TWO PROBES, populated and empty, so `nullable` below is behaviour rather than
+// intent — the same discipline the programme table uses.
+const DASH_SHAPES = [
+  [
+    'GET /api/dashboard/my-business — attention[]',
+    'the strip: highest-priority NON-ZERO items only, so an empty array is a healthy new coach',
+    [
+      attentionStrip(
+        Object.fromEntries(ATTENTION_ORDER.map((k, i) => [k, i === 0 ? 2 : 1])),
+        { calls_needing_outcome: '9 days ago' }
+      ),
+      attentionStrip(Object.fromEntries(ATTENTION_ORDER.map((k) => [k, 0])), {}),
+    ],
+  ],
+  [
+    'GET /api/dashboard/my-business — calls (reconciliation)',
+    'three numbers that must add up; window is ALL TIME and active-only',
+    [
+      callsReconciliation([{ funnel_id: 'f1' }, { funnel_id: null }, { funnel_id: null }]),
+      callsReconciliation([]),
+    ],
+  ],
+  [
+    'GET /api/dashboard/my-business — funnels.list[]',
+    'book_rate is FUNNEL-scoped by definition — a coach-page call has no funnel to belong to',
+    [
+      [{ id: 'f1', name: 'Coaches', status: 'live', leads: 10, booked: 3, book_rate: bookRate({ leads: 10, booked: 3 }) }],
+      [{ id: 'f2', name: 'Draft', status: 'draft', leads: 0, booked: 0, book_rate: bookRate({ leads: 0, booked: 0 }) }],
+    ],
+  ],
+  [
+    'GET /api/dashboard/my-business — clients.list[]',
+    'ordered: open request, then stalled, then soonest due; drafts last',
+    [
+      serializeClients(
+        [
+          { program: dashProgram(), items: ITEMS_FULL, openRequests: 1 },
+          { program: dashProgram({ id: 'p2', status: 'draft' }), items: [], openRequests: 0 },
+        ],
+        TODAY
+      ),
+      serializeClients([], TODAY),
+    ],
+  ],
+  [
+    'GET /api/dashboard/my-business — method',
+    'NULL when the coach has not built one — a different state from a completed programme',
+    [
+      serializeMethod(
+        { frameworkName: 'The Method', phases: [{ steps: [1, 2, 3] }, { steps: [1] }] },
+        { low_ticket: {}, high_ticket: {} },
+        4,
+        'https://app.example.invalid/book/slug'
+      ),
+      serializeMethod(null, null, 0, null),
+    ],
+  ],
+]
+
+md += `
+---
+
+## My Business dashboard — generated from the serializers
+
+Emitted by running \`lib/dashboardSerializers.ts\` over a synthetic probe, the
+same way the tables above run their real code. **The code is the contract.**
+
+Two probes are unioned per section: a populated coach and one with nothing. A key
+marked **nullable** came back \`null\` in one of them.
+
+\`relativeDay\` sample: \`${relativeDay(new Date(DASH_NOW - 9 * 86400000).toISOString(), DASH_NOW)}\`.
+
+No customer data. Every value is a synthetic probe.
+
+`
+for (const [route, note, runs] of DASH_SHAPES) {
+  const maps = runs.map((r) => { const m = new Map(); describe(r, '', m); return m })
+  md += `### \`${route}\`\n\n${note}\n\n| path | type | nullable |\n|---|---|---|\n`
+  const paths = [...new Set(maps.flatMap((m) => [...m.keys()]))].filter((k) => k && !k.includes('\u0000')).sort()
+  for (const pth of paths) {
+    const seen = maps.map((m) => m.get(pth))
+    const nullable = seen.includes('null') || maps.some((m) => m.has(`${pth}\u0000null`))
+    const type = seen.find((t) => t && t !== 'null') || 'null'
+    md += `| \`${pth.replace(/^\./, '')}\` | ${type} | ${nullable ? 'yes' : ''} |\n`
+  }
+  md += '\n'
+}
+
+md += `**Counts are over everything; lists are truncated.** Every \`*_count\` and
+every number in \`counts\` is computed from the full set before any list above is
+sliced — a dashboard that counted the truncated list would quietly under-report
+as a coach grows.
 
 `
 

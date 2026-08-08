@@ -460,3 +460,86 @@ the CLIENT portal — coach_only notes are absent by construction
 shape is built key by key — a new column on `client_programs` cannot reach the
 client by being added upstream.
 
+
+---
+
+## My Business dashboard — generated from the serializers
+
+Emitted by running `lib/dashboardSerializers.ts` over a synthetic probe, the
+same way the tables above run their real code. **The code is the contract.**
+
+Two probes are unioned per section: a populated coach and one with nothing. A key
+marked **nullable** came back `null` in one of them.
+
+`relativeDay` sample: `9 days ago`.
+
+No customer data. Every value is a synthetic probe.
+
+### `GET /api/dashboard/my-business — attention[]`
+
+the strip: highest-priority NON-ZERO items only, so an empty array is a healthy new coach
+
+| path | type | nullable |
+|---|---|---|
+| `[].count` | number |  |
+| `[].detail` | string | yes |
+| `[].key` | string |  |
+
+### `GET /api/dashboard/my-business — calls (reconciliation)`
+
+three numbers that must add up; window is ALL TIME and active-only
+
+| path | type | nullable |
+|---|---|---|
+| `calls_from_funnels` | number |  |
+| `calls_no_funnel` | number |  |
+| `calls_total` | number |  |
+
+### `GET /api/dashboard/my-business — funnels.list[]`
+
+book_rate is FUNNEL-scoped by definition — a coach-page call has no funnel to belong to
+
+| path | type | nullable |
+|---|---|---|
+| `[].book_rate` | number |  |
+| `[].booked` | number |  |
+| `[].id` | string |  |
+| `[].leads` | number |  |
+| `[].name` | string |  |
+| `[].status` | string |  |
+
+### `GET /api/dashboard/my-business — clients.list[]`
+
+ordered: open request, then stalled, then soonest due; drafts last
+
+| path | type | nullable |
+|---|---|---|
+| `[].client_name` | string |  |
+| `[].current_week` | number | yes |
+| `[].id` | string |  |
+| `[].is_draft` | boolean |  |
+| `[].is_stalled` | boolean |  |
+| `[].next_due_date` | string | yes |
+| `[].open_session_requests` | number |  |
+| `[].progress_pct` | number |  |
+| `[].status` | string |  |
+| `[].total_weeks` | number |  |
+
+### `GET /api/dashboard/my-business — method`
+
+NULL when the coach has not built one — a different state from a completed programme
+
+| path | type | nullable |
+|---|---|---|
+| `blueprint_count` | number |  |
+| `booking_url` | string |  |
+| `framework_name` | string |  |
+| `offer_count` | number |  |
+| `phase_count` | number |  |
+| `step_count` | number |  |
+
+**Counts are over everything; lists are truncated.** Every `*_count` and
+every number in `counts` is computed from the full set before any list above is
+sliced — a dashboard that counted the truncated list would quietly under-report
+as a coach grows.
+
