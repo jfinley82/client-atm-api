@@ -325,6 +325,22 @@ export async function getValidAccessToken(userId: string): Promise<ValidToken | 
   // and handing it out moves the failure one layer out to where nothing records
   // it. saveGoogleConnection clears these columns, so a reconnect is the way
   // back and there is no state a coach cannot escape.
+  //
+  // THIS GATE IS NOT ALL THREE REASONS, AND THE ASYMMETRY IS DELIBERATE. It
+  // reads like an inconsistency, so: invalid_client is NOT blocked. Its fix is
+  // an environment change and a redeploy on our side, and neither touches a row
+  // — so blocking it would leave the connection flagged after we had already
+  // fixed it, with nothing left in the system to notice. Retrying IS the healing
+  // path: the next attempt succeeds and the success update clears both columns.
+  // It is also global rather than per-coach, so it is an alarm we are already
+  // reacting to, not a loop we are quietly stuck in.
+  //
+  // The same split already drives the MESSAGE — app_misconfigured versus
+  // needs_reconnect — and the rule underneath both is one sentence: stop calling
+  // out only when a retry cannot help AND a reconnect can, because a reconnect
+  // is what clears the column. Every blocked connection therefore has a way out.
+  // See blocksRefresh in lib/calendarConnectionHealth.ts, which is exactly
+  // isCoachFixable for this reason and is asserted to stay that way.
   const storedReason = conn.invalid_reason
   if (isInvalidReason(storedReason) && blocksRefresh(storedReason)) return null
 
