@@ -55,3 +55,25 @@ export function funnelHost(subdomain?: string | null): string {
 export function funnelUrl(subdomain?: string | null): string {
   return `https://${funnelHost(subdomain)}`
 }
+
+/**
+ * The public address OF A FUNNEL, or null when it has not claimed a subdomain.
+ *
+ * Distinct from `funnelUrl()` on purpose. `funnelUrl()` with no subdomain gives
+ * the apex, which is the hub and is a real page — right for the guide PDF and
+ * the preview email, which fall back to it deliberately. It is wrong for "where
+ * does this funnel live", because a draft with no subdomain does not live
+ * anywhere, and answering with the hub would send a coach's own link to
+ * somebody else's page.
+ *
+ * Null, not ''. An empty string is a value a template will happily interpolate
+ * into `href=""`, which renders as a link to the current page; null forces the
+ * caller to decide what an address-less funnel looks like. This composes the
+ * SAME string as funnelUrl — it is a null guard over one composer, not a second
+ * one — and tests/funnelDomain.test.ts asserts publish, the read endpoints and
+ * the rendered page agree byte for byte.
+ */
+export function funnelPublicUrl(subdomain?: string | null): string | null {
+  const sub = typeof subdomain === 'string' ? subdomain.trim() : ''
+  return sub ? funnelUrl(sub) : null
+}

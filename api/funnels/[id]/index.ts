@@ -9,6 +9,7 @@ import {
   validateTrackingInput,
 } from '../../../lib/funnels'
 import { coerceEmails } from '../../../lib/microTrainingGenerator'
+import { FUNNEL_PUBLIC_DOMAIN, funnelPublicUrl } from '../../../lib/funnelDomain'
 
 const THEME_MODES = ['dark', 'light']
 
@@ -53,6 +54,36 @@ const OBJECT_FIELDS = ['landing_page', 'training_page', 'booking_page']
 // free-text fields — accept a string (trimmed), or null to clear.
 const TEXT_FIELDS = ['video_url']
 
+// THE FUNNEL'S ADDRESS, SERVED RATHER THAN COMPOSED BY THE CALLER.
+//
+// The frontend had to build `<subdomain>.<literal>` itself because nothing on
+// this endpoint carried the address — so a domain literal lived in their repo
+// too, which is the same disease this module was created to cure with one fewer
+// copy. Both values ride on a response the settings screen already fetches, so
+// no screen gains a round trip.
+//
+// TWO VALUES, BECAUSE ONE CANNOT DO BOTH JOBS:
+//
+//   public_url     where THIS funnel lives, null when it has claimed no
+//                  subdomain. Composed by lib/funnelDomain.ts, never here.
+//   funnel_domain  the bare apex, for the live preview under the subdomain
+//                  field — `yourname.freeminiworkshop.com` while the coach is
+//                  still typing, before any funnel exists to have a URL.
+//
+// funnel_domain sits BESIDE `funnel` rather than inside it: it is a property of
+// the deployment, identical for every funnel, and nesting it would read as a
+// column and get saved back on the next PATCH.
+//
+// PATCH returns them too. `subdomain` is editable here, so a save that changes
+// it must hand back the new address — otherwise the screen either shows a stale
+// URL or recomposes one itself, which is where the literal came back from.
+function addressFields(f: Record<string, any> | null | undefined) {
+  return {
+    public_url: funnelPublicUrl(f?.subdomain as string | null | undefined),
+    funnel_domain: FUNNEL_PUBLIC_DOMAIN,
+  }
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v)
 }
@@ -82,7 +113,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   if (req.method === 'GET') {
-    return res.status(200).json({ funnel })
+    return res.status(200).json({ funnel, ...addressFields(funnel) })
   }
 
   if (req.method === 'PATCH') {
@@ -207,7 +238,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .single()
 
       if (error) throw error
-      return res.status(200).json({ funnel: data })
+      return res.status(200).json({ funnel: data, ...addressFields(data) })
     } catch (err) {
       console.error('[funnels/[id]] PATCH', err)
       return res.status(500).json({ error: 'Failed to update funnel' })

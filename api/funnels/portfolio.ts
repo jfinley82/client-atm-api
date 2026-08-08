@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { setCors, noStore } from '../../lib/cors'
 import { requireFunnelBuilder } from '../../lib/funnels'
 import { loadOwnedActiveBookings } from '../../lib/coachBookings'
+import { FUNNEL_PUBLIC_DOMAIN, funnelPublicUrl } from '../../lib/funnelDomain'
 
 // GET /api/funnels/portfolio — the portfolio-home rollup: fleet-wide totals,
 // a per-funnel row for each funnel the caller owns, upcoming calls across the
@@ -105,6 +106,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         funnels: [],
         upcoming_calls: rows.map(toUpcoming),
         recent_leads: [],
+        // THE BRANCH THAT NEEDS IT MOST. A coach with no funnels is the coach
+        // typing their first subdomain, so this is exactly where the live
+        // preview has nothing else to build from — and it is the branch a
+        // "add the field to the response" change forgets, because the other one
+        // is the one you are looking at. tests/funnelAddress.test.ts drives both.
+        funnel_domain: FUNNEL_PUBLIC_DOMAIN,
       })
     }
 
@@ -186,6 +193,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // this a string per the contract rather than null, and a public link
         // would go nowhere for a not-yet-live funnel anyway.
         slug: typeof f.subdomain === 'string' ? f.subdomain : '',
+        // WHERE THIS FUNNEL LIVES, composed by lib/funnelDomain.ts. `slug` is
+        // deliberately '' for a funnel with no subdomain and public_url is
+        // deliberately null for the same funnel — they are different questions.
+        // '' is a slug that has not been chosen; null is an address that does
+        // not exist, and only the second one is safe to put in an href.
+        public_url: funnelPublicUrl(f.subdomain as string | null | undefined),
         status: f.status === 'live' ? 'live' : 'draft',
         flow: { visitors: b.visitors, opt_ins: b.opt_ins, booked: b.booked },
         conversions: {
@@ -230,6 +243,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       funnels: funnelsOut,
       upcoming_calls,
       recent_leads,
+      // The bare apex, for a live preview under a subdomain field before any
+      // funnel exists to have a public_url. Beside the list, not inside a row:
+      // it is a property of the deployment, not of a funnel.
+      funnel_domain: FUNNEL_PUBLIC_DOMAIN,
     })
   } catch (err) {
     console.error('[funnels/portfolio] GET', err)
