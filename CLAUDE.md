@@ -294,6 +294,18 @@ stale comment, so the cure carries the disease.
 regression.** A guard that only ever fails when someone does correct work was
 never guarding anything.
 
+That tell is retrospective — it identifies the census the day it costs somebody
+an hour deciding whether a red gate is a real break. **The prospective form is
+one question, asked while writing the assertion:**
+
+> **Would this fail if someone did something we would approve of?**
+
+If yes, it is a census. Adding a migration, closing a validation hole, adding a
+sixth public writer for a good reason — each of those is approved work, and an
+assertion that reddens on it is describing the codebase rather than guarding it.
+Ask it before committing and the entry costs nothing; ask it only after a red
+gate and it has already been paid for.
+
 Two on 2026-08-08, both true when written:
 
 - `tests/clientProgramsMigration` asserted **"095 is the highest-numbered
