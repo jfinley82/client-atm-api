@@ -183,22 +183,33 @@ export function serializeClients(inputs: DashboardClientInput[], today: string, 
  * whose programmes are all complete, and the frontend renders a different empty
  * state for each. Returning zeroes here would collapse the two.
  */
+// THE THREE OFFER SLOTS, read from the real row rather than assumed.
+// core_offers is not an `offers` array — it is three named keys, and a coach may
+// have filled in one, two or all three. Counting the keys that are present is
+// the count; hardcoding 3 would report a full set for a coach who has one.
+const OFFER_SLOTS = ['low_ticket', 'mid_ticket', 'high_ticket'] as const
+
 export function serializeMethod(
   framework: Record<string, unknown> | null,
-  counts: { blueprints: number; offers: number },
+  coreOffers: Record<string, unknown> | null,
+  blueprintCount: number,
   bookingUrl: string | null
 ) {
   if (!framework) return null
   const phases = Array.isArray((framework as any).phases) ? (framework as any).phases : []
+  // EVERY COUNT DERIVED. A literal for something the data already knows is the
+  // recorded defect in this repo — a hardcoded count above a table of a
+  // different size.
   const steps = phases.reduce((n: number, p: any) => n + (Array.isArray(p?.steps) ? p.steps.length : 0), 0)
   return {
-    // Derived from the data, never a literal — the recorded defect in this repo
-    // is a hardcoded count above a table of a different size.
-    framework_name: typeof (framework as any).name === 'string' ? (framework as any).name : null,
+    // `frameworkName`, NOT `name`. Read off a production row before this was
+    // written: the phases carry `name`, the framework carries `frameworkName`,
+    // and guessing the obvious one would have returned null for every coach.
+    framework_name: typeof (framework as any).frameworkName === 'string' ? (framework as any).frameworkName : null,
     phase_count: phases.length,
     step_count: steps,
-    blueprint_count: counts.blueprints,
-    offer_count: counts.offers,
+    blueprint_count: blueprintCount,
+    offer_count: coreOffers ? OFFER_SLOTS.filter((k) => coreOffers[k] != null).length : 0,
     // Nullable on funnel_business_settings, so a coach who has not set a slug
     // gets null rather than a URL with an empty segment in it.
     booking_url: bookingUrl,
