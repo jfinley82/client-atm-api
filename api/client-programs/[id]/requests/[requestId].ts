@@ -96,6 +96,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .insert({
         program_id: program.id,
         coach_user_id: program.user_id,
+        // The programme already carries it, so the booking records it too (096).
+        // Null for a lead-less programme — a coach who typed a name and address
+        // rather than picking a lead — which is correct: that call was created
+        // from no lead either.
+        lead_id: program.lead_id,
         name: program.client_name,
         email: program.client_email,
         start_time: startTime,
