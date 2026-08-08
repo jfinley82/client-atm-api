@@ -1,10 +1,7 @@
 import { supabase } from './supabase'
+import { funnelUrl } from './funnelDomain'
 
 // Public Training Hub shared logic (Phase Hub v1).
-
-// The domain public funnels + the hub itself live on. Same env the nurture /
-// booking links use, so every public URL stays on one domain.
-const FUNNEL_DOMAIN = process.env.FUNNEL_PUBLIC_DOMAIN || 'freeminiworkshop.com'
 
 // Fixed category taxonomy — a CLOSED list, validated on write. Stored lowercase;
 // the render capitalizes the first letter for the sentence-case heading.
@@ -44,7 +41,7 @@ export type HubCard = {
 }
 
 function funnelPublicUrl(subdomain: string): string {
-  return `https://${subdomain}.${FUNNEL_DOMAIN}`
+  return funnelUrl(subdomain)
 }
 
 // Supabase returns an embedded row as an object or a single-element array

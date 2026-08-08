@@ -1,13 +1,12 @@
 import { supabase } from './supabase'
 import { signManageToken } from './funnelLeadToken'
 import { API_URL } from './appUrls'
+import { funnelUrl } from './funnelDomain'
 
 // Shared resolution for the lead-side booking manage flow (Phase 3b follow-up).
 // bookings has no funnel_id / lead_id column, so the funnel + lead are resolved
 // from coach_user_id + email — the same email match the booked-event log uses,
 // widened to the coach's funnels.
-
-const FUNNEL_DOMAIN = process.env.FUNNEL_PUBLIC_DOMAIN || 'freeminiworkshop.com'
 
 // No self-service change inside this window before the call — covers both "the
 // call is coming up soon" and "already started/passed" in one check. Also the
@@ -112,13 +111,13 @@ export async function resolveFunnelAndLead(
 // is not a session and cannot be verified as one — see verifyManageToken — so a
 // leaked link exposes one call, not an account.
 export function buildManageUrl(subdomain: string, bookingId: string): string {
-  return `https://${subdomain}.${FUNNEL_DOMAIN}/api/funnel/booking?token=${encodeURIComponent(signManageToken(bookingId))}`
+  return `${funnelUrl(subdomain)}/api/funnel/booking?token=${encodeURIComponent(signManageToken(bookingId))}`
 }
 
 export function buildBookingManageUrl(bookingId: string, subdomain?: string | null): string {
   const token = encodeURIComponent(signManageToken(bookingId))
   return subdomain
-    ? `https://${subdomain}.${FUNNEL_DOMAIN}/api/funnel/booking?token=${token}`
+    ? `${funnelUrl(subdomain)}/api/funnel/booking?token=${token}`
     : `${API_URL.replace(/\/+$/, '')}/api/funnel/booking?token=${token}`
 }
 

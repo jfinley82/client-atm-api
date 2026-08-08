@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { supabase } from './supabase'
+import { funnelUrl } from './funnelDomain'
 import { getSavedOutput } from './savedOutputs'
 import { extractJson } from './aiJson'
 import { logApiCost } from './apiCostLog'
@@ -15,7 +16,6 @@ import { BlueprintSynopsis } from './blueprintSynopsis'
 // regeneration). See migration 061 for the storage contract.
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
-const FUNNEL_DOMAIN = process.env.FUNNEL_PUBLIC_DOMAIN || 'freeminiworkshop.com'
 
 export const FUNNEL_ASSET_TYPES = [
   'invite_emails',
@@ -106,7 +106,7 @@ export async function funnelHasBooking(funnelId: string): Promise<boolean> {
 export type FunnelUrls = { base: string; training: string; booking: string }
 
 export function funnelUrls(subdomain: string): FunnelUrls {
-  const base = `https://${subdomain}.${FUNNEL_DOMAIN}`
+  const base = funnelUrl(subdomain)
   return { base, training: `${base}/?page=training`, booking: `${base}/?page=book` }
 }
 

@@ -1,7 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { supabase } from '../../lib/supabase'
-
-const FUNNEL_PUBLIC_DOMAIN = process.env.FUNNEL_PUBLIC_DOMAIN || 'freeminiworkshop.com'
+import { funnelHost } from '../../lib/funnelDomain'
 import { sanitizeTracking, Tracking } from '../../lib/funnels'
 import { loadBusinessSettings, isValidHttpUrl, Legal } from '../../lib/businessSettings'
 import { brandKit, firstUrl, type Brand } from '../../lib/brandKit'
@@ -963,7 +962,7 @@ function send404(res: VercelResponse) {
 // are ours (never lead input), so injecting the anchor after escaping stays XSS-safe.
 function escapeWithLinks(text: unknown, funnel: Record<string, any>): string {
   const sub = typeof funnel.subdomain === 'string' ? funnel.subdomain : ''
-  const host = sub ? `${sub}.${FUNNEL_PUBLIC_DOMAIN}` : ''
+  const host = sub ? funnelHost(sub) : ''
   // In sell mode the "book a call" tokens the generator wrote point at the offer
   // instead — there is no calendar to send anyone to.
   const bookHref = sellMode(funnel) ? offerHref(funnel) : `?page=book${subQuery(funnel)}`
